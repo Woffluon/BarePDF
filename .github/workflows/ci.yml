@@ -90,7 +90,7 @@ jobs:
         run: powershell -File packaging/windows/scripts/generate-checksums.ps1
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BarePDF-Windows-CI-Build
           path: target/release/artifacts/*
