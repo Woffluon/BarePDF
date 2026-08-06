@@ -8,6 +8,6 @@ description = "Windows OS implementation of file dialogs, clipboard, and printin
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
 barepdf-platform = { path = "../barepdf-platform" }
-rfd = "0.15"
+rfd = "0.17"
 arboard = "3.4"
 tracing = "0.1"
