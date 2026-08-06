@@ -6,7 +6,11 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
 Set-Location $RepoRoot
 
 Write-Host "Building release binaries..." -ForegroundColor Cyan
-& "C:\Users\Efe\.cargo\bin\cargo.exe" build --workspace --release --locked
+$CargoPath = Get-Command "cargo" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path
+if (-not $CargoPath) {
+    $CargoPath = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+}
+& $CargoPath build --workspace --release --locked
 
 $StagedDir = Join-Path $RepoRoot "target\release\staged"
 if (Test-Path $StagedDir) {
