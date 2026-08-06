@@ -1,0 +1,14 @@
+[package]
+name = "barepdf-ui"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarePDF Contributors"]
+description = "Slint desktop interface views, themes, and view-models for BarePDF"
+
+[dependencies]
+barepdf-core = { path = "../barepdf-core" }
+barepdf-render = { path = "../barepdf-render" }
+barepdf-platform = { path = "../barepdf-platform" }
+slint = "1.9"
+image = "0.25"
+tracing = "0.1"

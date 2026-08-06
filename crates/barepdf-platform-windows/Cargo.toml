@@ -1,0 +1,13 @@
+[package]
+name = "barepdf-platform-windows"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarePDF Contributors"]
+description = "Windows OS implementation of file dialogs, clipboard, and printing for BarePDF"
+
+[dependencies]
+barepdf-core = { path = "../barepdf-core" }
+barepdf-platform = { path = "../barepdf-platform" }
+rfd = "0.15"
+arboard = "3.4"
+tracing = "0.1"

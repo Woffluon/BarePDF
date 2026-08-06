@@ -1,0 +1,15 @@
+changelog:
+  categories:
+    - title: "🚀 Features & UX"
+      labels:
+        - "feature"
+        - "enhancement"
+    - title: "🐛 Fixes & Stability"
+      labels:
+        - "fix"
+        - "bug"
+    - title: "📦 Deployment & Windows Integration"
+      labels:
+        - "build"
+        - "windows"
+        - "ci"

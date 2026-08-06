@@ -1,0 +1,10 @@
+[package]
+name = "barepdf-platform"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarePDF Contributors"]
+description = "Abstract platform interfaces for BarePDF desktop features"
+
+[dependencies]
+barepdf-core = { path = "../barepdf-core" }
+thiserror = "2.0"
