@@ -37,6 +37,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\..\..\target\release\staged\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\target\release\staged\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 

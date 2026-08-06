@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use barepdf_core::{
     DocumentId, MemoryBudget, PageCount, PageIndex, PdfError, RequestId, Rotation, UserPreferences,
     ZoomFactor, ZoomMode,

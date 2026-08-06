@@ -26,6 +26,25 @@ if (-not (Test-Path $ExePath)) {
 Copy-Item $ExePath -Destination (Join-Path $StagedDir "BarePDF.exe")
 Copy-Item (Join-Path $RepoRoot "README.md") -Destination $StagedDir
 
+$PdfiumDll = Join-Path $RepoRoot "target\release\pdfium.dll"
+if (-not (Test-Path $PdfiumDll)) {
+    Write-Host "pdfium.dll missing in target\release, fetching PDFium binary package..." -ForegroundColor Yellow
+    $TempDir = Join-Path $RepoRoot "target\release\pdfium_temp"
+    $TgzPath = Join-Path $RepoRoot "target\release\pdfium-win-x64.tgz"
+    if (-not (Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir | Out-Null }
+    
+    Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-win-x64.tgz" -OutFile $TgzPath
+    tar -xzf $TgzPath -C $TempDir
+    Copy-Item (Join-Path $TempDir "bin\pdfium.dll") $PdfiumDll -Force
+    Remove-Item $TgzPath, $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if (-not (Test-Path $PdfiumDll)) {
+    Write-Error "pdfium.dll is missing and could not be downloaded."
+}
+
+Copy-Item $PdfiumDll -Destination $StagedDir -Force
+
 # Copy LICENSE file if present or create standard MIT notice
 $LicensePath = Join-Path $RepoRoot "LICENSE"
 if (Test-Path $LicensePath) {
