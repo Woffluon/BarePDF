@@ -1,0 +1,13 @@
+[package]
+name = "barepdf-pdf"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarePDF Contributors"]
+description = "PDF Backend traits and PDFium engine adapter for BarePDF"
+
+[dependencies]
+barepdf-core = { path = "../barepdf-core" }
+pdfium-render = "0.9"
+thiserror = "2.0"
+tracing = "0.1"
+image = "0.25"

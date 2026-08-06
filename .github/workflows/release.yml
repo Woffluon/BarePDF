@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: 1. Code Validation & Tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Validate Version Consistency
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/validate-version.ps1
+
+      - name: Format Check
+        run: cargo fmt --all --check
+
+      - name: Clippy Lints
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Unit Tests
+        run: cargo test --workspace --all-features --locked
+
+  publish-release:
+    name: 2. Build, Package & Publish Release
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Extract Application Version
+        shell: powershell
+        run: |
+          $Content = Get-Content apps/barepdf/Cargo.toml -Raw
+          if ($Content -match 'version\s*=\s*"([^"]+)"') {
+              $Ver = $Matches[1]
+              Write-Host "Extracted Version: $Ver"
+              "APP_VERSION=$Ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+              Write-Error "Failed to parse version"
+          }
+
+      - name: Stage Release Executable & Assets
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/stage-release.ps1
+
+      - name: Optional Code Signing (Executable)
+        shell: powershell
+        if: env.WINDOWS_SIGNING_CERTIFICATE_BASE64 != ''
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          $CertPath = "$env:TEMP\cert.pfx"
+          [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
+          & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 target/release/staged/BarePDF.exe
+          Remove-Item $CertPath -Force
+
+      - name: Build Portable Package
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/build-portable.ps1
+
+      - name: Compile Installer
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/build-installer.ps1
+
+      - name: Optional Code Signing (Installer)
+        shell: powershell
+        if: env.WINDOWS_SIGNING_CERTIFICATE_BASE64 != ''
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          $CertPath = "$env:TEMP\cert.pfx"
+          [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
+          $InstallerExe = Get-Item target/release/installer/BarePDF-Setup-*.exe
+          & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $InstallerExe.FullName
+          Remove-Item $CertPath -Force
+
+      - name: Validate Installer & Registry Configuration
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/validate-installer.ps1
+
+      - name: Generate SHA-256 Manifest
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/generate-checksums.ps1
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: BarePDF v${{ env.APP_VERSION }}
+          files: |
+            target/release/artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

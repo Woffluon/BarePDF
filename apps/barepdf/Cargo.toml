@@ -1,0 +1,18 @@
+[package]
+name = "barepdf"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarePDF Contributors"]
+description = "BarePDF application binary executable"
+
+[dependencies]
+barepdf-core = { path = "../../crates/barepdf-core" }
+barepdf-pdf = { path = "../../crates/barepdf-pdf" }
+barepdf-render = { path = "../../crates/barepdf-render" }
+barepdf-platform = { path = "../../crates/barepdf-platform" }
+barepdf-platform-windows = { path = "../../crates/barepdf-platform-windows" }
+barepdf-ui = { path = "../../crates/barepdf-ui" }
+slint = "1.9"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+image = "0.25"

@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/barepdf-core",
+    "crates/barepdf-pdf",
+    "crates/barepdf-render",
+    "crates/barepdf-platform",
+    "crates/barepdf-platform-windows",
+    "crates/barepdf-ui",
+    "apps/barepdf",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

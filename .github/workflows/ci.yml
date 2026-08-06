@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-checks:
+    name: Rust Code Validation
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo Cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Verify Version Consistency
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/validate-version.ps1
+
+      - name: Format Check
+        run: cargo fmt --all --check
+
+      - name: Clippy Lints
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Unit & Integration Tests
+        run: cargo test --workspace --all-features --locked
+
+  windows-build-and-package:
+    name: Windows Package & Installer Test
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Stage Release Artifacts
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/stage-release.ps1
+
+      - name: Build Portable Package
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/build-portable.ps1
+
+      - name: Compile Windows Installer
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/build-installer.ps1
+
+      - name: Validate Installer & Registry Configuration
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/validate-installer.ps1
+
+      - name: Generate Checksums
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/generate-checksums.ps1
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BarePDF-Windows-CI-Build
+          path: target/release/artifacts/*
