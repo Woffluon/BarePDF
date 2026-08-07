@@ -43,6 +43,7 @@ struct AppState {
     is_selecting: bool,
     last_click_time: std::time::Instant,
     click_count: u32,
+    last_scroll_y: f32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_selecting: false,
         last_click_time: std::time::Instant::now(),
         click_count: 0,
+        last_scroll_y: 0.0,
     }));
 
     update_ui_strings(&main_window, state.borrow().preferences.language.resolve());
@@ -369,10 +371,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Memory-bounded LRU caches for page and thumbnail bitmaps
     let page_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(10).unwrap(),
+        NonZeroUsize::new(50).unwrap(),
     )));
     let thumb_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(30).unwrap(),
+        NonZeroUsize::new(200).unwrap(),
     )));
 
     // Mouse pointer handlers for text selection
@@ -528,6 +530,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TimerMode::Repeated,
         std::time::Duration::from_millis(16),
         move || {
+            if let Some(win) = window_tick.upgrade() {
+                let current_scroll_y = win.get_current_scroll_y();
+                let mut scroll_changed = false;
+                {
+                    let mut s = state_tick.borrow_mut();
+                    if (current_scroll_y - s.last_scroll_y).abs() > 15.0 && s.page_count > 0 {
+                        s.last_scroll_y = current_scroll_y;
+                        let viewport_top = -current_scroll_y;
+                        let layout = ContinuousLayout::compute(
+                            &s.all_page_dims,
+                            1100,
+                            800,
+                            s.zoom_mode,
+                            1.0,
+                            12.0,
+                        );
+                        let primary = layout.primary_page(viewport_top.max(0.0), 800.0);
+                        if primary.get() != s.current_page {
+                            s.current_page = primary.get();
+                            win.set_current_page_str(SharedString::from(
+                                (s.current_page + 1).to_string(),
+                            ));
+                        }
+                        scroll_changed = true;
+                    }
+                }
+                if scroll_changed {
+                    let s = state_tick.borrow();
+                    update_page_view(&s, &scheduler_tick, &win);
+                    request_thumbnails(&s, &scheduler_tick);
+                }
+            }
+
             while let Some(event) = scheduler_tick.try_recv_event() {
                 if let Some(win) = window_tick.upgrade() {
                     match event {
@@ -761,8 +796,8 @@ fn request_thumbnails(state: &AppState, scheduler: &RenderScheduler) {
     };
 
     let gen = scheduler.current_generation();
-    let start_idx = state.current_page.saturating_sub(4);
-    let end_idx = (state.current_page + 12).min(state.page_count);
+    let start_idx = state.current_page.saturating_sub(2);
+    let end_idx = (state.current_page + 8).min(state.page_count);
 
     for idx in start_idx..end_idx {
         let p_idx = PageIndex::from_raw(idx);

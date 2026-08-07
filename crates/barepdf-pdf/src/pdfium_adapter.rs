@@ -113,7 +113,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             .map(|p| (p.width().value, p.height().value))
             .unwrap_or((612.0, 792.0));
         let mut dims = vec![first_dim; count as usize];
-        for i in 1..count.min(10) {
+        for i in 1..count.min(5) {
             if let Ok(page) = pages.get(i) {
                 dims[i as usize] = (page.width().value, page.height().value);
             }

@@ -76,7 +76,8 @@ pub enum RenderEvent {
 }
 
 pub struct RenderScheduler {
-    cmd_sender: Sender<RenderCommand>,
+    high_cmd_sender: Sender<RenderCommand>,
+    low_cmd_sender: Sender<RenderCommand>,
     event_receiver: Receiver<RenderEvent>,
     current_generation: Arc<AtomicU64>,
     cache: SharedBitmapCache,
@@ -84,7 +85,8 @@ pub struct RenderScheduler {
 
 impl RenderScheduler {
     pub fn spawn<B: PdfBackend + 'static>(backend: B, budget: MemoryBudget) -> Self {
-        let (cmd_tx, cmd_rx) = bounded::<RenderCommand>(128);
+        let (high_tx, high_rx) = bounded::<RenderCommand>(64);
+        let (low_tx, low_rx) = bounded::<RenderCommand>(256);
         let (event_tx, event_rx) = bounded::<RenderEvent>(128);
         let current_gen = Arc::new(AtomicU64::new(1));
         let cache = SharedBitmapCache::new(budget);
@@ -95,7 +97,19 @@ impl RenderScheduler {
         thread::spawn(move || {
             let mut active_doc: Option<(DocumentId, Box<dyn PdfDocument>)> = None;
 
-            while let Ok(cmd) = cmd_rx.recv() {
+            loop {
+                // Prioritize high-priority commands (visible page renders, open/close document)
+                let cmd = match high_rx.try_recv() {
+                    Ok(c) => c,
+                    Err(_) => match crossbeam_channel::select! {
+                        recv(high_rx) -> msg => msg,
+                        recv(low_rx) -> msg => msg,
+                    } {
+                        Ok(c) => c,
+                        Err(_) => break, // Channel disconnected
+                    },
+                };
+
                 match cmd {
                     RenderCommand::OpenDocument {
                         document_id,
@@ -122,8 +136,10 @@ impl RenderScheduler {
                         }
                     },
                     RenderCommand::RenderPage(job) => {
-                        // Check if generation stale
-                        if job.generation < gen_clone.load(Ordering::Relaxed) {
+                        // Check if background job generation is stale (Visible page jobs are protected)
+                        if job.priority != Priority::Visible
+                            && job.generation < gen_clone.load(Ordering::Relaxed)
+                        {
                             continue;
                         }
 
@@ -220,7 +236,8 @@ impl RenderScheduler {
         });
 
         Self {
-            cmd_sender: cmd_tx,
+            high_cmd_sender: high_tx,
+            low_cmd_sender: low_tx,
             event_receiver: event_rx,
             current_generation: current_gen,
             cache,
@@ -236,7 +253,19 @@ impl RenderScheduler {
     }
 
     pub fn send_command(&self, cmd: RenderCommand) {
-        let _ = self.cmd_sender.send(cmd);
+        match &cmd {
+            RenderCommand::OpenDocument { .. }
+            | RenderCommand::CloseDocument(_)
+            | RenderCommand::FetchTextGeometry { .. } => {
+                let _ = self.high_cmd_sender.send(cmd);
+            }
+            RenderCommand::RenderPage(job) if job.priority == Priority::Visible => {
+                let _ = self.high_cmd_sender.send(cmd);
+            }
+            _ => {
+                let _ = self.low_cmd_sender.send(cmd);
+            }
+        }
     }
 
     pub fn try_recv_event(&self) -> Option<RenderEvent> {

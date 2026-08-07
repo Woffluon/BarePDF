@@ -859,7 +859,7 @@ slint::slint! {
                                     if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left) {
                                         root.pointer_up(0, self.mouse-x, self.mouse-y);
                                     }
-                                    if (evt.kind == PointerEventKind.move && self.pressed) {
+                                    if (evt.kind == PointerEventKind.move) {
                                         root.pointer_move(0, self.mouse-x, self.mouse-y);
                                     }
                                 }
@@ -916,7 +916,7 @@ slint::slint! {
                                     if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left) {
                                         root.pointer_up(page.page_index, self.mouse-x, self.mouse-y);
                                     }
-                                    if (evt.kind == PointerEventKind.move && self.pressed) {
+                                    if (evt.kind == PointerEventKind.move) {
                                         root.pointer_move(page.page_index, self.mouse-x, self.mouse-y);
                                     }
                                 }
