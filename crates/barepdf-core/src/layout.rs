@@ -103,8 +103,8 @@ pub fn compute_target_dimensions(
         ZoomMode::Custom(factor) => factor.get() * dpi_scale,
     };
 
-    let target_w = ((page_width_pts * scale).round() as u32).max(1);
-    let target_h = ((page_height_pts * scale).round() as u32).max(1);
+    let target_w = ((page_width_pts * scale).round() as u32).clamp(1, 4096);
+    let target_h = ((page_height_pts * scale).round() as u32).clamp(1, 4096);
 
     RenderDimensions::new(target_w, target_h).unwrap_or(RenderDimensions {
         width: 1,

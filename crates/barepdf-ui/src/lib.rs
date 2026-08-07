@@ -484,8 +484,30 @@ slint::slint! {
                         }
                     }
 
-                    // Continuous Vertical Scroll & Single Page Viewport
-                    if (root.has_document) : ScrollView {
+                    // Single Page Viewport
+                    if (root.has_document && root.view_mode_label == "Single Page") : ScrollView {
+                        viewport-width: Math.max(self.width, root.page_display_width + 40px);
+                        viewport-height: Math.max(self.height, root.page_display_height + 40px);
+
+                        page_container := Rectangle {
+                            width: root.page_display_width;
+                            height: root.page_display_height;
+                            x: Math.max(20px, (parent.viewport-width - self.width) / 2);
+                            y: Math.max(20px, (parent.viewport-height - self.height) / 2);
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #00000040;
+
+                            Image {
+                                source: root.page_bitmap;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    // Continuous Vertical Scroll Viewport
+                    if (root.has_document && root.view_mode_label != "Single Page") : ScrollView {
                         viewport-width: Math.max(self.width, root.page_display_width + 40px);
                         viewport-height: Math.max(self.height, root.document_total_height + 40px);
 
