@@ -39,3 +39,29 @@ export function formatDate(dateString: string | null): string {
     return dateString;
   }
 }
+
+export function cleanReleaseNotes(notes: string | null | undefined): string {
+  if (!notes) return 'Official release of BarePDF.';
+
+  // 1. Remove HTML comments <!-- ... -->
+  let cleaned = notes.replace(/<!--[\s\S]*?-->/g, '').trim();
+
+  // 2. Process markdown links [text](url) -> <a href="url" target="_blank" rel="noopener noreferrer">text</a>
+  cleaned = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+  // 3. Process markdown bold **text** -> <strong>text</strong>
+  cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  // 4. Process raw URLs that are not already in href="..."
+  cleaned = cleaned.replace(/(?<!href=")(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+
+  // 5. Clean up redundant empty lines
+  const lines = cleaned.split('\n').map(l => l.trim()).filter(Boolean);
+  const uniqueLines = Array.from(new Set(lines));
+
+  if (uniqueLines.length === 0) {
+    return 'Official production release of BarePDF.';
+  }
+
+  return uniqueLines.join('<br />');
+}

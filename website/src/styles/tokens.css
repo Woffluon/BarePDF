@@ -1,22 +1,23 @@
 :root {
-  /* Color Palette - Default Light / Base System Tokens */
-  --color-bg: #f8fafc;
+  /* Color Palette — Light Theme Only (White & BarePDF Logo Orange) */
+  --color-bg: #fafafa;
   --color-surface: #ffffff;
   --color-surface-elevated: #ffffff;
-  --color-surface-subtle: #f1f5f9;
-  --color-border: #e2e8f0;
-  --color-border-subtle: #cbd5e1;
-  --color-text: #0f172a;
-  --color-text-muted: #475569;
-  --color-text-dim: #64748b;
+  --color-surface-subtle: #f4f4f6;
+  --color-border: #e4e4e7;
+  --color-border-subtle: #d4d4d8;
+  --color-text: #18181b;
+  --color-text-muted: #52525b;
+  --color-text-dim: #71717a;
   
-  --color-accent: #2563eb;
-  --color-accent-hover: #1d4ed8;
-  --color-accent-subtle: rgba(37, 99, 235, 0.08);
-  --color-accent-border: rgba(37, 99, 235, 0.25);
+  /* Accent Colors (BarePDF Logo Orange #f69423) */
+  --color-accent: #f69423;
+  --color-accent-hover: #e07f10;
+  --color-accent-subtle: rgba(246, 148, 35, 0.08);
+  --color-accent-border: rgba(246, 148, 35, 0.3);
   
-  --color-code-bg: #1e293b;
-  --color-code-text: #e2e8f0;
+  --color-code-bg: #18181b;
+  --color-code-text: #f4f4f6;
   
   --color-success: #16a34a;
   --color-success-bg: rgba(22, 163, 74, 0.1);
@@ -53,62 +54,10 @@
   
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
   
   /* Motion */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Explicit Dark Mode Overrides */
-[data-theme="dark"] {
-  --color-bg: #0b0f19;
-  --color-surface: #111827;
-  --color-surface-elevated: #1f2937;
-  --color-surface-subtle: #1a2234;
-  --color-border: #1f293d;
-  --color-border-subtle: #374151;
-  --color-text: #f3f4f6;
-  --color-text-muted: #9ca3af;
-  --color-text-dim: #6b7280;
-  
-  --color-accent: #3b82f6;
-  --color-accent-hover: #60a5fa;
-  --color-accent-subtle: rgba(59, 130, 246, 0.12);
-  --color-accent-border: rgba(59, 130, 246, 0.3);
-  
-  --color-code-bg: #070a12;
-  --color-code-text: #f3f4f6;
-  
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-}
-
-/* System Dark Mode (when theme is set to 'system' or not explicitly set) */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --color-bg: #0b0f19;
-    --color-surface: #111827;
-    --color-surface-elevated: #1f2937;
-    --color-surface-subtle: #1a2234;
-    --color-border: #1f293d;
-    --color-border-subtle: #374151;
-    --color-text: #f3f4f6;
-    --color-text-muted: #9ca3af;
-    --color-text-dim: #6b7280;
-    
-    --color-accent: #3b82f6;
-    --color-accent-hover: #60a5fa;
-    --color-accent-subtle: rgba(59, 130, 246, 0.12);
-    --color-accent-border: rgba(59, 130, 246, 0.3);
-    
-    --color-code-bg: #070a12;
-    --color-code-text: #f3f4f6;
-    
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-  }
 }

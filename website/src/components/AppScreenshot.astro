@@ -1,5 +1,5 @@
 ---
-const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
 ---
 
 <section class="screenshot-section">
@@ -13,11 +13,14 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
         </div>
         <div class="window-title">BarePDF — Modern Desktop Interface</div>
       </div>
-      
+
       <picture class="screenshot-picture">
-        <source srcset={`${baseUrl}/images/banner-dark.png`} media="(prefers-color-scheme: dark)" />
+        <source
+          srcset={`${baseUrl}/images/banner-white.png`}
+          media="(prefers-color-scheme: dark)"
+        />
         <img
-          src={`${baseUrl}/images/banner-dark.png`}
+          src={`${baseUrl}/images/banner-white.png`}
           alt="BarePDF Desktop Application Interface showing PDF document rendering, sidebar outline, and controls"
           width="1200"
           height="675"
@@ -67,9 +70,15 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     border-radius: 50%;
   }
 
-  .dot.red { background-color: #ff5f56; }
-  .dot.yellow { background-color: #ffbd2e; }
-  .dot.green { background-color: #27c93f; }
+  .dot.red {
+    background-color: #ff5f56;
+  }
+  .dot.yellow {
+    background-color: #ffbd2e;
+  }
+  .dot.green {
+    background-color: #27c93f;
+  }
 
   .window-title {
     margin: 0 auto;

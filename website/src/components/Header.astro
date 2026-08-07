@@ -1,5 +1,4 @@
 ---
-import ThemeToggle from './ThemeToggle.astro';
 import { repository } from '../lib/repository';
 
 interface Props {
@@ -52,12 +51,9 @@ const navLinks = [
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </a>
-
-      <ThemeToggle />
     </nav>
 
     <div class="mobile-actions">
-      <ThemeToggle />
       <button id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle navigation menu" aria-expanded="false">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="12" x2="21" y2="12"></line>

@@ -1,5 +1,5 @@
 ---
-import { formatDate } from '../lib/releases';
+import { formatDate, cleanReleaseNotes } from '../lib/releases';
 import type { GitHubRelease } from '../lib/github';
 
 interface Props {
@@ -7,6 +7,7 @@ interface Props {
 }
 
 const { release } = Astro.props;
+const formattedNotes = cleanReleaseNotes(release.notes);
 ---
 
 <article class="release-card">
@@ -18,9 +19,7 @@ const { release } = Astro.props;
     <time class="release-date">{formatDate(release.publishedAt)}</time>
   </div>
 
-  <div class="release-notes markdown-body">
-    <p>{release.notes}</p>
-  </div>
+  <div class="release-notes" set:html={formattedNotes}></div>
 
   <div class="release-footer">
     <a href={release.url} target="_blank" rel="noopener noreferrer" class="release-link">
@@ -36,12 +35,17 @@ const { release } = Astro.props;
     border-radius: var(--radius-lg);
     padding: 2rem;
     margin-bottom: 2rem;
+    max-width: 100%;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
   }
 
   .release-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--color-border);
     margin-bottom: 1.25rem;
@@ -50,6 +54,7 @@ const { release } = Astro.props;
   .release-title-group {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.75rem;
   }
 
@@ -70,11 +75,37 @@ const { release } = Astro.props;
     line-height: 1.6;
     color: var(--color-text-muted);
     margin-bottom: 1.5rem;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+  }
+
+  .release-notes :global(a) {
+    color: var(--color-accent);
+    text-decoration: underline;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .release-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
   }
 
   .release-link {
     font-size: 0.875rem;
     font-weight: 600;
     color: var(--color-accent);
+  }
+
+  @media (max-width: 640px) {
+    .release-card {
+      padding: 1.25rem;
+    }
+    .release-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
 </style>

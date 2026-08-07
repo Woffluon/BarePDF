@@ -13,11 +13,15 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
 
 <div class="commit-list">
   {displayCommits.map((c) => (
-    <div class="commit-item">
+    <a
+      href={c.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="commit-item"
+      title={`View commit on GitHub: ${c.subject}`}
+    >
       <div class="commit-main">
-        <a href={c.url} target="_blank" rel="noopener noreferrer" class="commit-sha" title="View commit on GitHub">
-          {c.shortSha}
-        </a>
+        <span class="commit-sha">{c.shortSha}</span>
         <span class="commit-subject">{c.subject}</span>
       </div>
 
@@ -26,7 +30,7 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
         <span class="meta-dot">•</span>
         <time class="commit-date">{formatDate(c.date)}</time>
       </div>
-    </div>
+    </a>
   ))}
 </div>
 
@@ -35,6 +39,8 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    width: 100%;
+    max-width: 100%;
   }
 
   .commit-item {
@@ -45,11 +51,17 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    transition: border-color var(--transition-fast);
+    text-decoration: none;
+    transition: border-color var(--transition-fast), transform var(--transition-fast);
+    width: 100%;
+    max-width: 100%;
+    box-shadow: var(--shadow-sm);
   }
 
   .commit-item:hover {
-    border-color: var(--color-border-subtle);
+    border-color: var(--color-accent-border);
+    text-decoration: none;
+    transform: translateY(-1px);
   }
 
   .commit-main {
@@ -57,6 +69,8 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
     align-items: center;
     gap: 0.85rem;
     overflow: hidden;
+    min-width: 0;
+    flex: 1;
   }
 
   .commit-sha {
@@ -64,16 +78,11 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
     font-size: 0.8125rem;
     font-weight: 600;
     padding: 0.2rem 0.5rem;
-    background-color: var(--color-surface-subtle);
-    border: 1px solid var(--color-border);
+    background-color: var(--color-accent-subtle);
+    border: 1px solid var(--color-accent-border);
     border-radius: var(--radius-sm);
     color: var(--color-accent);
-    text-decoration: none;
     flex-shrink: 0;
-  }
-
-  .commit-sha:hover {
-    text-decoration: underline;
   }
 
   .commit-subject {
@@ -83,6 +92,7 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .commit-meta {
@@ -104,6 +114,10 @@ const displayCommits = limit ? commits.slice(0, limit) : commits;
       flex-direction: column;
       align-items: flex-start;
       gap: 0.5rem;
+      padding: 0.85rem 1rem;
+    }
+    .commit-main {
+      width: 100%;
     }
     .commit-meta {
       margin-left: 0;
