@@ -4,7 +4,7 @@
 #define MyAppName "BarePDF"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "BarePDF Contributors"
-#define MyAppURL "https://github.com/barepdf/barepdf"
+#define MyAppURL "https://github.com/woffluon/barepdf"
 #define MyAppExeName "BarePDF.exe"
 #define MyProgID "BarePDF.Document.1"
 

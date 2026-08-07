@@ -68,11 +68,21 @@ slint::slint! {
                 padding: 24px;
                 spacing: 16px;
 
-                Text {
-                    text: "Password Required";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: #ffffff;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Image {
+                        source: @image-url("../../../assets/logo.svg");
+                        width: 28px;
+                        height: 28px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "Password Required";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Text {
@@ -226,6 +236,13 @@ slint::slint! {
                     // Left controls: Open, Sidebar, Nav
                     HorizontalLayout {
                         spacing: 6px;
+
+                        Image {
+                            source: @image-url("../../../assets/logo.svg");
+                            width: 22px;
+                            height: 22px;
+                            vertical-alignment: center;
+                        }
 
                         FluentButton {
                             icon: "🗁";
@@ -490,11 +507,20 @@ slint::slint! {
                         vertical-alignment: center;
                     }
 
-                    Text {
-                        text: root.has_document ? "BarePDF Reader" : "";
-                        font-size: 11px;
-                        color: #666666;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        spacing: 5px;
+                        Image {
+                            source: @image-url("../../../assets/logo.svg");
+                            width: 14px;
+                            height: 14px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "BarePDF";
+                            font-size: 11px;
+                            color: #777777;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
