@@ -774,9 +774,8 @@ slint::slint! {
                                 y: box.y;
                                 width: box.width;
                                 height: box.height;
-                                background: #0078d470;
-                                border-width: 1px;
-                                border-color: #005a9eff;
+                                background: #0078d44d;
+                                border-width: 0px;
                             }
 
                             // Single Page Mouse TouchArea for text selection & right click
@@ -830,9 +829,8 @@ slint::slint! {
                                 y: box.y;
                                 width: box.width;
                                 height: box.height;
-                                background: #0078d470;
-                                border-width: 1px;
-                                border-color: #005a9eff;
+                                background: #0078d44d;
+                                border-width: 0px;
                             }
 
                             // Page Mouse Interaction TouchArea for left-drag selection & right click context menu

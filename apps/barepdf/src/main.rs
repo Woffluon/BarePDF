@@ -916,22 +916,64 @@ fn compute_selection_boxes(
     let scale_x = target_w / pw.max(1.0);
     let scale_y = target_h / ph.max(1.0);
 
-    let mut boxes = Vec::new();
     let start_idx = (range_start as usize).min(geom.glyphs.len());
     let end_idx = (range_end as usize).min(geom.glyphs.len());
 
-    for g in &geom.glyphs[start_idx..end_idx] {
-        let sx = g.x * scale_x;
-        let sy = (ph - (g.y + g.height)) * scale_y;
-        let sw = (g.width * scale_x).max(4.0);
-        let sh = (g.height * scale_y).max(10.0);
+    if start_idx >= end_idx {
+        return Vec::new();
+    }
 
-        boxes.push(SelectionBox {
-            x: sx,
-            y: sy,
-            width: sw,
-            height: sh,
-        });
+    let selected_glyphs = &geom.glyphs[start_idx..end_idx];
+
+    // Merge adjacent glyphs on the same text line into single continuous rectangles (Chrome PDF Viewer style)
+    let mut line_rects: Vec<(f32, f32, f32, f32)> = Vec::new(); // (min_x, max_x, min_y, max_y)
+
+    for g in selected_glyphs {
+        if g.ch == '\n' || g.ch == '\r' || (g.width <= 0.001 && g.height <= 0.001) {
+            continue;
+        }
+
+        let gx1 = g.x;
+        let gx2 = g.x + g.width;
+        let gy1 = g.y;
+        let gy2 = g.y + g.height;
+
+        let mut merged = false;
+        if let Some(last) = line_rects.last_mut() {
+            let y_overlap = (gy2.min(last.3) - gy1.max(last.2)).max(0.0);
+            let avg_h = ((gy2 - gy1) + (last.3 - last.2)) / 2.0;
+
+            // Same line if vertical overlap is significant or baselines are close
+            if y_overlap > avg_h * 0.3 || (gy1 - last.2).abs() < avg_h * 0.4 {
+                last.0 = last.0.min(gx1);
+                last.1 = last.1.max(gx2);
+                last.2 = last.2.min(gy1);
+                last.3 = last.3.max(gy2);
+                merged = true;
+            }
+        }
+
+        if !merged {
+            line_rects.push((gx1, gx2, gy1, gy2));
+        }
+    }
+
+    // Convert merged PDF line bounds to viewport pixel selection boxes
+    let mut boxes = Vec::new();
+    for (lx1, lx2, ly1, ly2) in line_rects {
+        let sx = lx1 * scale_x;
+        let sy = (ph - ly2) * scale_y;
+        let sw = (lx2 - lx1) * scale_x;
+        let sh = (ly2 - ly1) * scale_y;
+
+        if sw > 0.5 && sh > 0.5 {
+            boxes.push(SelectionBox {
+                x: sx,
+                y: sy,
+                width: sw,
+                height: sh,
+            });
+        }
     }
 
     boxes
