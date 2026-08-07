@@ -112,10 +112,8 @@ impl SelectionEngine {
 
         let mut result = String::new();
         let (start_pos, end_pos) = selection.start_and_end();
-        let mut sorted_geoms = geometries.to_vec();
-        sorted_geoms.sort_by_key(|g| g.page_index);
 
-        for geom in &sorted_geoms {
+        for geom in geometries {
             if geom.page_index < start_pos.page || geom.page_index > end_pos.page {
                 continue;
             }
