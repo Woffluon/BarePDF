@@ -5,7 +5,7 @@ pub mod provider;
 use provider::BarePdfThumbnailProvider;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use windows::core::{implement, Error, Interface, Result, GUID, HRESULT, IUnknown};
+use windows::core::{implement, Error, IUnknown, Interface, Result, GUID, HRESULT};
 use windows::Win32::Foundation::{
     BOOL, CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_POINTER, E_UNEXPECTED, HMODULE,
     S_FALSE,
