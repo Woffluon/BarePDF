@@ -961,10 +961,16 @@ fn compute_selection_boxes(
     // Convert merged PDF line bounds to viewport pixel selection boxes
     let mut boxes = Vec::new();
     for (lx1, lx2, ly1, ly2) in line_rects {
+        let line_h = (ly2 - ly1).max(1.0);
+        // PDFium loose font bounds include ~16% EM ascent leading padding above cap height.
+        // Adjusting ly2 and ly1 aligns the selection box rectangle precisely over drawn character ink.
+        let adj_ly2 = ly2 - (line_h * 0.16);
+        let adj_ly1 = ly1 - (line_h * 0.04);
+
         let sx = lx1 * scale_x;
-        let sy = (ph - ly2) * scale_y;
+        let sy = (ph - adj_ly2) * scale_y;
         let sw = (lx2 - lx1) * scale_x;
-        let sh = (ly2 - ly1) * scale_y;
+        let sh = (adj_ly2 - adj_ly1) * scale_y;
 
         if sw > 0.5 && sh > 0.5 {
             boxes.push(SelectionBox {
