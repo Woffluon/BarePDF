@@ -108,7 +108,7 @@ slint::slint! {
 
     export component AppWindow inherits Window {
         title: root.document_title != "" ? root.document_title + " — BarePDF" : "BarePDF";
-        icon: @image-url("../../icon-dark.png");
+        icon: @image-url("../../../assets/logo.svg");
         preferred-width: 1150px;
         preferred-height: 820px;
         background: #181818;
@@ -409,7 +409,7 @@ slint::slint! {
                         spacing: 16px;
 
                         Image {
-                            source: @image-url("../../icon-dark.png");
+                            source: @image-url("../../../assets/logo.svg");
                             width: 72px;
                             height: 72px;
                             horizontal-alignment: center;
