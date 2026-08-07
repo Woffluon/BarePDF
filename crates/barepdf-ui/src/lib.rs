@@ -1,7 +1,52 @@
 use slint::ComponentHandle;
 
 slint::slint! {
-    import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView, StandardListView, ListView } from "std-widgets.slint";
+    import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+    component FluentButton inherits Rectangle {
+        in property <string> icon: "";
+        in property <string> text: "";
+        in property <bool> enabled: true;
+        in property <bool> active: false;
+        in property <bool> primary: false;
+        callback clicked();
+
+        height: 32px;
+        min-width: root.text == "" ? 32px : 64px;
+        border-radius: 4px;
+        background: !root.enabled ? #00000000 :
+                    root.primary ? (touch.has-hover ? #0066b8 : #0078d4) :
+                    root.active ? #383838 :
+                    (touch.has-hover ? #323232 : #252526);
+        border-width: 1px;
+        border-color: root.primary ? #0078d4 : (touch.has-hover ? #454545 : #333333);
+
+        touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { root.clicked(); }
+        }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 6px;
+            alignment: center;
+
+            if root.icon != "" : Text {
+                text: root.icon;
+                font-size: 13px;
+                color: !root.enabled ? #555555 : #ffffff;
+                vertical-alignment: center;
+            }
+            if root.text != "" : Text {
+                text: root.text;
+                font-size: 12px;
+                font-weight: 500;
+                color: !root.enabled ? #555555 : #ffffff;
+                vertical-alignment: center;
+            }
+        }
+    }
 
     component PasswordModal inherits Rectangle {
         in property <string> file_name: "";
@@ -9,17 +54,17 @@ slint::slint! {
         callback submit_password(string);
         callback cancel();
 
-        background: #00000080;
+        background: #000000aa;
 
         Rectangle {
-            width: 380px;
+            width: 400px;
             height: 220px;
-            background: #252526;
+            background: #202020;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #3c3c3c;
+            border-color: #383838;
 
-            VerticalBox {
+            VerticalLayout {
                 padding: 24px;
                 spacing: 16px;
 
@@ -31,7 +76,7 @@ slint::slint! {
                 }
 
                 Text {
-                    text: "The document is password protected. Enter password below:";
+                    text: "This document is encrypted. Enter the password below to open it:";
                     font-size: 13px;
                     color: #cccccc;
                     wrap: word-wrap;
@@ -40,20 +85,18 @@ slint::slint! {
                 LineEdit {
                     text <=> password_input;
                     placeholder-text: "Password";
-                    accepted => {
-                        submit_password(password_input);
-                    }
+                    accepted => { submit_password(password_input); }
                 }
 
-                HorizontalBox {
+                HorizontalLayout {
                     spacing: 12px;
                     alignment: end;
 
-                    Button {
+                    FluentButton {
                         text: "Cancel";
                         clicked => { cancel(); }
                     }
-                    Button {
+                    FluentButton {
                         text: "Unlock";
                         primary: true;
                         clicked => { submit_password(password_input); }
@@ -64,19 +107,27 @@ slint::slint! {
     }
 
     export component AppWindow inherits Window {
-        title: "BarePDF - Lightweight PDF Reader";
-        preferred-width: 1100px;
-        preferred-height: 800px;
-        background: #1e1e1e;
+        title: root.document_title != "" ? root.document_title + " — BarePDF" : "BarePDF";
+        icon: @image-url("../../icon-dark.png");
+        preferred-width: 1150px;
+        preferred-height: 820px;
+        background: #181818;
 
+        in property <string> document_title: "";
         in property <string> status_text: "Ready";
         in property <string> current_page_str: "1";
         in property <string> total_pages_str: "0";
         in property <string> zoom_str: "100%";
         in property <image> page_bitmap;
+        in property <length> page_display_width: 800px;
+        in property <length> page_display_height: 1040px;
         in property <bool> has_document: false;
         in-out property <bool> password_required: false;
         in property <string> protected_file_name: "";
+        in-out property <bool> sidebar_visible: false;
+        in-out property <int> sidebar_tab: 0; // 0: Thumbnails, 1: Outline
+        in-out property <int> window_mode: 0; // 0: Normal, 1: FullScreen, 2: Presentation
+        in property <string> view_mode_label: "Fit Width";
 
         callback request_open_file();
         callback request_next_page();
@@ -87,100 +138,207 @@ slint::slint! {
         callback request_zoom_out();
         callback request_fit_width();
         callback request_fit_page();
+        callback request_actual_size();
+        callback request_toggle_sidebar();
         callback request_toggle_fullscreen();
         callback request_presentation_mode();
+        callback request_exit_special_mode();
         callback request_unlock_password(string);
 
-        VerticalBox {
+        // Key shortcuts handler
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == "\u{001b}") { // Esc
+                    root.request_exit_special_mode();
+                    return accept;
+                }
+                if (event.text == "\u{f11}" || event.text == "F11") {
+                    root.request_toggle_fullscreen();
+                    return accept;
+                }
+                if (event.text == "\u{f5}" || event.text == "F5") {
+                    root.request_presentation_mode();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+
+        // Presentation View (window_mode == 2)
+        if (root.window_mode == 2) : Rectangle {
+            background: #0a0a0a;
+
+            TouchArea {
+                clicked => { root.request_next_page(); }
+            }
+
+            Rectangle {
+                width: Math.min(parent.width - 40px, root.page_display_width);
+                height: Math.min(parent.height - 40px, root.page_display_height);
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: #ffffff;
+
+                Image {
+                    source: root.page_bitmap;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+
+            // Top hint bar for presentation exit
+            Rectangle {
+                y: 12px;
+                height: 28px;
+                width: 220px;
+                x: (parent.width - self.width) / 2;
+                background: #000000cc;
+                border-radius: 14px;
+
+                Text {
+                    text: "Press Esc to exit presentation";
+                    font-size: 11px;
+                    color: #aaaaaa;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Normal View & Fullscreen View (window_mode != 2)
+        if (root.window_mode != 2) : VerticalLayout {
             padding: 0px;
             spacing: 0px;
 
             // Top Command Toolbar
-            Rectangle {
-                height: 48px;
-                background: #252526;
+            if (root.window_mode != 1) : Rectangle {
+                height: 44px;
+                background: #202020;
                 border-width: 1px;
-                border-color: #2d2d2d;
+                border-color: #2b2b2b;
 
-                HorizontalBox {
-                    padding-left: 12px;
-                    padding-right: 12px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
                     alignment: space-between;
 
-                    HorizontalBox {
-                        spacing: 8px;
+                    // Left controls: Open, Sidebar, Nav
+                    HorizontalLayout {
+                        spacing: 6px;
 
-                        Button {
-                            text: "Open PDF";
+                        FluentButton {
+                            icon: "🗁";
+                            text: "Open";
                             clicked => { root.request_open_file(); }
                         }
 
-                        Rectangle { width: 1px; background: #3c3c3c; }
+                        FluentButton {
+                            icon: "☰";
+                            text: "";
+                            active: root.sidebar_visible;
+                            enabled: root.has_document;
+                            clicked => { root.request_toggle_sidebar(); }
+                        }
 
-                        Button {
-                            text: "<";
+                        Rectangle { width: 1px; height: 20px; background: #333333; }
+
+                        FluentButton {
+                            icon: "◀";
+                            text: "";
                             enabled: root.has_document;
                             clicked => { root.request_prev_page(); }
                         }
 
-                        Text {
-                            text: root.current_page_str + " / " + root.total_pages_str;
-                            vertical-alignment: center;
-                            color: #d4d4d4;
+                        Rectangle {
+                            height: 32px;
+                            min-width: 70px;
+                            background: #181818;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #333333;
+
+                            Text {
+                                text: root.current_page_str + " / " + root.total_pages_str;
+                                font-size: 12px;
+                                color: #d0d0d0;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
 
-                        Button {
-                            text: ">";
+                        FluentButton {
+                            icon: "▶";
+                            text: "";
                             enabled: root.has_document;
                             clicked => { root.request_next_page(); }
                         }
                     }
 
-                    HorizontalBox {
-                        spacing: 8px;
+                    // Center controls: Zoom & View modes
+                    HorizontalLayout {
+                        spacing: 6px;
 
-                        Button {
-                            text: "-";
+                        FluentButton {
+                            icon: "➖";
+                            text: "";
                             enabled: root.has_document;
                             clicked => { root.request_zoom_out(); }
                         }
 
-                        Text {
-                            text: root.zoom_str;
-                            vertical-alignment: center;
-                            color: #d4d4d4;
+                        Rectangle {
+                            height: 32px;
+                            min-width: 55px;
+                            background: #181818;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #333333;
+
+                            Text {
+                                text: root.zoom_str;
+                                font-size: 12px;
+                                color: #d0d0d0;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
 
-                        Button {
-                            text: "+";
+                        FluentButton {
+                            icon: "➕";
+                            text: "";
                             enabled: root.has_document;
                             clicked => { root.request_zoom_in(); }
                         }
 
-                        Button {
+                        Rectangle { width: 1px; height: 20px; background: #333333; }
+
+                        FluentButton {
                             text: "Fit Width";
                             enabled: root.has_document;
                             clicked => { root.request_fit_width(); }
                         }
 
-                        Button {
+                        FluentButton {
                             text: "Fit Page";
                             enabled: root.has_document;
                             clicked => { root.request_fit_page(); }
                         }
                     }
 
-                    HorizontalBox {
-                        spacing: 8px;
+                    // Right controls: Full Screen, Presentation
+                    HorizontalLayout {
+                        spacing: 6px;
 
-                        Button {
+                        FluentButton {
+                            icon: "⛶";
                             text: "Full Screen";
                             enabled: root.has_document;
                             clicked => { root.request_toggle_fullscreen(); }
                         }
 
-                        Button {
-                            text: "Presentation (F5)";
+                        FluentButton {
+                            icon: "🗔";
+                            text: "Presentation";
                             enabled: root.has_document;
                             clicked => { root.request_presentation_mode(); }
                         }
@@ -188,65 +346,154 @@ slint::slint! {
                 }
             }
 
-            // Main Document Viewport
-            Rectangle {
-                background: #181818;
+            // Main Workspace (Sidebar + Document Viewport)
+            HorizontalLayout {
+                spacing: 0px;
 
-                if (!root.has_document && !root.password_required) : VerticalBox {
-                    alignment: center;
-                    spacing: 12px;
+                // Collapsible Sidebar
+                if (root.sidebar_visible && root.has_document) : Rectangle {
+                    width: 220px;
+                    background: #1e1e1e;
+                    border-width: 1px;
+                    border-color: #2b2b2b;
 
-                    Text {
-                        text: "BarePDF";
-                        font-size: 28px;
-                        font-weight: 700;
-                        color: #ffffff;
-                        horizontal-alignment: center;
-                    }
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 8px;
 
-                    Text {
-                        text: "Fast, focused, modern PDF reading without bloat.";
-                        font-size: 14px;
-                        color: #888888;
-                        horizontal-alignment: center;
-                    }
+                        HorizontalLayout {
+                            spacing: 4px;
 
-                    Button {
-                        text: "Open Document (Ctrl+O)";
-                        primary: true;
-                        clicked => { root.request_open_file(); }
+                            FluentButton {
+                                text: "Thumbnails";
+                                active: root.sidebar_tab == 0;
+                                clicked => { root.sidebar_tab = 0; }
+                            }
+                            FluentButton {
+                                text: "Outline";
+                                active: root.sidebar_tab == 1;
+                                clicked => { root.sidebar_tab = 1; }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #181818;
+                            border-radius: 4px;
+
+                            if root.sidebar_tab == 0 : Text {
+                                text: "Page " + root.current_page_str;
+                                font-size: 13px;
+                                color: #888888;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            if root.sidebar_tab == 1 : Text {
+                                text: "No Outline available";
+                                font-size: 12px;
+                                color: #666666;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
 
-                if (root.has_document) : ScrollView {
-                    viewport-width: page_display.width;
-                    viewport-height: page_display.height;
+                // Document Canvas Viewport
+                Rectangle {
+                    background: #121212;
 
-                    page_display := Image {
-                        source: root.page_bitmap;
+                    // Empty State
+                    if (!root.has_document && !root.password_required) : VerticalLayout {
+                        alignment: center;
+                        spacing: 16px;
+
+                        Image {
+                            source: @image-url("../../icon-dark.png");
+                            width: 72px;
+                            height: 72px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "BarePDF";
+                            font-size: 32px;
+                            font-weight: 700;
+                            color: #ffffff;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Fast, focused, modern Windows PDF reader";
+                            font-size: 14px;
+                            color: #888888;
+                            horizontal-alignment: center;
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            FluentButton {
+                                icon: "🗁";
+                                text: "Open PDF (Ctrl+O)";
+                                primary: true;
+                                clicked => { root.request_open_file(); }
+                            }
+                        }
                     }
-                }
 
-                if (root.password_required) : PasswordModal {
-                    file_name: root.protected_file_name;
-                    submit_password(pwd) => { root.request_unlock_password(pwd); }
-                    cancel => { root.password_required = false; }
+                    // Rendered Centered Viewport
+                    if (root.has_document) : ScrollView {
+                        viewport-width: Math.max(self.width, page_container.width + 40px);
+                        viewport-height: Math.max(self.height, page_container.height + 40px);
+
+                        page_container := Rectangle {
+                            width: root.page_display_width;
+                            height: root.page_display_height;
+                            x: Math.max(20px, (parent.viewport-width - self.width) / 2);
+                            y: Math.max(20px, (parent.viewport-height - self.height) / 2);
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #00000040;
+
+                            Image {
+                                source: root.page_bitmap;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    if (root.password_required) : PasswordModal {
+                        file_name: root.protected_file_name;
+                        submit_password(pwd) => { root.request_unlock_password(pwd); }
+                        cancel => { root.password_required = false; }
+                    }
                 }
             }
 
-            // Bottom Status Bar
-            Rectangle {
-                height: 24px;
-                background: #007acc;
+            // Clean Fluent Status Bar
+            if (root.window_mode != 1) : Rectangle {
+                height: 22px;
+                background: #1a1a1a;
+                border-width: 1px;
+                border-color: #242424;
 
-                HorizontalBox {
-                    padding-left: 8px;
-                    padding-right: 8px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    alignment: space-between;
 
                     Text {
                         text: root.status_text;
                         font-size: 11px;
-                        color: #ffffff;
+                        color: #999999;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: root.has_document ? "BarePDF Reader" : "";
+                        font-size: 11px;
+                        color: #666666;
                         vertical-alignment: center;
                     }
                 }

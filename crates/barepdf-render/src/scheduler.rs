@@ -45,6 +45,7 @@ pub enum RenderEvent {
         document_id: DocumentId,
         page_count: u32,
         first_page_dimensions: (f32, f32),
+        all_page_dimensions: Vec<(f32, f32)>,
     },
     PageRendered {
         request_id: RequestId,
@@ -74,8 +75,8 @@ pub struct RenderScheduler {
 
 impl RenderScheduler {
     pub fn spawn<B: PdfBackend + 'static>(backend: B, budget: MemoryBudget) -> Self {
-        let (cmd_tx, cmd_rx) = bounded::<RenderCommand>(64);
-        let (event_tx, event_rx) = bounded::<RenderEvent>(64);
+        let (cmd_tx, cmd_rx) = bounded::<RenderCommand>(128);
+        let (event_tx, event_rx) = bounded::<RenderEvent>(128);
         let current_gen = Arc::new(AtomicU64::new(1));
         let cache = SharedBitmapCache::new(budget);
 
@@ -94,14 +95,14 @@ impl RenderScheduler {
                     } => match backend.open_path(&path, password.as_deref()) {
                         Ok(doc) => {
                             let count = doc.page_count().get();
-                            let dims = doc
-                                .page_dimensions(PageIndex::zero())
-                                .unwrap_or((612.0, 792.0));
+                            let all_dims = doc.all_page_dimensions().unwrap_or_default();
+                            let first_dims = all_dims.first().copied().unwrap_or((612.0, 792.0));
                             active_doc = Some((document_id, doc));
                             let _ = event_tx.send(RenderEvent::DocumentOpened {
                                 document_id,
                                 page_count: count,
-                                first_page_dimensions: dims,
+                                first_page_dimensions: first_dims,
+                                all_page_dimensions: all_dims,
                             });
                         }
                         Err(err) => {

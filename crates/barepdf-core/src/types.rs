@@ -223,3 +223,18 @@ pub enum ZoomMode {
     ActualSize,
     Custom(ZoomFactor),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WindowMode {
+    #[default]
+    Normal,
+    FullScreen,
+    Presentation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SidebarTab {
+    #[default]
+    Thumbnails,
+    Outline,
+}

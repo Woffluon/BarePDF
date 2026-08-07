@@ -27,6 +27,15 @@ pub struct OutlineNode {
 pub trait PdfDocument: Send + Sync {
     fn page_count(&self) -> PageCount;
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError>;
+    fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
+        let count = self.page_count().get();
+        let mut dims = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let dim = self.page_dimensions(PageIndex::from_raw(i))?;
+            dims.push(dim);
+        }
+        Ok(dims)
+    }
     fn render_page(
         &self,
         page_index: PageIndex,

@@ -1,4 +1,4 @@
-use crate::types::{PageIndex, ReadingDirection, ViewingMode, ZoomMode};
+use crate::types::{PageIndex, ReadingDirection, SidebarTab, ViewingMode, WindowMode, ZoomMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,6 +18,8 @@ pub enum AppCommand {
     SetZoomMode(ZoomMode),
     SetViewingMode(ViewingMode),
     SetReadingDirection(ReadingDirection),
+    SetWindowMode(WindowMode),
+    SetSidebarTab(SidebarTab),
     ToggleSidebar,
     ToggleFullScreen,
     TogglePresentationMode,

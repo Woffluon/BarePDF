@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use barepdf_core::{
-    DocumentId, MemoryBudget, PageCount, PageIndex, PdfError, RequestId, Rotation, UserPreferences,
-    ZoomFactor, ZoomMode,
+    compute_target_dimensions, default_config_path, DocumentId, MemoryBudget, PageCount, PageIndex,
+    PdfError, RequestId, Rotation, UserPreferences, WindowMode, ZoomFactor, ZoomMode,
 };
 use barepdf_pdf::PdfiumEngine;
 use barepdf_platform::FileDialogs;
@@ -27,7 +27,9 @@ struct AppState {
     zoom_factor: ZoomFactor,
     rotation: Rotation,
     first_page_dims: (f32, f32),
-    _preferences: UserPreferences,
+    all_page_dims: Vec<(f32, f32)>,
+    window_mode: WindowMode,
+    preferences: UserPreferences,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,12 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pdf_engine = match PdfiumEngine::new() {
         Ok(engine) => engine,
         Err(err) => {
-            tracing::warn!("Failed to initialize PDFium system engine: {}", err);
+            tracing::warn!("Failed to initialize PDFium engine: {}", err);
             PdfiumEngine::new()?
         }
     };
 
-    let preferences = UserPreferences::default();
+    let prefs_path = default_config_path();
+    let preferences = UserPreferences::load_from_file(&prefs_path);
     let scheduler = Rc::new(RenderScheduler::spawn(
         pdf_engine,
         MemoryBudget::new(preferences.memory_budget_bytes),
@@ -51,16 +54,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _clipboard = Arc::new(WindowsClipboard::new());
 
     let main_window = AppWindow::new()?;
+    main_window.set_sidebar_visible(preferences.sidebar_visible);
+
     let state = Rc::new(RefCell::new(AppState {
         current_doc_id: None,
         current_path: None,
         page_count: 0,
         current_page: 0,
-        zoom_mode: ZoomMode::FitWidth,
+        zoom_mode: preferences.zoom_mode,
         zoom_factor: ZoomFactor::default(),
         rotation: Rotation::Degrees0,
         first_page_dims: (612.0, 792.0),
-        _preferences: preferences,
+        all_page_dims: Vec::new(),
+        window_mode: WindowMode::Normal,
+        preferences,
     }));
 
     // Check CLI argument for PDF path
@@ -157,6 +164,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let state_act = state.clone();
+    let scheduler_act = scheduler.clone();
+    let window_act = main_window.as_weak();
+    main_window.on_request_actual_size(move || {
+        let mut s = state_act.borrow_mut();
+        s.zoom_mode = ZoomMode::ActualSize;
+        if let Some(win) = window_act.upgrade() {
+            update_page_view(&s, &scheduler_act, &win);
+        }
+    });
+
+    let state_side = state.clone();
+    let window_side = main_window.as_weak();
+    let prefs_path_side = prefs_path.clone();
+    main_window.on_request_toggle_sidebar(move || {
+        if let Some(win) = window_side.upgrade() {
+            let next_val = !win.get_sidebar_visible();
+            win.set_sidebar_visible(next_val);
+            let mut s = state_side.borrow_mut();
+            s.preferences.sidebar_visible = next_val;
+            let _ = s.preferences.save_to_file(&prefs_path_side);
+        }
+    });
+
+    let state_fs = state.clone();
+    let window_fs = main_window.as_weak();
+    main_window.on_request_toggle_fullscreen(move || {
+        if let Some(win) = window_fs.upgrade() {
+            let mut s = state_fs.borrow_mut();
+            if s.window_mode == WindowMode::FullScreen {
+                s.window_mode = WindowMode::Normal;
+                win.set_window_mode(0);
+                win.window().set_fullscreen(false);
+            } else {
+                s.window_mode = WindowMode::FullScreen;
+                win.set_window_mode(1);
+                win.window().set_fullscreen(true);
+            }
+        }
+    });
+
+    let state_pres = state.clone();
+    let window_pres = main_window.as_weak();
+    main_window.on_request_presentation_mode(move || {
+        if let Some(win) = window_pres.upgrade() {
+            let mut s = state_pres.borrow_mut();
+            s.window_mode = WindowMode::Presentation;
+            win.set_window_mode(2);
+            win.window().set_fullscreen(true);
+        }
+    });
+
+    let state_exit = state.clone();
+    let window_exit = main_window.as_weak();
+    main_window.on_request_exit_special_mode(move || {
+        if let Some(win) = window_exit.upgrade() {
+            let mut s = state_exit.borrow_mut();
+            if s.window_mode != WindowMode::Normal {
+                s.window_mode = WindowMode::Normal;
+                win.set_window_mode(0);
+                win.window().set_fullscreen(false);
+            }
+        }
+    });
+
     let state_pwd = state.clone();
     let scheduler_pwd = scheduler.clone();
     let window_pwd = main_window.as_weak();
@@ -176,7 +248,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Render Event Processing Loop (Tick timer ~60 FPS)
+    // Event Loop Timer (~60 FPS)
     let timer = Timer::default();
     let scheduler_tick = scheduler.clone();
     let window_tick = main_window.as_weak();
@@ -193,19 +265,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             document_id,
                             page_count,
                             first_page_dimensions,
+                            all_page_dimensions,
                         } => {
                             let mut s = state_tick.borrow_mut();
                             s.current_doc_id = Some(document_id);
                             s.page_count = page_count;
                             s.current_page = 0;
                             s.first_page_dims = first_page_dimensions;
+                            s.all_page_dims = all_page_dimensions;
+
+                            let doc_name = s
+                                .current_path
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("document.pdf");
 
                             win.set_has_document(true);
                             win.set_password_required(false);
+                            win.set_document_title(SharedString::from(doc_name));
                             win.set_total_pages_str(SharedString::from(page_count.to_string()));
                             win.set_status_text(SharedString::from(format!(
-                                "Opened document ({} pages)",
-                                page_count
+                                "Opened {} ({} pages)",
+                                doc_name, page_count
                             )));
 
                             update_page_view(&s, &scheduler_tick, &win);
@@ -291,9 +373,16 @@ fn update_page_view(state: &AppState, scheduler: &RenderScheduler, window: &AppW
     let page_index = PageIndex::new(state.current_page, page_count).unwrap_or_else(PageIndex::zero);
 
     let gen = scheduler.bump_generation();
-    let (pw, ph) = state.first_page_dims;
-    let target_dims =
-        barepdf_core::compute_target_dimensions(pw, ph, 1100, 800, state.zoom_mode, 1.0);
+    let (pw, ph) = state
+        .all_page_dims
+        .get(page_index.get() as usize)
+        .copied()
+        .unwrap_or(state.first_page_dims);
+
+    let target_dims = compute_target_dimensions(pw, ph, 1100, 800, state.zoom_mode, 1.0);
+
+    window.set_page_display_width(target_dims.width as f32);
+    window.set_page_display_height(target_dims.height as f32);
 
     let job = RenderJob {
         request_id: RequestId::new(rand_id()),

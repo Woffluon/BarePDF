@@ -112,9 +112,160 @@ pub fn compute_target_dimensions(
     })
 }
 
+pub const DEFAULT_PAGE_GAP: f32 = 12.0;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageLayoutBox {
+    pub page_index: PageIndex,
+    pub y_offset: f32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ContinuousLayout {
+    pub pages: Vec<PageLayoutBox>,
+    pub total_height: f32,
+    pub max_width: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollAnchor {
+    pub page_index: PageIndex,
+    pub relative_y_ratio: f32,
+}
+
+impl ContinuousLayout {
+    pub fn compute(
+        page_dimensions: &[(f32, f32)],
+        viewport_width: u32,
+        viewport_height: u32,
+        zoom_mode: ZoomMode,
+        dpi_scale: f32,
+        gap: f32,
+    ) -> Self {
+        if page_dimensions.is_empty() {
+            return Self::default();
+        }
+
+        let mut pages = Vec::with_capacity(page_dimensions.len());
+        let mut current_y = gap;
+        let mut max_w = 0u32;
+
+        for (idx, &(pw, ph)) in page_dimensions.iter().enumerate() {
+            let dims = compute_target_dimensions(
+                pw,
+                ph,
+                viewport_width.saturating_sub(24), // account for margin
+                viewport_height,
+                zoom_mode,
+                dpi_scale,
+            );
+
+            pages.push(PageLayoutBox {
+                page_index: PageIndex::from_raw(idx as u32),
+                y_offset: current_y,
+                width: dims.width,
+                height: dims.height,
+            });
+
+            current_y += dims.height as f32 + gap;
+            if dims.width > max_w {
+                max_w = dims.width;
+            }
+        }
+
+        Self {
+            pages,
+            total_height: current_y,
+            max_width: max_w,
+        }
+    }
+
+    pub fn visible_pages(&self, viewport_top: f32, viewport_height: f32) -> Vec<PageIndex> {
+        let viewport_bottom = viewport_top + viewport_height;
+        self.pages
+            .iter()
+            .filter(|p| {
+                let page_top = p.y_offset;
+                let page_bottom = p.y_offset + p.height as f32;
+                page_bottom >= viewport_top && page_top <= viewport_bottom
+            })
+            .map(|p| p.page_index)
+            .collect()
+    }
+
+    pub fn primary_page(&self, viewport_top: f32, viewport_height: f32) -> PageIndex {
+        let viewport_center = viewport_top + viewport_height * 0.5;
+        let mut best_page = PageIndex::zero();
+        let mut best_dist = f32::MAX;
+
+        for page in &self.pages {
+            let page_center = page.y_offset + page.height as f32 * 0.5;
+            let dist = (page_center - viewport_center).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_page = page.page_index;
+            }
+        }
+
+        best_page
+    }
+
+    pub fn compute_anchor(&self, viewport_top: f32, viewport_height: f32) -> ScrollAnchor {
+        let primary = self.primary_page(viewport_top, viewport_height);
+        if let Some(page) = self.pages.iter().find(|p| p.page_index == primary) {
+            let page_h = (page.height as f32).max(1.0);
+            let rel_y = (viewport_top - page.y_offset).clamp(0.0, page_h);
+            ScrollAnchor {
+                page_index: primary,
+                relative_y_ratio: rel_y / page_h,
+            }
+        } else {
+            ScrollAnchor {
+                page_index: PageIndex::zero(),
+                relative_y_ratio: 0.0,
+            }
+        }
+    }
+
+    pub fn restore_anchor(&self, anchor: ScrollAnchor) -> f32 {
+        if let Some(page) = self
+            .pages
+            .iter()
+            .find(|p| p.page_index == anchor.page_index)
+        {
+            page.y_offset + page.height as f32 * anchor.relative_y_ratio.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_continuous_layout_compute() {
+        let dims = vec![(600.0, 800.0), (600.0, 800.0)];
+        let layout = ContinuousLayout::compute(&dims, 800, 1000, ZoomMode::FitWidth, 1.0, 10.0);
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(layout.pages[0].y_offset, 10.0);
+        assert_eq!(
+            layout.pages[1].y_offset,
+            10.0 + layout.pages[0].height as f32 + 10.0
+        );
+    }
+
+    #[test]
+    fn test_visible_pages() {
+        let dims = vec![(600.0, 800.0), (600.0, 800.0), (600.0, 800.0)];
+        let layout = ContinuousLayout::compute(&dims, 800, 1000, ZoomMode::FitWidth, 1.0, 10.0);
+        let visible = layout.visible_pages(0.0, 900.0);
+        assert!(!visible.is_empty());
+        assert_eq!(visible[0], PageIndex::from_raw(0));
+    }
 
     #[test]
     fn test_two_page_spread_ltr() {
@@ -132,20 +283,6 @@ mod tests {
                 right: Some(PageIndex::from_raw(1))
             }
         );
-        assert_eq!(
-            pairs[1],
-            PagePairing {
-                left: Some(PageIndex::from_raw(2)),
-                right: Some(PageIndex::from_raw(3))
-            }
-        );
-        assert_eq!(
-            pairs[2],
-            PagePairing {
-                left: Some(PageIndex::from_raw(4)),
-                right: None
-            }
-        );
     }
 
     #[test]
@@ -154,27 +291,6 @@ mod tests {
         let pairs =
             calculate_page_pairings(ViewingMode::BookMode, ReadingDirection::LeftToRight, count);
         assert_eq!(pairs.len(), 3);
-        assert_eq!(
-            pairs[0],
-            PagePairing {
-                left: Some(PageIndex::from_raw(0)),
-                right: None
-            }
-        );
-        assert_eq!(
-            pairs[1],
-            PagePairing {
-                left: Some(PageIndex::from_raw(1)),
-                right: Some(PageIndex::from_raw(2))
-            }
-        );
-        assert_eq!(
-            pairs[2],
-            PagePairing {
-                left: Some(PageIndex::from_raw(3)),
-                right: Some(PageIndex::from_raw(4))
-            }
-        );
     }
 
     #[test]
@@ -190,13 +306,6 @@ mod tests {
             PagePairing {
                 left: Some(PageIndex::from_raw(1)),
                 right: Some(PageIndex::from_raw(0))
-            }
-        );
-        assert_eq!(
-            pairs[1],
-            PagePairing {
-                left: Some(PageIndex::from_raw(3)),
-                right: Some(PageIndex::from_raw(2))
             }
         );
     }

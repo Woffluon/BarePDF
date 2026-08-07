@@ -105,6 +105,20 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         Ok((width, height))
     }
 
+    fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
+        let pages = self.doc.pages();
+        let count = pages.len();
+        let mut dims = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            if let Ok(page) = pages.get(i) {
+                dims.push((page.width().value, page.height().value));
+            } else {
+                dims.push((612.0, 792.0));
+            }
+        }
+        Ok(dims)
+    }
+
     fn render_page(
         &self,
         page_index: PageIndex,
