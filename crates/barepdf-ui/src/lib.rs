@@ -3,8 +3,25 @@ use slint::ComponentHandle;
 slint::slint! {
     import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 
+    export struct PageItem {
+        page_index: int,
+        page_number: string,
+        width: length,
+        height: length,
+        y_offset: length,
+        bitmap: image,
+    }
+
+    export struct ThumbnailItem {
+        page_index: int,
+        page_number: string,
+        width: length,
+        height: length,
+        bitmap: image,
+        is_selected: bool,
+    }
+
     component FluentButton inherits Rectangle {
-        in property <string> icon: "";
         in property <string> text: "";
         in property <bool> enabled: true;
         in property <bool> active: false;
@@ -12,7 +29,7 @@ slint::slint! {
         callback clicked();
 
         height: 32px;
-        min-width: root.text == "" ? 32px : 64px;
+        min-width: 48px;
         border-radius: 4px;
         background: !root.enabled ? #00000000 :
                     root.primary ? (touch.has-hover ? #0066b8 : #0078d4) :
@@ -27,23 +44,17 @@ slint::slint! {
         }
 
         HorizontalLayout {
-            padding-left: 8px;
-            padding-right: 8px;
-            spacing: 6px;
+            padding-left: 10px;
+            padding-right: 10px;
             alignment: center;
 
-            if root.icon != "" : Text {
-                text: root.icon;
-                font-size: 13px;
-                color: !root.enabled ? #555555 : #ffffff;
-                vertical-alignment: center;
-            }
-            if root.text != "" : Text {
+            Text {
                 text: root.text;
                 font-size: 12px;
                 font-weight: 500;
                 color: !root.enabled ? #555555 : #ffffff;
                 vertical-alignment: center;
+                horizontal-alignment: center;
             }
         }
     }
@@ -68,21 +79,11 @@ slint::slint! {
                 padding: 24px;
                 spacing: 16px;
 
-                HorizontalLayout {
-                    spacing: 10px;
-                    Image {
-                        source: @image-url("../../../assets/logo.svg");
-                        width: 28px;
-                        height: 28px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: "Password Required";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: #ffffff;
-                        vertical-alignment: center;
-                    }
+                Text {
+                    text: "Password Required";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: #ffffff;
                 }
 
                 Text {
@@ -131,13 +132,16 @@ slint::slint! {
         in property <image> page_bitmap;
         in property <length> page_display_width: 800px;
         in property <length> page_display_height: 1040px;
+        in property <length> document_total_height: 1040px;
+        in property <[PageItem]> visible_pages: [];
+        in property <[ThumbnailItem]> thumbnail_items: [];
         in property <bool> has_document: false;
         in-out property <bool> password_required: false;
         in property <string> protected_file_name: "";
-        in-out property <bool> sidebar_visible: false;
+        in-out property <bool> sidebar_visible: true;
         in-out property <int> sidebar_tab: 0; // 0: Thumbnails, 1: Outline
         in-out property <int> window_mode: 0; // 0: Normal, 1: FullScreen, 2: Presentation
-        in property <string> view_mode_label: "Fit Width";
+        in property <string> view_mode_label: "Continuous";
 
         callback request_open_file();
         callback request_next_page();
@@ -154,8 +158,10 @@ slint::slint! {
         callback request_presentation_mode();
         callback request_exit_special_mode();
         callback request_unlock_password(string);
+        callback request_select_page(int);
+        callback request_toggle_view_mode();
 
-        // Key shortcuts handler
+        // Keyboard navigation
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") { // Esc
@@ -196,7 +202,6 @@ slint::slint! {
                 }
             }
 
-            // Top hint bar for presentation exit
             Rectangle {
                 y: 12px;
                 height: 28px;
@@ -233,26 +238,17 @@ slint::slint! {
                     spacing: 8px;
                     alignment: space-between;
 
-                    // Left controls: Open, Sidebar, Nav
+                    // Left controls: Open, Sidebar toggle, Page Nav
                     HorizontalLayout {
                         spacing: 6px;
 
-                        Image {
-                            source: @image-url("../../../assets/logo.svg");
-                            width: 22px;
-                            height: 22px;
-                            vertical-alignment: center;
-                        }
-
                         FluentButton {
-                            icon: "🗁";
                             text: "Open";
                             clicked => { root.request_open_file(); }
                         }
 
                         FluentButton {
-                            icon: "☰";
-                            text: "";
+                            text: "Sidebar";
                             active: root.sidebar_visible;
                             enabled: root.has_document;
                             clicked => { root.request_toggle_sidebar(); }
@@ -261,8 +257,7 @@ slint::slint! {
                         Rectangle { width: 1px; height: 20px; background: #333333; }
 
                         FluentButton {
-                            icon: "◀";
-                            text: "";
+                            text: "<";
                             enabled: root.has_document;
                             clicked => { root.request_prev_page(); }
                         }
@@ -285,8 +280,7 @@ slint::slint! {
                         }
 
                         FluentButton {
-                            icon: "▶";
-                            text: "";
+                            text: ">";
                             enabled: root.has_document;
                             clicked => { root.request_next_page(); }
                         }
@@ -297,8 +291,7 @@ slint::slint! {
                         spacing: 6px;
 
                         FluentButton {
-                            icon: "➖";
-                            text: "";
+                            text: "-";
                             enabled: root.has_document;
                             clicked => { root.request_zoom_out(); }
                         }
@@ -321,13 +314,18 @@ slint::slint! {
                         }
 
                         FluentButton {
-                            icon: "➕";
-                            text: "";
+                            text: "+";
                             enabled: root.has_document;
                             clicked => { root.request_zoom_in(); }
                         }
 
                         Rectangle { width: 1px; height: 20px; background: #333333; }
+
+                        FluentButton {
+                            text: root.view_mode_label;
+                            enabled: root.has_document;
+                            clicked => { root.request_toggle_view_mode(); }
+                        }
 
                         FluentButton {
                             text: "Fit Width";
@@ -347,14 +345,12 @@ slint::slint! {
                         spacing: 6px;
 
                         FluentButton {
-                            icon: "⛶";
                             text: "Full Screen";
                             enabled: root.has_document;
                             clicked => { root.request_toggle_fullscreen(); }
                         }
 
                         FluentButton {
-                            icon: "🗔";
                             text: "Presentation";
                             enabled: root.has_document;
                             clicked => { root.request_presentation_mode(); }
@@ -367,7 +363,7 @@ slint::slint! {
             HorizontalLayout {
                 spacing: 0px;
 
-                // Collapsible Sidebar
+                // Collapsible Left Sidebar (Thumbnails & Outline)
                 if (root.sidebar_visible && root.has_document) : Rectangle {
                     width: 220px;
                     background: #1e1e1e;
@@ -393,19 +389,57 @@ slint::slint! {
                             }
                         }
 
-                        Rectangle {
+                        // Sidebar Thumbnail List View
+                        if root.sidebar_tab == 0 : ScrollView {
+                            VerticalLayout {
+                                padding: 4px;
+                                spacing: 10px;
+
+                                for thumb in root.thumbnail_items : Rectangle {
+                                    height: thumb.height + 26px;
+                                    background: thumb.is_selected ? #0078d430 : (thumb_touch.has-hover ? #2d2d2d : #181818);
+                                    border-radius: 4px;
+                                    border-width: thumb.is_selected ? 2px : 1px;
+                                    border-color: thumb.is_selected ? #0078d4 : #333333;
+
+                                    thumb_touch := TouchArea {
+                                        clicked => { root.request_select_page(thumb.page_index); }
+                                    }
+
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        alignment: center;
+                                        spacing: 4px;
+
+                                        Rectangle {
+                                            width: thumb.width;
+                                            height: thumb.height;
+                                            background: #ffffff;
+
+                                            Image {
+                                                source: thumb.bitmap;
+                                                width: 100%;
+                                                height: 100%;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: thumb.page_number;
+                                            font-size: 11px;
+                                            color: thumb.is_selected ? #ffffff : #aaaaaa;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Outline View
+                        if root.sidebar_tab == 1 : Rectangle {
                             background: #181818;
                             border-radius: 4px;
 
-                            if root.sidebar_tab == 0 : Text {
-                                text: "Page " + root.current_page_str;
-                                font-size: 13px;
-                                color: #888888;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            if root.sidebar_tab == 1 : Text {
+                            Text {
                                 text: "No Outline available";
                                 font-size: 12px;
                                 color: #666666;
@@ -420,17 +454,10 @@ slint::slint! {
                 Rectangle {
                     background: #121212;
 
-                    // Empty State
+                    // Empty State Screen (Clean text, no excess icons)
                     if (!root.has_document && !root.password_required) : VerticalLayout {
                         alignment: center;
                         spacing: 16px;
-
-                        Image {
-                            source: @image-url("../../../assets/logo.svg");
-                            width: 72px;
-                            height: 72px;
-                            horizontal-alignment: center;
-                        }
 
                         Text {
                             text: "BarePDF";
@@ -450,7 +477,6 @@ slint::slint! {
                         HorizontalLayout {
                             alignment: center;
                             FluentButton {
-                                icon: "🗁";
                                 text: "Open PDF (Ctrl+O)";
                                 primary: true;
                                 clicked => { root.request_open_file(); }
@@ -458,22 +484,23 @@ slint::slint! {
                         }
                     }
 
-                    // Rendered Centered Viewport
+                    // Continuous Vertical Scroll & Single Page Viewport
                     if (root.has_document) : ScrollView {
-                        viewport-width: Math.max(self.width, page_container.width + 40px);
-                        viewport-height: Math.max(self.height, page_container.height + 40px);
+                        viewport-width: Math.max(self.width, root.page_display_width + 40px);
+                        viewport-height: Math.max(self.height, root.document_total_height + 40px);
 
-                        page_container := Rectangle {
-                            width: root.page_display_width;
-                            height: root.page_display_height;
-                            x: Math.max(20px, (parent.viewport-width - self.width) / 2);
-                            y: Math.max(20px, (parent.viewport-height - self.height) / 2);
+                        // Render visible pages in continuous vertical layout
+                        for page in root.visible_pages : Rectangle {
+                            width: page.width;
+                            height: page.height;
+                            x: Math.max(20px, (parent.viewport-width - page.width) / 2);
+                            y: page.y_offset;
                             background: #ffffff;
                             border-width: 1px;
                             border-color: #00000040;
 
                             Image {
-                                source: root.page_bitmap;
+                                source: page.bitmap;
                                 width: 100%;
                                 height: 100%;
                             }
@@ -507,20 +534,11 @@ slint::slint! {
                         vertical-alignment: center;
                     }
 
-                    HorizontalLayout {
-                        spacing: 5px;
-                        Image {
-                            source: @image-url("../../../assets/logo.svg");
-                            width: 14px;
-                            height: 14px;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: "BarePDF";
-                            font-size: 11px;
-                            color: #777777;
-                            vertical-alignment: center;
-                        }
+                    Text {
+                        text: root.has_document ? "Continuous Mode" : "";
+                        font-size: 11px;
+                        color: #666666;
+                        vertical-alignment: center;
                     }
                 }
             }
