@@ -26,7 +26,12 @@ $ZipName = "BarePDF-Portable-x64-v$Version.zip"
 $ZipPath = Join-Path $PortableDir $ZipName
 
 if (Test-Path $ZipPath) {
-    Remove-Item $ZipPath -Force
+    try {
+        Remove-Item $ZipPath -Force -ErrorAction Stop
+    } catch {
+        Start-Sleep -Milliseconds 500
+        Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "Creating Portable ZIP: $ZipPath" -ForegroundColor Cyan
