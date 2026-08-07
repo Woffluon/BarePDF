@@ -1,0 +1,92 @@
+---
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<section class="screenshot-section">
+  <div class="container">
+    <div class="screenshot-frame">
+      <div class="window-header">
+        <div class="window-dots">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+        <div class="window-title">BarePDF — Modern Desktop Interface</div>
+      </div>
+      
+      <picture class="screenshot-picture">
+        <source srcset={`${baseUrl}/images/banner-dark.png`} media="(prefers-color-scheme: dark)" />
+        <img
+          src={`${baseUrl}/images/banner-dark.png`}
+          alt="BarePDF Desktop Application Interface showing PDF document rendering, sidebar outline, and controls"
+          width="1200"
+          height="675"
+          loading="eager"
+          decoding="async"
+          class="screenshot-img"
+        />
+      </picture>
+    </div>
+  </div>
+</section>
+
+<style>
+  .screenshot-section {
+    padding: 1rem 0 4rem;
+  }
+
+  .screenshot-frame {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    transition: transform var(--transition-normal);
+  }
+
+  .screenshot-frame:hover {
+    transform: translateY(-2px);
+  }
+
+  .window-header {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background-color: var(--color-surface-subtle);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .window-dots {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+
+  .dot.red { background-color: #ff5f56; }
+  .dot.yellow { background-color: #ffbd2e; }
+  .dot.green { background-color: #27c93f; }
+
+  .window-title {
+    margin: 0 auto;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-text-dim);
+  }
+
+  .screenshot-picture {
+    display: block;
+    width: 100%;
+  }
+
+  .screenshot-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    object-fit: cover;
+  }
+</style>

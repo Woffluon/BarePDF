@@ -1,0 +1,54 @@
+---
+title: "Installation & Setup"
+description: "How to install BarePDF using the Windows Setup executable or run the portable ZIP package."
+category: "user"
+order: 2
+---
+
+# Installation & Setup
+
+BarePDF provides two distribution channels: an interactive **Windows Setup Installer** and a zero-install **Portable ZIP Package**.
+
+## Option 1: Windows Setup Installer (Recommended)
+
+Download `BarePDF-Setup-x64-v1.0.0.exe` from official GitHub Releases.
+
+### Setup Behavior
+- **No Administrator Rights Required**: Installs directly to `%LOCALAPPDATA%\Programs\BarePDF`.
+- **File Association**: Registers ProgID `BarePDF.Document.1` and application capabilities under `HKCU`.
+- **Open With**: Registers BarePDF in the Windows "Open with" menu and `RegisteredApplications`.
+- **Default App Prompt**: Setup offers an option upon completion: *"Launch Windows Default Apps settings to select BarePDF as your default .pdf reader"*.
+
+> [!NOTE]
+> BarePDF strictly adheres to Windows guidelines. It never forcibly overwrites protected `UserChoice` registry keys. If you choose to set BarePDF as default, Windows opens the native `ms-settings:defaultapps?registeredAppUser=BarePDF` page for your confirmation.
+
+---
+
+## Option 2: Portable ZIP Package
+
+Download `BarePDF-Portable-x64-v1.0.0.zip` from official GitHub Releases.
+
+1. Extract the ZIP archive anywhere on your disk or portable USB drive (e.g. `C:\Tools\BarePDF-Portable`).
+2. Double-click `BarePDF.exe` to run immediately.
+3. The portable build requires no installation, leaves no registry traces, and operates completely self-contained.
+
+---
+
+## Verifying Release Checksums
+
+You can verify the authenticity of downloaded releases using PowerShell:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-v1.0.0.exe
+```
+
+Compare the calculated hash with `BarePDF-v1.0.0-SHA256SUMS.txt` published alongside the release.
+
+---
+
+## Uninstallation
+
+To remove the installed version:
+1. Open Windows **Settings** → **Apps** → **Installed apps**.
+2. Locate **BarePDF** and click **Uninstall**.
+3. The uninstaller removes `%LOCALAPPDATA%\Programs\BarePDF` and clean-up registry keys. Your personal documents are never touched.

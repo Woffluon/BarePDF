@@ -1,0 +1,112 @@
+---
+import { formatDate } from '../lib/releases';
+import type { GitHubCommit } from '../lib/github';
+
+interface Props {
+  commits: GitHubCommit[];
+  limit?: number;
+}
+
+const { commits, limit } = Astro.props;
+const displayCommits = limit ? commits.slice(0, limit) : commits;
+---
+
+<div class="commit-list">
+  {displayCommits.map((c) => (
+    <div class="commit-item">
+      <div class="commit-main">
+        <a href={c.url} target="_blank" rel="noopener noreferrer" class="commit-sha" title="View commit on GitHub">
+          {c.shortSha}
+        </a>
+        <span class="commit-subject">{c.subject}</span>
+      </div>
+
+      <div class="commit-meta">
+        <span class="commit-author">{c.authorName}</span>
+        <span class="meta-dot">•</span>
+        <time class="commit-date">{formatDate(c.date)}</time>
+      </div>
+    </div>
+  ))}
+</div>
+
+<style>
+  .commit-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .commit-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.25rem;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    transition: border-color var(--transition-fast);
+  }
+
+  .commit-item:hover {
+    border-color: var(--color-border-subtle);
+  }
+
+  .commit-main {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    overflow: hidden;
+  }
+
+  .commit-sha {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-accent);
+    text-decoration: none;
+    flex-shrink: 0;
+  }
+
+  .commit-sha:hover {
+    text-decoration: underline;
+  }
+
+  .commit-subject {
+    font-size: 0.9375rem;
+    color: var(--color-text);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .commit-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    color: var(--color-text-dim);
+    flex-shrink: 0;
+    margin-left: 1rem;
+  }
+
+  .meta-dot {
+    color: var(--color-border-subtle);
+  }
+
+  @media (max-width: 640px) {
+    .commit-item {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+    .commit-meta {
+      margin-left: 0;
+    }
+  }
+</style>

@@ -1,0 +1,56 @@
+name: Website CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - ".github/workflows/website-ci.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - ".github/workflows/website-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    name: Build & Type-Check Astro Website
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install website dependencies
+        run: |
+          cd website
+          pnpm install --frozen-lockfile
+
+      - name: Run Astro Type-Check
+        run: |
+          cd website
+          pnpm astro check
+
+      - name: Build Production Static Site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd website
+          pnpm build

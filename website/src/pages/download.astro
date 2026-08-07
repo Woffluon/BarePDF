@@ -1,0 +1,191 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import DownloadCard from '../components/DownloadCard.astro';
+import { getLatestRelease } from '../lib/github';
+import { repository } from '../lib/repository';
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+const release = await getLatestRelease();
+
+const installerAsset = release.assets.find((a) => a.type === 'installer') || release.assets[0];
+const portableAsset = release.assets.find((a) => a.type === 'portable') || release.assets[1] || installerAsset;
+const checksumAsset = release.assets.find((a) => a.type === 'checksum') || release.assets[2] || installerAsset;
+---
+
+<BaseLayout
+  title="Download BarePDF — Official Windows Releases"
+  description="Download official Windows installer setup executable or portable ZIP package for BarePDF."
+  currentPath={`${baseUrl}/download`}
+>
+  <section class="download-page-header">
+    <div class="container header-container">
+      <span class="badge badge-success">Latest Release {release.tag}</span>
+      <h1 class="page-title">Download BarePDF</h1>
+      <p class="page-subtitle">
+        Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private.
+      </p>
+    </div>
+  </section>
+
+  <section class="download-options-section">
+    <div class="container">
+      <div class="cards-grid">
+        {installerAsset && (
+          <DownloadCard
+            asset={installerAsset}
+            title="Windows Setup Installer"
+            description="Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without admin rights."
+            badge="Recommended"
+            iconType="installer"
+          />
+        )}
+
+        {portableAsset && (
+          <DownloadCard
+            asset={portableAsset}
+            title="Portable ZIP Package"
+            description="Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or installation."
+            badge="Portable"
+            iconType="portable"
+          />
+        )}
+
+        {checksumAsset && (
+          <DownloadCard
+            asset={checksumAsset}
+            title="SHA-256 Checksums"
+            description="Official SHA256SUMS.txt manifest file to verify cryptographic integrity of release binaries."
+            badge="Verification"
+            iconType="checksum"
+          />
+        )}
+      </div>
+
+      <div class="verification-guide-box">
+        <h3 class="guide-title">How to Verify Download Hashes</h3>
+        <p class="guide-desc">
+          You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
+        </p>
+        <pre><code>Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-{release.tag}.exe</code></pre>
+        <p class="guide-note">
+          Compare the output hash against the SHA256SUMS manifest file listed above.
+        </p>
+      </div>
+
+      <div class="all-releases-banner">
+        <div>
+          <h4 class="banner-heading">Need Older Releases or Raw Assets?</h4>
+          <p class="banner-sub">View complete tag history, source archives, and assets directly on GitHub Releases.</p>
+        </div>
+        <a href={`${repository.url}/releases`} target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+          View All GitHub Releases ↗
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .download-page-header {
+    padding: 4rem 0 2rem;
+    text-align: center;
+    background-color: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .header-container {
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .page-title {
+    font-size: 2.75rem;
+    font-weight: 800;
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .page-subtitle {
+    font-size: 1.15rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .download-options-section {
+    padding: 3.5rem 0 5rem;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.75rem;
+    margin-bottom: 3.5rem;
+  }
+
+  .verification-guide-box {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 2rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .guide-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+
+  .guide-desc {
+    font-size: 0.9375rem;
+    color: var(--color-text-muted);
+    margin-bottom: 1rem;
+  }
+
+  .guide-note {
+    font-size: 0.84rem;
+    color: var(--color-text-dim);
+    margin: 0;
+  }
+
+  .all-releases-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.5rem 2rem;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    gap: 1.5rem;
+  }
+
+  .banner-heading {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
+  .banner-sub {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  @media (max-width: 1024px) {
+    .cards-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .all-releases-banner {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .all-releases-banner .btn {
+      width: 100%;
+    }
+  }
+</style>

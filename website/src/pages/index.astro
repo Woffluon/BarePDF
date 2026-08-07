@@ -1,0 +1,148 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Hero from '../components/Hero.astro';
+import AppScreenshot from '../components/AppScreenshot.astro';
+import FeatureGrid from '../components/FeatureGrid.astro';
+import Philosophy from '../components/Philosophy.astro';
+import CommitList from '../components/CommitList.astro';
+import { getLatestRelease, getRecentCommits } from '../lib/github';
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+// Fetch latest release & recent commits at build time
+const latestRelease = await getLatestRelease();
+const recentCommits = await getRecentCommits(5);
+---
+
+<BaseLayout
+  title="BarePDF — Lightweight Open-Source PDF Reader for Windows"
+  description="BarePDF is an open-source, fast, modern, ultra-lightweight PDF reader for Windows 10/11 built with Rust and PDFium."
+  currentPath={`${baseUrl}/`}
+>
+  <Hero release={latestRelease} />
+
+  <AppScreenshot />
+
+  <FeatureGrid />
+
+  <Philosophy />
+
+  <section class="home-activity-section">
+    <div class="container">
+      <div class="activity-header">
+        <div>
+          <h2 class="activity-title">Recent Development Activity</h2>
+          <p class="activity-subtitle">Fetched live from default branch commits on GitHub.</p>
+        </div>
+        <a href={`${baseUrl}/changelog`} class="btn btn-secondary">
+          View Full Changelog &rarr;
+        </a>
+      </div>
+
+      <CommitList commits={recentCommits} />
+    </div>
+  </section>
+
+  <section class="docs-cta-section">
+    <div class="container docs-cta-box">
+      <div class="cta-text">
+        <h2 class="cta-title">Explore Documentation</h2>
+        <p class="cta-desc">
+          Whether you are an end user configuring settings or a developer building from source, check our guides.
+        </p>
+      </div>
+
+      <div class="cta-buttons">
+        <a href={`${baseUrl}/docs/user/getting-started`} class="btn btn-primary">
+          User Guide
+        </a>
+        <a href={`${baseUrl}/docs/developer/building`} class="btn btn-secondary">
+          Developer Guide
+        </a>
+        <a href={`${baseUrl}/docs/user/keyboard-shortcuts`} class="btn btn-secondary">
+          Shortcuts Reference
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .home-activity-section {
+    padding: 3rem 0 5rem;
+  }
+
+  .activity-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+  }
+
+  .activity-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+  }
+
+  .activity-subtitle {
+    font-size: 0.9375rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .docs-cta-section {
+    padding: 1rem 0 5rem;
+  }
+
+  .docs-cta-box {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    box-shadow: var(--shadow-md);
+  }
+
+  .cta-title {
+    font-size: 2rem;
+    font-weight: 800;
+    margin-bottom: 0.5rem;
+  }
+
+  .cta-desc {
+    font-size: 1.05rem;
+    color: var(--color-text-muted);
+    margin: 0;
+    max-width: 540px;
+  }
+
+  .cta-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 768px) {
+    .activity-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+    .docs-cta-box {
+      flex-direction: column;
+      align-items: flex-start;
+      padding: 2rem;
+    }
+    .cta-buttons {
+      width: 100%;
+    }
+    .cta-buttons .btn {
+      width: 100%;
+    }
+  }
+</style>

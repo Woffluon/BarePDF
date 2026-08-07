@@ -1,0 +1,80 @@
+---
+import { formatDate } from '../lib/releases';
+import type { GitHubRelease } from '../lib/github';
+
+interface Props {
+  release: GitHubRelease;
+}
+
+const { release } = Astro.props;
+---
+
+<article class="release-card">
+  <div class="release-header">
+    <div class="release-title-group">
+      <h2 class="release-tag">{release.tag}</h2>
+      <span class="badge badge-success">Latest Non-Draft Release</span>
+    </div>
+    <time class="release-date">{formatDate(release.publishedAt)}</time>
+  </div>
+
+  <div class="release-notes markdown-body">
+    <p>{release.notes}</p>
+  </div>
+
+  <div class="release-footer">
+    <a href={release.url} target="_blank" rel="noopener noreferrer" class="release-link">
+      View Release Notes on GitHub ↗
+    </a>
+  </div>
+</article>
+
+<style>
+  .release-card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .release-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 1.25rem;
+  }
+
+  .release-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .release-tag {
+    font-size: 1.5rem;
+    font-weight: 800;
+    margin: 0;
+    color: var(--color-text);
+  }
+
+  .release-date {
+    font-size: 0.875rem;
+    color: var(--color-text-dim);
+  }
+
+  .release-notes {
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    color: var(--color-text-muted);
+    margin-bottom: 1.5rem;
+  }
+
+  .release-link {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-accent);
+  }
+</style>

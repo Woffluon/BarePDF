@@ -1,0 +1,143 @@
+---
+interface DocItem {
+  slug: string;
+  title: string;
+  category: 'user' | 'developer';
+  order: number;
+}
+
+interface Props {
+  docs: DocItem[];
+  currentSlug?: string;
+}
+
+const { docs, currentSlug = '' } = Astro.props;
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const userDocs = docs.filter((d) => d.category === 'user').sort((a, b) => a.order - b.order);
+const devDocs = docs.filter((d) => d.category === 'developer').sort((a, b) => a.order - b.order);
+---
+
+<aside class="docs-sidebar">
+  <div class="sidebar-section">
+    <h3 class="section-heading">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>
+      <span>User Documentation</span>
+    </h3>
+    <ul class="sidebar-links">
+      {userDocs.map((item) => {
+        const href = `${baseUrl}/docs/${item.slug}`;
+        const isActive = currentSlug === item.slug;
+        return (
+          <li>
+            <a
+              href={href}
+              class:list={['sidebar-link', { active: isActive }]}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              {item.title}
+            </a>
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <h3 class="section-heading">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="16 18 22 12 16 6"></polyline>
+        <polyline points="8 6 2 12 8 18"></polyline>
+      </svg>
+      <span>Developer Guide</span>
+    </h3>
+    <ul class="sidebar-links">
+      {devDocs.map((item) => {
+        const href = `${baseUrl}/docs/${item.slug}`;
+        const isActive = currentSlug === item.slug;
+        return (
+          <li>
+            <a
+              href={href}
+              class:list={['sidebar-link', { active: isActive }]}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              {item.title}
+            </a>
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+</aside>
+
+<style>
+  .docs-sidebar {
+    width: var(--sidebar-width);
+    flex-shrink: 0;
+    padding-right: 1.5rem;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .sidebar-section {
+    margin-bottom: 2rem;
+  }
+
+  .section-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text);
+    margin-bottom: 0.85rem;
+  }
+
+  .sidebar-links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .sidebar-links li {
+    margin-bottom: 0.25rem;
+  }
+
+  .sidebar-link {
+    display: block;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  .sidebar-link:hover {
+    background-color: var(--color-surface-subtle);
+    color: var(--color-text);
+    text-decoration: none;
+  }
+
+  .sidebar-link.active {
+    background-color: var(--color-accent-subtle);
+    color: var(--color-accent);
+    font-weight: 600;
+  }
+
+  @media (max-width: 768px) {
+    .docs-sidebar {
+      width: 100%;
+      border-right: none;
+      border-bottom: 1px solid var(--color-border);
+      padding-right: 0;
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }
+  }
+</style>

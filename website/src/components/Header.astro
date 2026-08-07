@@ -1,0 +1,230 @@
+---
+import ThemeToggle from './ThemeToggle.astro';
+import { repository } from '../lib/repository';
+
+interface Props {
+  currentPath?: string;
+}
+
+const { currentPath = '' } = Astro.props;
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const navLinks = [
+  { name: 'Download', href: `${baseUrl}/download` },
+  { name: 'Docs', href: `${baseUrl}/docs` },
+  { name: 'Changelog', href: `${baseUrl}/changelog` },
+];
+---
+
+<header class="header">
+  <div class="container header-content">
+    <a href={`${baseUrl}/`} class="brand-link" aria-label="BarePDF Home">
+      <img src={`${baseUrl}/images/logo.svg`} alt="" width="28" height="28" class="brand-logo" />
+      <span class="brand-name">BarePDF</span>
+      <span class="badge">v{repository.version}</span>
+    </a>
+
+    <nav class="nav-desktop" aria-label="Main Navigation">
+      {navLinks.map((link) => {
+        const isActive = currentPath.startsWith(link.href);
+        return (
+          <a
+            href={link.href}
+            class:list={['nav-link', { active: isActive }]}
+            aria-current={isActive ? 'page' : undefined}
+          >
+            {link.name}
+          </a>
+        );
+      })}
+
+      <a
+        href={repository.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="nav-link external-link"
+        aria-label="BarePDF GitHub Repository"
+      >
+        <span>GitHub</span>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </a>
+
+      <ThemeToggle />
+    </nav>
+
+    <div class="mobile-actions">
+      <ThemeToggle />
+      <button id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle navigation menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="mobile-menu" class="mobile-menu" aria-hidden="true">
+    <nav class="container mobile-nav">
+      {navLinks.map((link) => (
+        <a href={link.href} class="mobile-nav-link">
+          {link.name}
+        </a>
+      ))}
+      <a href={repository.url} target="_blank" rel="noopener noreferrer" class="mobile-nav-link">
+        GitHub Repository ↗
+      </a>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background-color: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    backdrop-filter: blur(8px);
+  }
+
+  .header-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+  }
+
+  .brand-link {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--color-text);
+    font-weight: 700;
+    font-size: 1.15rem;
+    text-decoration: none;
+  }
+
+  .brand-link:hover {
+    text-decoration: none;
+  }
+
+  .brand-logo {
+    display: block;
+  }
+
+  .brand-name {
+    letter-spacing: -0.02em;
+  }
+
+  .nav-desktop {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .nav-link {
+    color: var(--color-text-muted);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+
+  .nav-link:hover {
+    color: var(--color-text);
+    text-decoration: none;
+  }
+
+  .nav-link.active {
+    color: var(--color-accent);
+    font-weight: 600;
+  }
+
+  .external-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .mobile-actions {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .mobile-menu-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    padding: 0.4rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+
+  .mobile-menu {
+    display: none;
+    background-color: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    padding: 1rem 0;
+  }
+
+  .mobile-menu.open {
+    display: block;
+  }
+
+  .mobile-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .mobile-nav-link {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    padding: 0.5rem 0;
+  }
+
+  @media (max-width: 768px) {
+    .nav-desktop {
+      display: none;
+    }
+    .mobile-actions {
+      display: flex;
+    }
+  }
+</style>
+
+<script is:inline>
+  (function() {
+    function initMobileMenu() {
+      const btn = document.getElementById('mobile-menu-toggle');
+      const menu = document.getElementById('mobile-menu');
+      if (!btn || !menu) return;
+
+      btn.addEventListener('click', () => {
+        const isOpen = menu.classList.contains('open');
+        if (isOpen) {
+          menu.classList.remove('open');
+          menu.setAttribute('aria-hidden', 'true');
+          btn.setAttribute('aria-expanded', 'false');
+        } else {
+          menu.classList.add('open');
+          menu.setAttribute('aria-hidden', 'false');
+          btn.setAttribute('aria-expanded', 'true');
+        }
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initMobileMenu);
+    } else {
+      initMobileMenu();
+    }
+  })();
+</script>

@@ -1,0 +1,156 @@
+---
+import { formatBytes } from '../lib/releases';
+import type { ReleaseAsset } from '../lib/releases';
+
+interface Props {
+  asset: ReleaseAsset;
+  title: string;
+  description: string;
+  badge?: string;
+  iconType: 'installer' | 'portable' | 'checksum';
+}
+
+const { asset, title, description, badge, iconType } = Astro.props;
+---
+
+<div class="download-card">
+  <div class="card-header">
+    <div class="card-icon">
+      {iconType === 'installer' && (
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+      )}
+      {iconType === 'portable' && (
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="21 8 21 21 3 21 3 8"></polyline>
+          <rect x="1" y="3" width="22" height="5"></rect>
+          <line x1="10" y1="12" x2="14" y2="12"></line>
+        </svg>
+      )}
+      {iconType === 'checksum' && (
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+      )}
+    </div>
+    
+    <div>
+      <div class="title-row">
+        <h3 class="card-title">{title}</h3>
+        {badge && <span class="badge">{badge}</span>}
+      </div>
+      <p class="card-desc">{description}</p>
+    </div>
+  </div>
+
+  <div class="card-footer">
+    <div class="asset-meta">
+      <span class="filename">{asset.name}</span>
+      <span class="filesize">{formatBytes(asset.size)}</span>
+    </div>
+
+    <a href={asset.downloadUrl} class="btn btn-primary btn-download">
+      <span>Download</span>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <polyline points="19 12 12 19 5 12"></polyline>
+      </svg>
+    </a>
+  </div>
+</div>
+
+<style>
+  .download-card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 1.5rem;
+    transition: border-color var(--transition-fast), transform var(--transition-fast);
+  }
+
+  .download-card:hover {
+    border-color: var(--color-accent-border);
+    transform: translateY(-2px);
+  }
+
+  .card-header {
+    display: flex;
+    gap: 1rem;
+  }
+
+  .card-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    background-color: var(--color-accent-subtle);
+    color: var(--color-accent);
+  }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .card-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .card-desc {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin: 0;
+    line-height: 1.4;
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 1rem;
+    border-top: 1px solid var(--color-border);
+    gap: 1rem;
+  }
+
+  .asset-meta {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .filename {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--color-text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .filesize {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+  }
+
+  .btn-download {
+    flex-shrink: 0;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+  }
+</style>

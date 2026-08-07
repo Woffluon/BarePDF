@@ -1,0 +1,151 @@
+---
+import { repository } from '../lib/repository';
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<footer class="footer">
+  <div class="container footer-grid">
+    <div class="footer-col brand-col">
+      <div class="brand-heading">
+        <img src={`${baseUrl}/images/logo.svg`} alt="" width="24" height="24" />
+        <span class="brand-title">BarePDF</span>
+      </div>
+      <p class="brand-desc">
+        Lightweight, ultra-fast, open-source PDF reader for Windows built with Rust and PDFium.
+      </p>
+      <p class="privacy-note">
+        Zero Telemetry • Zero Analytics • Zero Accounts • 100% Privacy
+      </p>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="col-title">Documentation</h4>
+      <ul class="footer-links">
+        <li><a href={`${baseUrl}/docs/user/getting-started`}>User Guide</a></li>
+        <li><a href={`${baseUrl}/docs/user/installation`}>Installation</a></li>
+        <li><a href={`${baseUrl}/docs/user/keyboard-shortcuts`}>Keyboard Shortcuts</a></li>
+        <li><a href={`${baseUrl}/docs/user/troubleshooting`}>Troubleshooting</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="col-title">Developers</h4>
+      <ul class="footer-links">
+        <li><a href={`${baseUrl}/docs/developer/getting-started`}>Developer Overview</a></li>
+        <li><a href={`${baseUrl}/docs/developer/building`}>Build from Source</a></li>
+        <li><a href={`${baseUrl}/docs/developer/architecture`}>Architecture</a></li>
+        <li><a href={`${baseUrl}/docs/developer/contributing`}>Contributing</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="col-title">Project</h4>
+      <ul class="footer-links">
+        <li><a href={`${baseUrl}/download`}>Download Release</a></li>
+        <li><a href={`${baseUrl}/changelog`}>Changelog</a></li>
+        <li><a href={repository.url} target="_blank" rel="noopener noreferrer">GitHub Repository ↗</a></li>
+        <li><a href={`${repository.url}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">MIT License ↗</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="container footer-bottom">
+    <p>&copy; {new Date().getFullYear()} BarePDF Contributors. Released under the MIT License.</p>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    background-color: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    padding-top: 3.5rem;
+    padding-bottom: 2rem;
+    margin-top: auto;
+  }
+
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 2.5rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .brand-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--color-text);
+    margin-bottom: 0.75rem;
+  }
+
+  .brand-desc {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+  }
+
+  .privacy-note {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-accent);
+  }
+
+  .col-title {
+    font-size: 0.875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text);
+    margin-bottom: 1rem;
+  }
+
+  .footer-links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .footer-links li {
+    margin-bottom: 0.5rem;
+  }
+
+  .footer-links a {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+
+  .footer-links a:hover {
+    color: var(--color-accent);
+  }
+
+  .footer-bottom {
+    border-top: 1px solid var(--color-border);
+    padding-top: 1.5rem;
+    font-size: 0.8125rem;
+    color: var(--color-text-dim);
+    text-align: center;
+  }
+
+  @media (max-width: 768px) {
+    .footer-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .brand-col {
+      grid-column: span 2;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .footer-grid {
+      grid-template-columns: 1fr;
+    }
+    .brand-col {
+      grid-column: span 1;
+    }
+  }
+</style>

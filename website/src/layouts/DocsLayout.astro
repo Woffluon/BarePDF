@@ -1,0 +1,151 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import DocsSidebar from '../components/DocsSidebar.astro';
+
+interface DocItem {
+  slug: string;
+  title: string;
+  category: 'user' | 'developer';
+  order: number;
+}
+
+interface Props {
+  title: string;
+  description: string;
+  currentSlug: string;
+  docs: DocItem[];
+  headings?: { depth: number; slug: string; text: string }[];
+}
+
+const { title, description, currentSlug, docs, headings = [] } = Astro.props;
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+// Filter headings for TOC (h2 and h3)
+const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+
+<BaseLayout title={`${title} — BarePDF Documentation`} description={description} currentPath={`${baseUrl}/docs`}>
+  <div class="container docs-container">
+    <DocsSidebar docs={docs} currentSlug={currentSlug} />
+
+    <article class="docs-article markdown-body">
+      <div class="docs-header">
+        <div class="breadcrumbs">
+          <a href={`${baseUrl}/docs`}>Docs</a>
+          <span class="sep">/</span>
+          <span class="current">{title}</span>
+        </div>
+      </div>
+
+      <slot />
+    </article>
+
+    {tocHeadings.length > 0 && (
+      <aside class="docs-toc">
+        <h4 class="toc-title">On This Page</h4>
+        <ul class="toc-list">
+          {tocHeadings.map((h) => (
+            <li class:list={[`depth-${h.depth}`]}>
+              <a href={`#${h.slug}`}>{h.text}</a>
+            </li>
+          ))}
+        </ul>
+      </aside>
+    )}
+  </div>
+</BaseLayout>
+
+<style>
+  .docs-container {
+    display: flex;
+    gap: 2.5rem;
+    padding-top: 2.5rem;
+    padding-bottom: 4rem;
+  }
+
+  .docs-article {
+    flex: 1;
+    min-width: 0;
+    max-width: var(--width-docs);
+  }
+
+  .docs-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.84rem;
+    color: var(--color-text-dim);
+  }
+
+  .breadcrumbs a {
+    color: var(--color-text-muted);
+  }
+
+  .breadcrumbs .sep {
+    color: var(--color-border-subtle);
+  }
+
+  .docs-toc {
+    width: 220px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 90px;
+    align-self: flex-start;
+    padding-left: 1.5rem;
+    border-left: 1px solid var(--color-border);
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+  }
+
+  .toc-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text);
+    margin-bottom: 0.75rem;
+  }
+
+  .toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .toc-list li {
+    margin-bottom: 0.4rem;
+  }
+
+  .toc-list li.depth-3 {
+    padding-left: 0.75rem;
+  }
+
+  .toc-list a {
+    font-size: 0.8125rem;
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+
+  .toc-list a:hover {
+    color: var(--color-accent);
+  }
+
+  @media (max-width: 1024px) {
+    .docs-toc {
+      display: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .docs-container {
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+  }
+</style>

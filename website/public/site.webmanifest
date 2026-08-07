@@ -1,0 +1,16 @@
+{
+  "name": "BarePDF — Lightweight Open-Source PDF Reader",
+  "short_name": "BarePDF",
+  "description": "Ultra-lightweight, fast, open-source PDF reader for Windows built with Rust and PDFium.",
+  "start_url": "/BarePDF/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/BarePDF/images/icon-dark.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

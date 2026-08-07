@@ -1,0 +1,79 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  currentPath?: string;
+  ogImage?: string;
+}
+
+const {
+  title = 'BarePDF — Lightweight Open-Source PDF Reader',
+  description = 'Ultra-lightweight, fast, open-source PDF reader for Windows 10/11 built with Rust and PDFium.',
+  currentPath = '',
+  ogImage,
+} = Astro.props;
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site || 'https://woffluon.github.io');
+const resolvedOgImage = ogImage || `${baseUrl}/images/banner-dark.png`;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl} />
+
+    <!-- Favicon & Manifest -->
+    <link rel="icon" type="image/svg+xml" href={`${baseUrl}/favicon.svg`} />
+    <link rel="alternate icon" href={`${baseUrl}/favicon.ico`} />
+    <link rel="manifest" href={`${baseUrl}/site.webmanifest`} />
+    <meta name="theme-color" content="#2563eb" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={resolvedOgImage} />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={resolvedOgImage} />
+
+    <!-- Anti-FOUC Theme Script -->
+    <script is:inline>
+      (function() {
+        try {
+          const savedTheme = localStorage.getItem('barepdf_theme');
+          if (savedTheme === 'dark' || savedTheme === 'light') {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+          } else {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <a href="#main-content" class="skip-to-content">Skip to content</a>
+
+    <Header currentPath={currentPath} />
+
+    <main id="main-content" class="main-content">
+      <slot />
+    </main>
+
+    <Footer />
+  </body>
+</html>

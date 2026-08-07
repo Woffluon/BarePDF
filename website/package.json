@@ -1,0 +1,18 @@
+{
+  "name": "barepdf-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/mdx": "^4.0.8",
+    "astro": "^5.2.5",
+    "typescript": "^5.7.3"
+  }
+}

@@ -81,6 +81,10 @@ powershell -File packaging/windows/scripts/generate-checksums.ps1
 | Presentation Mode | `F5` |
 | Unlock Password | Enter password in modal |
 
+## Website
+
+The official BarePDF website and documentation are built with Astro and located under [`./website`](./website).
+
 ## License
 
 BarePDF is open source software licensed under the MIT License.

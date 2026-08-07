@@ -1,0 +1,70 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<BaseLayout
+  title="404 Page Not Found — BarePDF"
+  description="The page you requested could not be found."
+>
+  <section class="not-found-section">
+    <div class="container not-found-container">
+      <div class="code-badge">404 Error</div>
+      <h1 class="not-found-title">Page Not Found</h1>
+      <p class="not-found-desc">
+        The requested page does not exist or has been moved.
+      </p>
+
+      <div class="action-buttons">
+        <a href={`${baseUrl}/`} class="btn btn-primary">Return Home</a>
+        <a href={`${baseUrl}/docs`} class="btn btn-secondary">Browse Docs</a>
+        <a href={`${baseUrl}/download`} class="btn btn-secondary">Download BarePDF</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .not-found-section {
+    padding: 6rem 0;
+    text-align: center;
+  }
+
+  .not-found-container {
+    max-width: 540px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .code-badge {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--color-accent);
+    background-color: var(--color-accent-subtle);
+    padding: 0.3rem 0.8rem;
+    border-radius: var(--radius-full);
+    margin-bottom: 1rem;
+  }
+
+  .not-found-title {
+    font-size: 2.75rem;
+    font-weight: 800;
+    margin-bottom: 0.75rem;
+  }
+
+  .not-found-desc {
+    font-size: 1.1rem;
+    color: var(--color-text-muted);
+    margin-bottom: 2.25rem;
+  }
+
+  .action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+  }
+</style>
