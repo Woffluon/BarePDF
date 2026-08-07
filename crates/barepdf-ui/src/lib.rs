@@ -30,6 +30,7 @@ slint::slint! {
         is_selected: bool,
     }
 
+    // Modern Fluent 2 Glassmorphism Button
     component FluentButton inherits Rectangle {
         in property <string> text: "";
         in property <bool> enabled: true;
@@ -37,17 +38,23 @@ slint::slint! {
         in property <bool> primary: false;
         callback clicked();
 
-        height: 30px;
+        height: 32px;
         min-width: 36px;
-        border-radius: 4px;
+        border-radius: 6px;
+
         background: !root.enabled ? #00000000 :
-                    root.primary ? (touch.has-hover ? #0066b8 : #0078d4) :
-                    root.active ? #0078d433 :
-                    (touch.has-hover ? #ffffff12 : #ffffff08);
+                    root.primary ? (touch.has-hover ? #0086f0 : (touch.pressed ? #005a9e : #0078d4)) :
+                    root.active ? (touch.has-hover ? #0078d444 : #0078d428) :
+                    (touch.has-hover ? #ffffff18 : (touch.pressed ? #ffffff08 : #ffffff0a));
+
         border-width: 1px;
-        border-color: root.primary ? #0078d4 :
-                      root.active ? #0078d480 :
-                      (touch.has-hover ? #ffffff25 : #ffffff12);
+        border-color: !root.enabled ? #00000000 :
+                      root.primary ? (touch.has-hover ? #0094ff : #0078d4) :
+                      root.active ? #0078d499 :
+                      (touch.has-hover ? #ffffff30 : #ffffff14);
+
+        drop-shadow-blur: root.primary && touch.has-hover ? 8px : 0px;
+        drop-shadow-color: #0078d460;
 
         touch := TouchArea {
             enabled: root.enabled;
@@ -55,21 +62,22 @@ slint::slint! {
         }
 
         HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
+            padding-left: 11px;
+            padding-right: 11px;
             alignment: center;
 
             Text {
                 text: root.text;
                 font-size: 12px;
                 font-weight: 500;
-                color: !root.enabled ? #666666 : (root.primary ? #ffffff : (root.active ? #60a5fa : #e0e0e0));
+                color: !root.enabled ? #555555 : (root.primary ? #ffffff : (root.active ? #60a5fa : #f0f0f0));
                 vertical-alignment: center;
                 horizontal-alignment: center;
             }
         }
     }
 
+    // Glassmorphic Fluent Context Menu
     component ContextMenu inherits Rectangle {
         in property <length> menu_x: 0px;
         in property <length> menu_y: 0px;
@@ -87,22 +95,24 @@ slint::slint! {
         }
 
         Rectangle {
-            x: Math.min(root.menu_x, parent.width - 165px);
-            y: Math.min(root.menu_y, parent.height - 85px);
-            width: 160px;
-            height: root.has_selection ? 74px : 40px;
-            background: #222222;
-            border-radius: 6px;
+            x: Math.min(root.menu_x, parent.width - 175px);
+            y: Math.min(root.menu_y, parent.height - 95px);
+            width: 170px;
+            height: root.has_selection ? 80px : 44px;
+            background: #25272cdd;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: #ffffff20;
+            border-color: #ffffff28;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #000000b0;
 
             VerticalLayout {
-                padding: 4px;
-                spacing: 2px;
+                padding: 5px;
+                spacing: 3px;
 
                 if (root.has_selection) : Rectangle {
-                    height: 32px;
-                    border-radius: 4px;
+                    height: 34px;
+                    border-radius: 5px;
                     background: copy_touch.has-hover ? #0078d4 : #00000000;
 
                     copy_touch := TouchArea {
@@ -117,21 +127,22 @@ slint::slint! {
                         Text {
                             text: root.text_copy;
                             font-size: 12px;
+                            font-weight: 500;
                             color: #ffffff;
                             vertical-alignment: center;
                         }
                         Text {
                             text: "Ctrl+C";
                             font-size: 11px;
-                            color: #aaaaaa;
+                            color: #bbbbbb;
                             vertical-alignment: center;
                         }
                     }
                 }
 
                 Rectangle {
-                    height: 32px;
-                    border-radius: 4px;
+                    height: 34px;
+                    border-radius: 5px;
                     background: sa_touch.has-hover ? #0078d4 : #00000000;
 
                     sa_touch := TouchArea {
@@ -146,13 +157,14 @@ slint::slint! {
                         Text {
                             text: root.text_select_all;
                             font-size: 12px;
+                            font-weight: 500;
                             color: #ffffff;
                             vertical-alignment: center;
                         }
                         Text {
                             text: "Ctrl+A";
                             font-size: 11px;
-                            color: #aaaaaa;
+                            color: #bbbbbb;
                             vertical-alignment: center;
                         }
                     }
@@ -161,6 +173,7 @@ slint::slint! {
         }
     }
 
+    // Glassmorphic Password Dialog Modal
     component PasswordModal inherits Rectangle {
         in property <string> file_name: "";
         in-out property <string> password_input: "";
@@ -172,15 +185,17 @@ slint::slint! {
         callback submit_password(string);
         callback cancel();
 
-        background: #000000aa;
+        background: #000000bb;
 
         Rectangle {
-            width: 420px;
-            height: 230px;
-            background: #1e1e1e;
-            border-radius: 8px;
+            width: 440px;
+            height: 240px;
+            background: #24262bdd;
+            border-radius: 12px;
             border-width: 1px;
-            border-color: #ffffff1f;
+            border-color: #ffffff28;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #000000d0;
 
             VerticalLayout {
                 padding: 24px;
@@ -188,7 +203,7 @@ slint::slint! {
 
                 Text {
                     text: root.text_title;
-                    font-size: 18px;
+                    font-size: 19px;
                     font-weight: 700;
                     color: #ffffff;
                 }
@@ -224,6 +239,7 @@ slint::slint! {
         }
     }
 
+    // Glassmorphic Settings Dialog Modal
     component SettingsModal inherits Rectangle {
         in property <int> current_language: 0; // 0: System, 1: English, 2: Turkish
         in property <int> current_theme: 0;    // 0: System, 1: Light, 2: Dark
@@ -238,15 +254,17 @@ slint::slint! {
         callback select_view_mode(int);
         callback close();
 
-        background: #000000aa;
+        background: #000000bb;
 
         Rectangle {
-            width: 460px;
-            height: 320px;
-            background: #1e1e1e;
-            border-radius: 8px;
+            width: 480px;
+            height: 330px;
+            background: #24262bdd;
+            border-radius: 12px;
             border-width: 1px;
-            border-color: #ffffff1f;
+            border-color: #ffffff28;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #000000d0;
 
             VerticalLayout {
                 padding: 24px;
@@ -262,7 +280,7 @@ slint::slint! {
                 // Language selection
                 VerticalLayout {
                     spacing: 8px;
-                    Text { text: root.text_language; font-size: 13px; color: #aaaaaa; }
+                    Text { text: root.text_language; font-size: 13px; font-weight: 600; color: #bbbbbb; }
                     HorizontalLayout {
                         spacing: 8px;
                         FluentButton {
@@ -286,7 +304,7 @@ slint::slint! {
                 // Theme selection
                 VerticalLayout {
                     spacing: 8px;
-                    Text { text: root.text_theme; font-size: 13px; color: #aaaaaa; }
+                    Text { text: root.text_theme; font-size: 13px; font-weight: 600; color: #bbbbbb; }
                     HorizontalLayout {
                         spacing: 8px;
                         FluentButton {
@@ -322,9 +340,9 @@ slint::slint! {
     export component AppWindow inherits Window {
         title: root.document_title != "" ? root.document_title + " — BarePDF" : "BarePDF";
         icon: @image-url("../../../assets/logo.svg");
-        preferred-width: 1180px;
-        preferred-height: 840px;
-        background: #141414;
+        preferred-width: 1200px;
+        preferred-height: 860px;
+        background: #0f1013;
 
         in property <string> document_title: "";
         in property <string> status_text: "Ready";
@@ -441,7 +459,7 @@ slint::slint! {
 
         // Presentation View (window_mode == 2)
         if (root.window_mode == 2) : Rectangle {
-            background: #0a0a0a;
+            background: #08090b;
 
             TouchArea {
                 clicked => { root.request_next_page(); }
@@ -453,6 +471,8 @@ slint::slint! {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 background: #ffffff;
+                drop-shadow-blur: 24px;
+                drop-shadow-color: #000000e0;
 
                 Image {
                     source: root.page_bitmap;
@@ -462,17 +482,19 @@ slint::slint! {
             }
 
             Rectangle {
-                y: 12px;
-                height: 28px;
-                width: 240px;
+                y: 16px;
+                height: 32px;
+                width: 260px;
                 x: (parent.width - self.width) / 2;
-                background: #000000cc;
-                border-radius: 14px;
+                background: #1e2025dd;
+                border-radius: 16px;
+                border-width: 1px;
+                border-color: #ffffff20;
 
                 Text {
                     text: "Press Esc to exit presentation";
-                    font-size: 11px;
-                    color: #aaaaaa;
+                    font-size: 12px;
+                    color: #bbbbbb;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -484,22 +506,22 @@ slint::slint! {
             padding: 0px;
             spacing: 0px;
 
-            // Top Command Bar (Fluent styled)
+            // Top Command Bar (Fluent 2 Translucent Glass styled)
             if (root.window_mode != 1) : Rectangle {
-                height: 42px;
-                background: #1c1c1c;
+                height: 48px;
+                background: #1a1b1edd;
                 border-width: 1px;
-                border-color: #ffffff10;
+                border-color: #ffffff14;
 
                 HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 8px;
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
                     alignment: space-between;
 
-                    // Left group: Open, Sidebar, Navigation
+                    // Left group: Open, Sidebar, Navigation Pill
                     HorizontalLayout {
-                        spacing: 6px;
+                        spacing: 8px;
 
                         FluentButton {
                             text: root.text_open;
@@ -514,72 +536,99 @@ slint::slint! {
                             clicked => { root.request_toggle_sidebar(); }
                         }
 
-                        Rectangle { width: 1px; height: 18px; background: #ffffff18; }
+                        Rectangle { width: 1px; height: 20px; background: #ffffff18; }
 
-                        FluentButton {
-                            text: "‹";
-                            enabled: root.has_document;
-                            clicked => { root.request_prev_page(); }
-                        }
-
+                        // Glass Pill for Page Navigation
                         Rectangle {
-                            height: 30px;
-                            min-width: 76px;
-                            background: #141414;
-                            border-radius: 4px;
+                            height: 32px;
+                            background: #ffffff06;
+                            border-radius: 6px;
                             border-width: 1px;
                             border-color: #ffffff12;
 
-                            Text {
-                                text: root.current_page_str + " / " + root.total_pages_str;
-                                font-size: 12px;
-                                color: #d0d0d0;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
+                            HorizontalLayout {
+                                padding-left: 4px;
+                                padding-right: 4px;
+                                spacing: 4px;
 
-                        FluentButton {
-                            text: "›";
-                            enabled: root.has_document;
-                            clicked => { root.request_next_page(); }
+                                FluentButton {
+                                    text: "‹";
+                                    enabled: root.has_document;
+                                    clicked => { root.request_prev_page(); }
+                                }
+
+                                Rectangle {
+                                    height: 26px;
+                                    min-width: 76px;
+                                    background: #00000030;
+                                    border-radius: 4px;
+
+                                    Text {
+                                        text: root.current_page_str + " / " + root.total_pages_str;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: #e0e0e0;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                FluentButton {
+                                    text: "›";
+                                    enabled: root.has_document;
+                                    clicked => { root.request_next_page(); }
+                                }
+                            }
                         }
                     }
 
-                    // Center group: Zoom & View
+                    // Center group: Zoom & View Mode Glass Pill
                     HorizontalLayout {
-                        spacing: 6px;
-
-                        FluentButton {
-                            text: "−";
-                            enabled: root.has_document;
-                            clicked => { root.request_zoom_out(); }
-                        }
+                        spacing: 8px;
 
                         Rectangle {
-                            height: 30px;
-                            min-width: 58px;
-                            background: #141414;
-                            border-radius: 4px;
+                            height: 32px;
+                            background: #ffffff06;
+                            border-radius: 6px;
                             border-width: 1px;
                             border-color: #ffffff12;
 
-                            Text {
-                                text: root.zoom_str;
-                                font-size: 12px;
-                                color: #d0d0d0;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            HorizontalLayout {
+                                padding-left: 4px;
+                                padding-right: 4px;
+                                spacing: 4px;
+
+                                FluentButton {
+                                    text: "−";
+                                    enabled: root.has_document;
+                                    clicked => { root.request_zoom_out(); }
+                                }
+
+                                Rectangle {
+                                    height: 26px;
+                                    min-width: 58px;
+                                    background: #00000030;
+                                    border-radius: 4px;
+
+                                    Text {
+                                        text: root.zoom_str;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: #e0e0e0;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                FluentButton {
+                                    text: "+";
+                                    enabled: root.has_document;
+                                    clicked => { root.request_zoom_in(); }
+                                }
                             }
                         }
 
-                        FluentButton {
-                            text: "+";
-                            enabled: root.has_document;
-                            clicked => { root.request_zoom_in(); }
-                        }
-
-                        Rectangle { width: 1px; height: 18px; background: #ffffff18; }
+                        Rectangle { width: 1px; height: 20px; background: #ffffff18; }
 
                         FluentButton {
                             text: root.view_mode_label;
@@ -602,7 +651,7 @@ slint::slint! {
 
                     // Right group: Fullscreen, Presentation, Settings
                     HorizontalLayout {
-                        spacing: 6px;
+                        spacing: 8px;
 
                         FluentButton {
                             text: root.text_fullscreen;
@@ -628,58 +677,71 @@ slint::slint! {
             HorizontalLayout {
                 spacing: 0px;
 
-                // Segmented Fluent Sidebar
+                // Segmented Fluent Acrylic Sidebar
                 if (root.sidebar_visible && root.has_document) : Rectangle {
-                    width: 230px;
-                    background: #181818;
+                    width: 240px;
+                    background: #16171add;
                     border-width: 1px;
-                    border-color: #ffffff10;
+                    border-color: #ffffff12;
 
                     VerticalLayout {
-                        padding: 8px;
-                        spacing: 8px;
+                        padding: 10px;
+                        spacing: 10px;
 
-                        HorizontalLayout {
-                            spacing: 4px;
+                        // Glass Segmented Tab Container
+                        Rectangle {
+                            height: 36px;
+                            background: #0f1013;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #ffffff10;
 
-                            FluentButton {
-                                text: root.text_thumbnails;
-                                active: root.sidebar_tab == 0;
-                                clicked => { root.sidebar_tab = 0; }
-                            }
-                            FluentButton {
-                                text: root.text_outline;
-                                active: root.sidebar_tab == 1;
-                                clicked => { root.sidebar_tab = 1; }
+                            HorizontalLayout {
+                                padding: 3px;
+                                spacing: 4px;
+
+                                FluentButton {
+                                    text: root.text_thumbnails;
+                                    active: root.sidebar_tab == 0;
+                                    clicked => { root.sidebar_tab = 0; }
+                                }
+                                FluentButton {
+                                    text: root.text_outline;
+                                    active: root.sidebar_tab == 1;
+                                    clicked => { root.sidebar_tab = 1; }
+                                }
                             }
                         }
 
-                        // Sidebar Thumbnail List
+                        // Sidebar Thumbnail List with Floating Cards
                         if root.sidebar_tab == 0 : ScrollView {
                             VerticalLayout {
                                 padding: 4px;
-                                spacing: 10px;
+                                spacing: 12px;
 
                                 for thumb in root.thumbnail_items : Rectangle {
-                                    height: thumb.height + 26px;
-                                    background: thumb.is_selected ? #0078d425 : (thumb_touch.has-hover ? #ffffff0d : #ffffff05);
-                                    border-radius: 4px;
+                                    height: thumb.height + 28px;
+                                    background: thumb.is_selected ? #0078d430 : (thumb_touch.has-hover ? #ffffff10 : #ffffff06);
+                                    border-radius: 8px;
                                     border-width: thumb.is_selected ? 2px : 1px;
-                                    border-color: thumb.is_selected ? #0078d4 : #ffffff10;
+                                    border-color: thumb.is_selected ? #0078d4 : #ffffff14;
+                                    drop-shadow-blur: thumb.is_selected ? 10px : 0px;
+                                    drop-shadow-color: #0078d450;
 
                                     thumb_touch := TouchArea {
                                         clicked => { root.request_select_page(thumb.page_index); }
                                     }
 
                                     VerticalLayout {
-                                        padding: 4px;
+                                        padding: 6px;
                                         alignment: center;
-                                        spacing: 4px;
+                                        spacing: 6px;
 
                                         Rectangle {
                                             width: thumb.width;
                                             height: thumb.height;
                                             background: #ffffff;
+                                            border-radius: 2px;
 
                                             Image {
                                                 source: thumb.bitmap;
@@ -691,6 +753,7 @@ slint::slint! {
                                         Text {
                                             text: thumb.page_number;
                                             font-size: 11px;
+                                            font-weight: 500;
                                             color: thumb.is_selected ? #ffffff : #aaaaaa;
                                             horizontal-alignment: center;
                                         }
@@ -701,8 +764,8 @@ slint::slint! {
 
                         // Outline View
                         if root.sidebar_tab == 1 : Rectangle {
-                            background: #141414;
-                            border-radius: 4px;
+                            background: #0f1013;
+                            border-radius: 6px;
 
                             Text {
                                 text: "No Outline available";
@@ -715,19 +778,19 @@ slint::slint! {
                     }
                 }
 
-                // Document Viewport Workspace
+                // Document Viewport Workspace (Floating Paper Cards on Deep Dark Slate)
                 Rectangle {
-                    background: #101010;
+                    background: #0f1013;
 
                     // Empty State Screen
                     if (!root.has_document && !root.password_required) : VerticalLayout {
                         alignment: center;
-                        spacing: 16px;
+                        spacing: 18px;
 
                         Text {
                             text: "BarePDF";
-                            font-size: 36px;
-                            font-weight: 700;
+                            font-size: 40px;
+                            font-weight: 800;
                             color: #ffffff;
                             horizontal-alignment: center;
                         }
@@ -751,17 +814,19 @@ slint::slint! {
 
                     // Single Page Viewport
                     if (root.has_document && root.view_mode_label == "Single Page") : ScrollView {
-                        viewport-width: Math.max(self.width, root.page_display_width + 40px);
-                        viewport-height: Math.max(self.height, root.page_display_height + 40px);
+                        viewport-width: Math.max(self.width, root.page_display_width + 60px);
+                        viewport-height: Math.max(self.height, root.page_display_height + 60px);
 
                         page_container := Rectangle {
                             width: root.page_display_width;
                             height: root.page_display_height;
-                            x: Math.max(20px, (parent.viewport-width - self.width) / 2);
-                            y: Math.max(20px, (parent.viewport-height - self.height) / 2);
+                            x: Math.max(30px, (parent.viewport-width - self.width) / 2);
+                            y: Math.max(30px, (parent.viewport-height - self.height) / 2);
                             background: #ffffff;
-                            border-width: 1px;
-                            border-color: #00000040;
+                            border-radius: 4px;
+                            drop-shadow-blur: 24px;
+                            drop-shadow-offset-y: 8px;
+                            drop-shadow-color: #000000c0;
 
                             Image {
                                 source: root.page_bitmap;
@@ -804,18 +869,20 @@ slint::slint! {
 
                     // Continuous Vertical Viewport
                     if (root.has_document && root.view_mode_label != "Single Page") : ScrollView {
-                        viewport-width: Math.max(self.width, root.page_display_width + 40px);
-                        viewport-height: Math.max(self.height, root.document_total_height + 40px);
+                        viewport-width: Math.max(self.width, root.page_display_width + 60px);
+                        viewport-height: Math.max(self.height, root.document_total_height + 60px);
                         viewport-y <=> root.current_scroll_y;
 
                         for page in root.visible_pages : Rectangle {
                             width: page.width;
                             height: page.height;
-                            x: Math.max(20px, (parent.viewport-width - page.width) / 2);
+                            x: Math.max(30px, (parent.viewport-width - page.width) / 2);
                             y: page.y_offset;
                             background: #ffffff;
-                            border-width: 1px;
-                            border-color: #00000040;
+                            border-radius: 4px;
+                            drop-shadow-blur: 24px;
+                            drop-shadow-offset-y: 8px;
+                            drop-shadow-color: #000000c0;
 
                             if (page.has_bitmap) : Image {
                                 source: page.bitmap;
@@ -823,7 +890,7 @@ slint::slint! {
                                 height: 100%;
                             }
 
-                            // Render text selection highlight boxes over page
+                            // Render text selection highlight boxes over page (Chrome PDF Viewer style)
                             for box in page.selection_boxes : Rectangle {
                                 x: box.x;
                                 y: box.y;
@@ -906,14 +973,14 @@ slint::slint! {
 
             // Clean Fluent Status Bar
             if (root.window_mode != 1) : Rectangle {
-                height: 24px;
-                background: #181818;
+                height: 26px;
+                background: #16171add;
                 border-width: 1px;
-                border-color: #ffffff10;
+                border-color: #ffffff12;
 
                 HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
+                    padding-left: 14px;
+                    padding-right: 14px;
                     alignment: space-between;
 
                     Text {
