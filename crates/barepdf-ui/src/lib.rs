@@ -248,6 +248,7 @@ slint::slint! {
         in property <[ThumbnailItem]> thumbnail_items: [];
         in-out property <length> current_scroll_y: 0px;
         in property <bool> has_document: false;
+        in property <bool> has_selection: false;
         in-out property <bool> password_required: false;
         in-out property <bool> settings_open: false;
         in property <string> protected_file_name: "";
@@ -501,9 +502,16 @@ slint::slint! {
                         }
                     }
 
-                    // Right group: Fullscreen, Presentation, Settings
+                    // Right group: Copy, Fullscreen, Presentation, Settings
                     HorizontalLayout {
                         spacing: 6px;
+
+                        FluentButton {
+                            text: root.text_copy;
+                            enabled: root.has_selection;
+                            primary: root.has_selection;
+                            clicked => { root.request_copy(); }
+                        }
 
                         FluentButton {
                             text: root.text_fullscreen;

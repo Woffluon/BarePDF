@@ -367,9 +367,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Memory-bounded LRU caches for page and thumbnail bitmaps
+    let page_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
+        NonZeroUsize::new(10).unwrap(),
+    )));
+    let thumb_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
+        NonZeroUsize::new(30).unwrap(),
+    )));
+
     // Mouse pointer handlers for text selection
     let state_pd = state.clone();
     let window_pd = main_window.as_weak();
+    let page_bitmaps_pd = page_bitmaps.clone();
+    let thumb_bitmaps_pd = thumb_bitmaps.clone();
     main_window.on_pointer_down(move |page_idx_raw, mx, my, _count| {
         let mut s = state_pd.borrow_mut();
         if page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
@@ -417,12 +427,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Some(win) = window_pd.upgrade() {
-            win.window().request_redraw();
+            let has_sel = s
+                .selection
+                .as_ref()
+                .map(|sel| !sel.is_empty())
+                .unwrap_or(false);
+            win.set_has_selection(has_sel);
+            refresh_slint_models(
+                &s,
+                &win,
+                &mut page_bitmaps_pd.borrow_mut(),
+                &mut thumb_bitmaps_pd.borrow_mut(),
+            );
         }
     });
 
     let state_pm = state.clone();
     let window_pm = main_window.as_weak();
+    let page_bitmaps_pm = page_bitmaps.clone();
+    let thumb_bitmaps_pm = thumb_bitmaps.clone();
     main_window.on_pointer_move(move |page_idx_raw, mx, my| {
         let mut s = state_pm.borrow_mut();
         if !s.is_selecting || page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
@@ -454,23 +477,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Some(win) = window_pm.upgrade() {
-            win.window().request_redraw();
+            let has_sel = s
+                .selection
+                .as_ref()
+                .map(|sel| !sel.is_empty())
+                .unwrap_or(false);
+            win.set_has_selection(has_sel);
+            refresh_slint_models(
+                &s,
+                &win,
+                &mut page_bitmaps_pm.borrow_mut(),
+                &mut thumb_bitmaps_pm.borrow_mut(),
+            );
         }
     });
 
     let state_pu = state.clone();
+    let window_pu = main_window.as_weak();
+    let page_bitmaps_pu = page_bitmaps.clone();
+    let thumb_bitmaps_pu = thumb_bitmaps.clone();
     main_window.on_pointer_up(move |_page_idx_raw, _mx, _my| {
         let mut s = state_pu.borrow_mut();
         s.is_selecting = false;
+        if let Some(win) = window_pu.upgrade() {
+            let has_sel = s
+                .selection
+                .as_ref()
+                .map(|sel| !sel.is_empty())
+                .unwrap_or(false);
+            win.set_has_selection(has_sel);
+            refresh_slint_models(
+                &s,
+                &win,
+                &mut page_bitmaps_pu.borrow_mut(),
+                &mut thumb_bitmaps_pu.borrow_mut(),
+            );
+        }
     });
-
-    // Memory-bounded LRU caches for page and thumbnail bitmaps
-    let page_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(10).unwrap(),
-    )));
-    let thumb_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(30).unwrap(),
-    )));
 
     // Event Loop Timer (~60 FPS)
     let timer = Timer::default();
@@ -514,6 +557,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .unwrap_or("document.pdf");
 
                             win.set_has_document(true);
+                            win.set_has_selection(false);
                             win.set_password_required(false);
                             win.set_document_title(SharedString::from(doc_name));
                             win.set_total_pages_str(SharedString::from(page_count.to_string()));
@@ -569,6 +613,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } => {
                             let mut s = state_tick.borrow_mut();
                             s.text_geometries.insert(page_index.get(), geometry);
+
+                            refresh_slint_models(
+                                &s,
+                                &win,
+                                &mut page_bitmaps_tick.borrow_mut(),
+                                &mut thumb_bitmaps_tick.borrow_mut(),
+                            );
                         }
                         RenderEvent::Error {
                             request_id: _,
