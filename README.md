@@ -1,8 +1,10 @@
 # BarePDF
 
-BarePDF is an open-source, fast, modern, ultra-lightweight PDF reader designed for Windows 10/11.
+> **Bare, Fast, Yours.**
 
-It provides the raw speed and low resource usage of SumatraPDF while delivering a clean, modern desktop visual interface built with Rust and Slint.
+BarePDF is an open-source, ultra-lightweight PDF reader for Windows 10 and 11.
+
+It provides the speed and low resource usage of SumatraPDF paired with a clean desktop interface built with Rust and Slint.
 
 ## Core Principles
 

@@ -3,7 +3,7 @@ name = "barepdf"
 version = "1.0.0"
 edition = "2021"
 authors = ["BarePDF Contributors"]
-description = "BarePDF application binary executable"
+description = "BarePDF: Bare, Fast, Yours. Ultra-lightweight PDF reader executable"
 
 [dependencies]
 barepdf-core = { path = "../../crates/barepdf-core" }

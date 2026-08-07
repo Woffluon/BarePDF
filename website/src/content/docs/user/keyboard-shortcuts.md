@@ -7,19 +7,19 @@ order: 5
 
 # Keyboard Shortcuts Reference
 
-BarePDF provides comprehensive keyboard shortcuts for fast, mouse-free document navigation.
+BarePDF provides keyboard shortcuts for fast document navigation.
 
 | Action | Primary Shortcut | Alternative Shortcut |
 | :--- | :--- | :--- |
-| **Open Document** | `Ctrl + O` | — |
+| **Open Document** | `Ctrl + O` | None |
 | **Next Page** | `PageDown` | `>` |
 | **Previous Page** | `PageUp` | `<` |
 | **Zoom In** | `+` | `Ctrl + +` |
 | **Zoom Out** | `-` | `Ctrl + -` |
-| **Fit Width** | `Fit Width` toolbar button | — |
-| **Fit Page** | `Fit Page` toolbar button | — |
-| **Copy Text** | `Ctrl + C` | — |
-| **Full Screen** | `F11` | — |
-| **Presentation Mode** | `F5` | — |
+| **Fit Width** | `Fit Width` toolbar button | None |
+| **Fit Page** | `Fit Page` toolbar button | None |
+| **Copy Text** | `Ctrl + C` | None |
+| **Full Screen** | `F11` | None |
+| **Presentation Mode** | `F5` | None |
 | **Exit Full Screen / Presentation** | `Esc` | `F11` / `F5` |
-| **Password Unlock** | `Enter` (inside password modal) | — |
+| **Password Unlock** | `Enter` (inside password modal) | None |
