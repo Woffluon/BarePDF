@@ -1,10 +1,32 @@
+use std::path::Path;
+
+fn create_valid_ico(png_bytes: &[u8]) -> Vec<u8> {
+    let mut ico = Vec::with_capacity(22 + png_bytes.len());
+    // ICO Header: reserved = 0, type = 1 (icon), image_count = 1
+    ico.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
+    // ICONDIRENTRY for 256x256 32-bit PNG icon
+    ico.push(0); // 0 means 256px width
+    ico.push(0); // 0 means 256px height
+    ico.push(0); // color count
+    ico.push(0); // reserved
+    ico.extend_from_slice(&1u16.to_le_bytes()); // color planes
+    ico.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    ico.extend_from_slice(&(png_bytes.len() as u32).to_le_bytes()); // byte size
+    ico.extend_from_slice(&22u32.to_le_bytes()); // image data offset
+    ico.extend_from_slice(png_bytes);
+    ico
+}
+
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        let ico_path = std::path::Path::new("../../assets/app.ico");
-        if !ico_path.exists() {
-            if let Ok(img) = image::open("../../assets/icon-dark.png") {
-                let _ = img.save(ico_path);
+        let ico_path = Path::new("../../assets/app.ico");
+        let png_path = Path::new("../../assets/icon-dark.png");
+
+        if png_path.exists() {
+            if let Ok(png_bytes) = std::fs::read(png_path) {
+                let ico_bytes = create_valid_ico(&png_bytes);
+                let _ = std::fs::write(ico_path, ico_bytes);
             }
         }
 
