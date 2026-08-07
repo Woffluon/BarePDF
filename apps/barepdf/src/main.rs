@@ -137,6 +137,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if page_idx >= 0 && (page_idx as u32) < s.page_count {
             s.current_page = page_idx as u32;
             if let Some(win) = window_sel.upgrade() {
+                let layout =
+                    ContinuousLayout::compute(&s.all_page_dims, 1100, 800, s.zoom_mode, 1.0, 12.0);
+                if let Some(box_info) = layout.pages.get(page_idx as usize) {
+                    win.set_current_scroll_y(-box_info.y_offset);
+                }
                 update_page_view(&s, &scheduler_sel, &win);
                 request_thumbnails(&s, &scheduler_sel);
             }
@@ -562,17 +567,30 @@ fn refresh_slint_models(
     let pages_model = VecModel::<PageItem>::default();
     let current_idx = state.current_page;
 
-    let (start_idx, end_idx) = match state.viewing_mode {
-        ViewingMode::SinglePage => (current_idx, (current_idx + 1).min(state.page_count)),
-        _ => (
-            current_idx.saturating_sub(2),
-            (current_idx + 8).min(state.page_count),
-        ),
-    };
-
-    for idx in start_idx..end_idx {
-        if let Some(box_info) = layout.pages.get(idx as usize) {
-            if let Some(bmp) = page_bitmaps.get(&idx).cloned() {
+    match state.viewing_mode {
+        ViewingMode::SinglePage => {
+            if let Some(box_info) = layout.pages.get(current_idx as usize) {
+                let (bmp, has_bmp) = match page_bitmaps.get(&current_idx).cloned() {
+                    Some(b) => (b, true),
+                    None => (Image::default(), false),
+                };
+                pages_model.push(PageItem {
+                    page_index: current_idx as i32,
+                    page_number: SharedString::from((current_idx + 1).to_string()),
+                    width: box_info.width as f32,
+                    height: box_info.height as f32,
+                    y_offset: box_info.y_offset,
+                    bitmap: bmp,
+                    has_bitmap: has_bmp,
+                });
+            }
+        }
+        _ => {
+            for (idx, box_info) in layout.pages.iter().enumerate() {
+                let (bmp, has_bmp) = match page_bitmaps.get(&(idx as u32)).cloned() {
+                    Some(b) => (b, true),
+                    None => (Image::default(), false),
+                };
                 pages_model.push(PageItem {
                     page_index: idx as i32,
                     page_number: SharedString::from((idx + 1).to_string()),
@@ -580,6 +598,7 @@ fn refresh_slint_models(
                     height: box_info.height as f32,
                     y_offset: box_info.y_offset,
                     bitmap: bmp,
+                    has_bitmap: has_bmp,
                 });
             }
         }
@@ -588,10 +607,8 @@ fn refresh_slint_models(
 
     // Refresh Sidebar Thumbnails Model
     let thumbs_model = VecModel::<ThumbnailItem>::default();
-    let start_thumb = current_idx.saturating_sub(10);
-    let end_thumb = (current_idx + 40).min(state.page_count);
 
-    for idx in start_thumb..end_thumb {
+    for idx in 0..state.page_count {
         let bmp = thumb_bitmaps.get(&idx).cloned().unwrap_or_default();
         let (w_pts, h_pts) = state
             .all_page_dims

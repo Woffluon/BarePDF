@@ -10,6 +10,7 @@ slint::slint! {
         height: length,
         y_offset: length,
         bitmap: image,
+        has_bitmap: bool,
     }
 
     export struct ThumbnailItem {
@@ -135,6 +136,7 @@ slint::slint! {
         in property <length> document_total_height: 1040px;
         in property <[PageItem]> visible_pages: [];
         in property <[ThumbnailItem]> thumbnail_items: [];
+        in-out property <length> current_scroll_y: 0px;
         in property <bool> has_document: false;
         in-out property <bool> password_required: false;
         in property <string> protected_file_name: "";
@@ -258,7 +260,7 @@ slint::slint! {
 
                         FluentButton {
                             text: "<";
-                            enabled: root.has_document;
+                            enabled: root.has_document && root.view_mode_label == "Single Page";
                             clicked => { root.request_prev_page(); }
                         }
 
@@ -273,7 +275,7 @@ slint::slint! {
                             Text {
                                 text: root.current_page_str + " / " + root.total_pages_str;
                                 font-size: 12px;
-                                color: #d0d0d0;
+                                color: root.view_mode_label == "Single Page" ? #d0d0d0 : #666666;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -281,7 +283,7 @@ slint::slint! {
 
                         FluentButton {
                             text: ">";
-                            enabled: root.has_document;
+                            enabled: root.has_document && root.view_mode_label == "Single Page";
                             clicked => { root.request_next_page(); }
                         }
                     }
@@ -510,8 +512,9 @@ slint::slint! {
                     if (root.has_document && root.view_mode_label != "Single Page") : ScrollView {
                         viewport-width: Math.max(self.width, root.page_display_width + 40px);
                         viewport-height: Math.max(self.height, root.document_total_height + 40px);
+                        viewport-y <=> root.current_scroll_y;
 
-                        // Render visible pages in continuous vertical layout
+                        // Render pages in continuous vertical layout
                         for page in root.visible_pages : Rectangle {
                             width: page.width;
                             height: page.height;
@@ -521,10 +524,20 @@ slint::slint! {
                             border-width: 1px;
                             border-color: #00000040;
 
-                            Image {
+                            if (page.has_bitmap) : Image {
                                 source: page.bitmap;
                                 width: 100%;
                                 height: 100%;
+                            }
+
+                            if (!page.has_bitmap) : VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: "Loading " + page.page_number + "...";
+                                    font-size: 13px;
+                                    color: #888888;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
                     }
