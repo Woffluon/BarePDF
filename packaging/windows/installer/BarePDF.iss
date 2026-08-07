@@ -60,7 +60,7 @@ Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\shell\open\command"; ValueType
 Root: HKCU; Subkey: "Software\Classes\{#MyProgID}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
 
 ; Thumbnail Provider Shell Extension Registration ({E357FCCD-A995-4576-B01F-234630154E96} is Win32 IThumbnailProvider Handler GUID)
-Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
 
 ; COM Class Registration for BarePDF Thumbnail Provider
 Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}"; ValueType: string; ValueName: ""; ValueData: "BarePDF Thumbnail Provider"; Flags: uninsdeletekey
@@ -71,7 +71,7 @@ Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32";
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "{#MyProgID}"; ValueData: ""; Flags: uninsdeletevalue
 
