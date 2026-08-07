@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://barepdf.vercel.app/sitemap-index.xml
+Sitemap: https://woffluon.github.io/BarePDF/sitemap-index.xml
