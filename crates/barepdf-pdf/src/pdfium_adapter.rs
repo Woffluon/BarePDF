@@ -235,19 +235,25 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         for char_info in text_page.chars().iter() {
             let ch = char_info.unicode_char().unwrap_or(' ');
             if let Ok(rect) = char_info.loose_bounds() {
+                let x1 = rect.left().value.min(rect.right().value);
+                let x2 = rect.left().value.max(rect.right().value);
+                let y1 = rect.bottom().value.min(rect.top().value);
+                let y2 = rect.bottom().value.max(rect.top().value);
+                let w = (x2 - x1).max(6.0);
+                let h = (y2 - y1).max(10.0);
                 glyphs.push(barepdf_core::GlyphRect {
-                    x: rect.left().value,
-                    y: rect.bottom().value,
-                    width: rect.width().value,
-                    height: rect.height().value,
+                    x: x1,
+                    y: y1,
+                    width: w,
+                    height: h,
                     ch,
                 });
             } else {
                 glyphs.push(barepdf_core::GlyphRect {
                     x: 0.0,
                     y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
+                    width: 6.0,
+                    height: 10.0,
                     ch,
                 });
             }

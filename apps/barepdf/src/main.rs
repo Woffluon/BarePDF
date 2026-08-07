@@ -923,8 +923,8 @@ fn compute_selection_boxes(
     for g in &geom.glyphs[start_idx..end_idx] {
         let sx = g.x * scale_x;
         let sy = (ph - (g.y + g.height)) * scale_y;
-        let sw = g.width * scale_x;
-        let sh = g.height * scale_y;
+        let sw = (g.width * scale_x).max(4.0);
+        let sh = (g.height * scale_y).max(10.0);
 
         boxes.push(SelectionBox {
             x: sx,

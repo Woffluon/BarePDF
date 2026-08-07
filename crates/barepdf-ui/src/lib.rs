@@ -70,6 +70,97 @@ slint::slint! {
         }
     }
 
+    component ContextMenu inherits Rectangle {
+        in property <length> menu_x: 0px;
+        in property <length> menu_y: 0px;
+        in property <bool> has_selection: false;
+        in property <string> text_copy: "Copy";
+        in property <string> text_select_all: "Select All";
+        callback copy_clicked();
+        callback select_all_clicked();
+        callback dismiss();
+
+        background: #00000001;
+
+        TouchArea {
+            clicked => { dismiss(); }
+        }
+
+        Rectangle {
+            x: Math.min(root.menu_x, parent.width - 165px);
+            y: Math.min(root.menu_y, parent.height - 85px);
+            width: 160px;
+            height: root.has_selection ? 74px : 40px;
+            background: #222222;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: #ffffff20;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+
+                if (root.has_selection) : Rectangle {
+                    height: 32px;
+                    border-radius: 4px;
+                    background: copy_touch.has-hover ? #0078d4 : #00000000;
+
+                    copy_touch := TouchArea {
+                        clicked => { copy_clicked(); }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        alignment: space-between;
+
+                        Text {
+                            text: root.text_copy;
+                            font-size: 12px;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Ctrl+C";
+                            font-size: 11px;
+                            color: #aaaaaa;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 32px;
+                    border-radius: 4px;
+                    background: sa_touch.has-hover ? #0078d4 : #00000000;
+
+                    sa_touch := TouchArea {
+                        clicked => { select_all_clicked(); }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        alignment: space-between;
+
+                        Text {
+                            text: root.text_select_all;
+                            font-size: 12px;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Ctrl+A";
+                            font-size: 11px;
+                            color: #aaaaaa;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     component PasswordModal inherits Rectangle {
         in property <string> file_name: "";
         in-out property <string> password_input: "";
@@ -251,6 +342,9 @@ slint::slint! {
         in property <bool> has_selection: false;
         in-out property <bool> password_required: false;
         in-out property <bool> settings_open: false;
+        in-out property <bool> context_menu_open: false;
+        in-out property <length> context_menu_x: 0px;
+        in-out property <length> context_menu_y: 0px;
         in property <string> protected_file_name: "";
         in-out property <bool> sidebar_visible: true;
         in-out property <int> sidebar_tab: 0; // 0: Thumbnails, 1: Outline
@@ -310,6 +404,10 @@ slint::slint! {
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") { // Esc
+                    if (root.context_menu_open) {
+                        root.context_menu_open = false;
+                        return accept;
+                    }
                     if (root.settings_open) {
                         root.settings_open = false;
                         return accept;
@@ -502,16 +600,9 @@ slint::slint! {
                         }
                     }
 
-                    // Right group: Copy, Fullscreen, Presentation, Settings
+                    // Right group: Fullscreen, Presentation, Settings
                     HorizontalLayout {
                         spacing: 6px;
-
-                        FluentButton {
-                            text: root.text_copy;
-                            enabled: root.has_selection;
-                            primary: root.has_selection;
-                            clicked => { root.request_copy(); }
-                        }
 
                         FluentButton {
                             text: root.text_fullscreen;
@@ -678,13 +769,30 @@ slint::slint! {
                                 height: 100%;
                             }
 
-                            // Single Page Mouse TouchArea for text selection
+                            for box in root.visible_pages[0].selection_boxes : Rectangle {
+                                x: box.x;
+                                y: box.y;
+                                width: box.width;
+                                height: box.height;
+                                background: #0078d470;
+                                border-width: 1px;
+                                border-color: #005a9eff;
+                            }
+
+                            // Single Page Mouse TouchArea for text selection & right click
                             TouchArea {
                                 pointer-event(evt) => {
                                     if (evt.kind == PointerEventKind.down) {
-                                        root.pointer_down(0, self.mouse-x, self.mouse-y, 1);
+                                        if (evt.button == PointerEventButton.right) {
+                                            root.context_menu_x = self.mouse-x;
+                                            root.context_menu_y = self.mouse-y;
+                                            root.context_menu_open = true;
+                                        } else {
+                                            root.context_menu_open = false;
+                                            root.pointer_down(0, self.mouse-x, self.mouse-y, 1);
+                                        }
                                     }
-                                    if (evt.kind == PointerEventKind.up) {
+                                    if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left) {
                                         root.pointer_up(0, self.mouse-x, self.mouse-y);
                                     }
                                     if (evt.kind == PointerEventKind.move && self.pressed) {
@@ -722,18 +830,25 @@ slint::slint! {
                                 y: box.y;
                                 width: box.width;
                                 height: box.height;
-                                background: #0078d440;
+                                background: #0078d470;
                                 border-width: 1px;
-                                border-color: #0078d480;
+                                border-color: #005a9eff;
                             }
 
-                            // Page Mouse Interaction TouchArea
+                            // Page Mouse Interaction TouchArea for left-drag selection & right click context menu
                             TouchArea {
                                 pointer-event(evt) => {
                                     if (evt.kind == PointerEventKind.down) {
-                                        root.pointer_down(page.page_index, self.mouse-x, self.mouse-y, 1);
+                                        if (evt.button == PointerEventButton.right) {
+                                            root.context_menu_x = self.mouse-x;
+                                            root.context_menu_y = self.mouse-y + page.y_offset;
+                                            root.context_menu_open = true;
+                                        } else {
+                                            root.context_menu_open = false;
+                                            root.pointer_down(page.page_index, self.mouse-x, self.mouse-y, 1);
+                                        }
                                     }
-                                    if (evt.kind == PointerEventKind.up) {
+                                    if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left) {
                                         root.pointer_up(page.page_index, self.mouse-x, self.mouse-y);
                                     }
                                     if (evt.kind == PointerEventKind.move && self.pressed) {
@@ -768,6 +883,25 @@ slint::slint! {
                         select_language(idx) => { root.request_change_language(idx); }
                         select_theme(idx) => { root.request_change_theme(idx); }
                         close => { root.settings_open = false; }
+                    }
+
+                    if (root.context_menu_open) : ContextMenu {
+                        menu_x: root.context_menu_x;
+                        menu_y: root.context_menu_y;
+                        has_selection: root.has_selection;
+                        text_copy: root.text_copy;
+                        text_select_all: root.text_select_all;
+                        copy_clicked() => {
+                            root.context_menu_open = false;
+                            root.request_copy();
+                        }
+                        select_all_clicked() => {
+                            root.context_menu_open = false;
+                            root.request_select_all();
+                        }
+                        dismiss() => {
+                            root.context_menu_open = false;
+                        }
                     }
                 }
             }
