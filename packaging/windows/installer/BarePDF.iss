@@ -7,7 +7,7 @@
 #define MyAppURL "https://github.com/woffluon/barepdf"
 #define MyAppExeName "BarePDF.exe"
 #define MyProgID "BarePDF.Document.1"
-#define MyThumbnailCLSID "{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}"
+#define MyThumbnailCLSID "{{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}"
 
 [Setup]
 AppId={{B3A82379-88F4-4D4D-A815-998A4476B66C}}
