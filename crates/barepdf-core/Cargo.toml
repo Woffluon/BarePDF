@@ -10,3 +10,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
+barepdf-i18n = { path = "../barepdf-i18n" }
+

@@ -37,6 +37,10 @@ pub enum RenderCommand {
         document_id: DocumentId,
         page_index: PageIndex,
     },
+    FetchTextGeometry {
+        document_id: DocumentId,
+        page_index: PageIndex,
+    },
     CloseDocument(DocumentId),
 }
 
@@ -59,6 +63,11 @@ pub enum RenderEvent {
         page_index: PageIndex,
         text: String,
         spans: Vec<TextSpan>,
+    },
+    TextGeometryFetched {
+        document_id: DocumentId,
+        page_index: PageIndex,
+        geometry: barepdf_core::PageTextGeometry,
     },
     Error {
         request_id: Option<RequestId>,
@@ -179,6 +188,22 @@ impl RenderScheduler {
                                     text,
                                     spans,
                                 });
+                            }
+                        }
+                    }
+                    RenderCommand::FetchTextGeometry {
+                        document_id,
+                        page_index,
+                    } => {
+                        if let Some((doc_id, ref doc)) = active_doc {
+                            if doc_id == document_id {
+                                if let Ok(geom) = doc.get_page_text_geometry(page_index) {
+                                    let _ = event_tx.send(RenderEvent::TextGeometryFetched {
+                                        document_id,
+                                        page_index,
+                                        geometry: geom,
+                                    });
+                                }
                             }
                         }
                     }

@@ -150,7 +150,7 @@ impl RenderDimensions {
 pub struct MemoryBudget(usize);
 
 impl MemoryBudget {
-    pub const DEFAULT_BYTES: usize = 256 * 1024 * 1024; // 256 MB
+    pub const DEFAULT_BYTES: usize = 96 * 1024 * 1024; // 96 MB
 
     #[must_use]
     pub const fn new(bytes: usize) -> Self {
@@ -237,4 +237,79 @@ pub enum SidebarTab {
     #[default]
     Thumbnails,
     Outline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TextPosition {
+    pub page: PageIndex,
+    pub char_index: u32,
+}
+
+impl TextPosition {
+    pub fn new(page: PageIndex, char_index: u32) -> Self {
+        Self { page, char_index }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextSelection {
+    pub anchor: TextPosition,
+    pub focus: TextPosition,
+}
+
+impl TextSelection {
+    pub fn new(anchor: TextPosition, focus: TextPosition) -> Self {
+        Self { anchor, focus }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.focus
+    }
+
+    pub fn start_and_end(&self) -> (TextPosition, TextPosition) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    pub fn range_for_page(&self, page: PageIndex) -> Option<(u32, u32)> {
+        let (start, end) = self.start_and_end();
+        if page < start.page || page > end.page {
+            return None;
+        }
+
+        let start_idx = if page == start.page {
+            start.char_index
+        } else {
+            0
+        };
+        let end_idx = if page == end.page {
+            end.char_index
+        } else {
+            u32::MAX
+        };
+
+        if start_idx <= end_idx {
+            Some((start_idx, end_idx))
+        } else {
+            Some((end_idx, start_idx))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GlyphRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub ch: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageTextGeometry {
+    pub page_index: PageIndex,
+    pub glyphs: Vec<GlyphRect>,
 }

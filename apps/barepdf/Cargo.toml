@@ -11,8 +11,10 @@ barepdf-pdf = { path = "../../crates/barepdf-pdf" }
 barepdf-render = { path = "../../crates/barepdf-render" }
 barepdf-platform = { path = "../../crates/barepdf-platform" }
 barepdf-platform-windows = { path = "../../crates/barepdf-platform-windows" }
+barepdf-i18n = { path = "../../crates/barepdf-i18n" }
 barepdf-ui = { path = "../../crates/barepdf-ui" }
 slint = "1.9"
+lru = "0.13"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 image = "0.25"

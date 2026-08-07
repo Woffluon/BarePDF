@@ -5,6 +5,7 @@ members = [
     "crates/barepdf-render",
     "crates/barepdf-platform",
     "crates/barepdf-platform-windows",
+    "crates/barepdf-i18n",
     "crates/barepdf-ui",
     "apps/barepdf",
 ]

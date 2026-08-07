@@ -583,12 +583,14 @@ name = "barepdf"
 version = "1.0.0"
 dependencies = [
  "barepdf-core",
+ "barepdf-i18n",
  "barepdf-pdf",
  "barepdf-platform",
  "barepdf-platform-windows",
  "barepdf-render",
  "barepdf-ui",
  "image",
+ "lru",
  "slint",
  "tracing",
  "tracing-subscriber",
@@ -599,10 +601,21 @@ dependencies = [
 name = "barepdf-core"
 version = "1.0.0"
 dependencies = [
+ "barepdf-i18n",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tracing",
+]
+
+[[package]]
+name = "barepdf-i18n"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ pub mod command;
 pub mod error;
 pub mod layout;
 pub mod preferences;
+pub mod selection;
 pub mod types;
 
 pub use command::AppCommand;
@@ -13,4 +14,5 @@ pub use layout::{
     PagePairing, ScrollAnchor,
 };
 pub use preferences::{default_config_path, ThemeMode, UserPreferences};
+pub use selection::SelectionEngine;
 pub use types::*;

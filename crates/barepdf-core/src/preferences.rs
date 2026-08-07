@@ -4,6 +4,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use barepdf_i18n::Language;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeMode {
     #[default]
@@ -14,6 +16,7 @@ pub enum ThemeMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPreferences {
+    pub language: Language,
     pub theme: ThemeMode,
     pub viewing_mode: ViewingMode,
     pub reading_direction: ReadingDirection,
@@ -29,6 +32,7 @@ pub struct UserPreferences {
 impl Default for UserPreferences {
     fn default() -> Self {
         Self {
+            language: Language::System,
             theme: ThemeMode::System,
             viewing_mode: ViewingMode::ContinuousVertical,
             reading_direction: ReadingDirection::LeftToRight,

@@ -1,21 +1,26 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use barepdf_core::{
-    compute_target_dimensions, default_config_path, ContinuousLayout, DocumentId, MemoryBudget,
-    PageCount, PageIndex, PdfError, RequestId, Rotation, UserPreferences, ViewingMode, WindowMode,
-    ZoomFactor, ZoomMode,
+    compute_target_dimensions, default_config_path, selection::SelectionEngine, ContinuousLayout,
+    DocumentId, MemoryBudget, PageCount, PageIndex, PageTextGeometry, PdfError, RequestId,
+    Rotation, TextPosition, TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor,
+    ZoomMode,
 };
+use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::PdfiumEngine;
-use barepdf_platform::FileDialogs;
+use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{WindowsClipboard, WindowsFileDialogs};
 use barepdf_render::{Priority, RenderCommand, RenderEvent, RenderJob, RenderScheduler};
-use barepdf_ui::{AppWindow, PageItem, ThumbnailItem};
+use barepdf_ui::{AppWindow, PageItem, SelectionBox, ThumbnailItem};
+use lru::LruCache;
 use slint::{
     ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode,
     VecModel,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -33,6 +38,11 @@ struct AppState {
     all_page_dims: Vec<(f32, f32)>,
     window_mode: WindowMode,
     preferences: UserPreferences,
+    text_geometries: HashMap<u32, PageTextGeometry>,
+    selection: Option<TextSelection>,
+    is_selecting: bool,
+    last_click_time: std::time::Instant,
+    click_count: u32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryBudget::new(preferences.memory_budget_bytes),
     ));
     let dialogs = Arc::new(WindowsFileDialogs);
-    let _clipboard = Arc::new(WindowsClipboard::new());
+    let clipboard = Arc::new(WindowsClipboard::new());
 
     let main_window = AppWindow::new()?;
     main_window.set_sidebar_visible(preferences.sidebar_visible);
@@ -76,8 +86,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         first_page_dims: (612.0, 792.0),
         all_page_dims: Vec::new(),
         window_mode: WindowMode::Normal,
-        preferences,
+        preferences: preferences.clone(),
+        text_geometries: HashMap::new(),
+        selection: None,
+        is_selecting: false,
+        last_click_time: std::time::Instant::now(),
+        click_count: 0,
     }));
+
+    update_ui_strings(&main_window, state.borrow().preferences.language.resolve());
 
     // Check CLI argument for PDF path
     let args: Vec<String> = env::args().collect();
@@ -218,17 +235,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let state_act = state.clone();
-    let scheduler_act = scheduler.clone();
-    let window_act = main_window.as_weak();
-    main_window.on_request_actual_size(move || {
-        let mut s = state_act.borrow_mut();
-        s.zoom_mode = ZoomMode::ActualSize;
-        if let Some(win) = window_act.upgrade() {
-            update_page_view(&s, &scheduler_act, &win);
-        }
-    });
-
     let state_side = state.clone();
     let window_side = main_window.as_weak();
     let prefs_path_side = prefs_path.clone();
@@ -302,15 +308,175 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Language switching handler
+    let state_lang = state.clone();
+    let window_lang = main_window.as_weak();
+    let prefs_path_lang = prefs_path.clone();
+    main_window.on_request_change_language(move |lang_idx| {
+        let mut s = state_lang.borrow_mut();
+        let new_lang = match lang_idx {
+            1 => Language::English,
+            2 => Language::Turkish,
+            _ => Language::System,
+        };
+        s.preferences.language = new_lang;
+        let _ = s.preferences.save_to_file(&prefs_path_lang);
+        if let Some(win) = window_lang.upgrade() {
+            win.set_current_language(lang_idx);
+            update_ui_strings(&win, new_lang.resolve());
+        }
+    });
+
+    // Clipboard copy handler
+    let state_copy = state.clone();
+    let clipboard_copy = clipboard.clone();
+    main_window.on_request_copy(move || {
+        let s = state_copy.borrow();
+        if let Some(ref sel) = s.selection {
+            let geoms: Vec<PageTextGeometry> = s.text_geometries.values().cloned().collect();
+            let text = SelectionEngine::get_selected_text(sel, &geoms);
+            if !text.is_empty() {
+                let _ = clipboard_copy.set_text(&text);
+                tracing::info!("Copied {} chars to clipboard", text.len());
+            }
+        }
+    });
+
+    // Select all handler
+    let state_sa = state.clone();
+    let window_sa = main_window.as_weak();
+    main_window.on_request_select_all(move || {
+        let mut s = state_sa.borrow_mut();
+        if s.page_count > 0 {
+            let first = PageIndex::zero();
+            let last = PageIndex::from_raw(s.page_count - 1);
+            let end_char = s
+                .text_geometries
+                .get(&(s.page_count - 1))
+                .map(|g| g.glyphs.len() as u32)
+                .unwrap_or(10000);
+
+            s.selection = Some(TextSelection::new(
+                TextPosition::new(first, 0),
+                TextPosition::new(last, end_char),
+            ));
+
+            if let Some(win) = window_sa.upgrade() {
+                win.window().request_redraw();
+            }
+        }
+    });
+
+    // Mouse pointer handlers for text selection
+    let state_pd = state.clone();
+    let window_pd = main_window.as_weak();
+    main_window.on_pointer_down(move |page_idx_raw, mx, my, _count| {
+        let mut s = state_pd.borrow_mut();
+        if page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
+            return;
+        }
+
+        let p_idx = PageIndex::from_raw(page_idx_raw as u32);
+        let (pw, ph) = s
+            .all_page_dims
+            .get(p_idx.get() as usize)
+            .copied()
+            .unwrap_or(s.first_page_dims);
+
+        let dims = compute_target_dimensions(pw, ph, 1100, 800, s.zoom_mode, 1.0);
+        let scale_x = pw / (dims.width as f32).max(1.0);
+        let scale_y = ph / (dims.height as f32).max(1.0);
+
+        let pdf_x = mx * scale_x;
+        let pdf_y = ph - (my * scale_y);
+
+        let now = std::time::Instant::now();
+        if now.duration_since(s.last_click_time).as_millis() < 400 {
+            s.click_count += 1;
+        } else {
+            s.click_count = 1;
+        }
+        s.last_click_time = now;
+
+        if let Some(geom) = s.text_geometries.get(&p_idx.get()) {
+            let char_idx = SelectionEngine::hit_test(geom, pdf_x, pdf_y);
+            let click = s.click_count;
+            if click == 2 {
+                s.selection = Some(SelectionEngine::select_word(geom, p_idx, char_idx));
+            } else if click >= 3 {
+                s.selection = Some(SelectionEngine::select_line(geom, p_idx, char_idx));
+            } else {
+                let pos = TextPosition::new(p_idx, char_idx);
+                s.selection = Some(TextSelection::new(pos, pos));
+                s.is_selecting = true;
+            }
+        } else {
+            let pos = TextPosition::new(p_idx, 0);
+            s.selection = Some(TextSelection::new(pos, pos));
+            s.is_selecting = true;
+        }
+
+        if let Some(win) = window_pd.upgrade() {
+            win.window().request_redraw();
+        }
+    });
+
+    let state_pm = state.clone();
+    let window_pm = main_window.as_weak();
+    main_window.on_pointer_move(move |page_idx_raw, mx, my| {
+        let mut s = state_pm.borrow_mut();
+        if !s.is_selecting || page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
+            return;
+        }
+
+        let p_idx = PageIndex::from_raw(page_idx_raw as u32);
+        let (pw, ph) = s
+            .all_page_dims
+            .get(p_idx.get() as usize)
+            .copied()
+            .unwrap_or(s.first_page_dims);
+
+        let dims = compute_target_dimensions(pw, ph, 1100, 800, s.zoom_mode, 1.0);
+        let scale_x = pw / (dims.width as f32).max(1.0);
+        let scale_y = ph / (dims.height as f32).max(1.0);
+
+        let pdf_x = mx * scale_x;
+        let pdf_y = ph - (my * scale_y);
+
+        let char_idx = if let Some(geom) = s.text_geometries.get(&p_idx.get()) {
+            SelectionEngine::hit_test(geom, pdf_x, pdf_y)
+        } else {
+            0
+        };
+
+        if let Some(ref mut sel) = s.selection {
+            sel.focus = TextPosition::new(p_idx, char_idx);
+        }
+
+        if let Some(win) = window_pm.upgrade() {
+            win.window().request_redraw();
+        }
+    });
+
+    let state_pu = state.clone();
+    main_window.on_pointer_up(move |_page_idx_raw, _mx, _my| {
+        let mut s = state_pu.borrow_mut();
+        s.is_selecting = false;
+    });
+
+    // Memory-bounded LRU caches for page and thumbnail bitmaps
+    let page_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
+        NonZeroUsize::new(10).unwrap(),
+    )));
+    let thumb_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
+        NonZeroUsize::new(30).unwrap(),
+    )));
+
     // Event Loop Timer (~60 FPS)
     let timer = Timer::default();
     let scheduler_tick = scheduler.clone();
     let window_tick = main_window.as_weak();
     let state_tick = state.clone();
-
-    // Map storing rendered page bitmaps for active document
-    let page_bitmaps = Rc::new(RefCell::new(std::collections::HashMap::<u32, Image>::new()));
-    let thumb_bitmaps = Rc::new(RefCell::new(std::collections::HashMap::<u32, Image>::new()));
 
     let page_bitmaps_tick = page_bitmaps.clone();
     let thumb_bitmaps_tick = thumb_bitmaps.clone();
@@ -337,6 +503,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.current_page = 0;
                             s.first_page_dims = first_page_dimensions;
                             s.all_page_dims = all_page_dimensions;
+                            s.text_geometries.clear();
+                            s.selection = None;
 
                             let doc_name = s
                                 .current_path
@@ -374,11 +542,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if bitmap.width <= 200 {
                                 thumb_bitmaps_tick
                                     .borrow_mut()
-                                    .insert(page_index.get(), slint_img);
+                                    .put(page_index.get(), slint_img);
                             } else {
                                 page_bitmaps_tick
                                     .borrow_mut()
-                                    .insert(page_index.get(), slint_img.clone());
+                                    .put(page_index.get(), slint_img.clone());
 
                                 let s = state_tick.borrow();
                                 if page_index.get() == s.current_page {
@@ -390,9 +558,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             refresh_slint_models(
                                 &s,
                                 &win,
-                                &page_bitmaps_tick.borrow(),
-                                &thumb_bitmaps_tick.borrow(),
+                                &mut page_bitmaps_tick.borrow_mut(),
+                                &mut thumb_bitmaps_tick.borrow_mut(),
                             );
+                        }
+                        RenderEvent::TextGeometryFetched {
+                            document_id: _,
+                            page_index,
+                            geometry,
+                        } => {
+                            let mut s = state_tick.borrow_mut();
+                            s.text_geometries.insert(page_index.get(), geometry);
                         }
                         RenderEvent::Error {
                             request_id: _,
@@ -485,8 +661,8 @@ fn update_page_view(state: &AppState, scheduler: &RenderScheduler, window: &AppW
             (current_idx.get() + 1).min(state.page_count),
         ),
         _ => (
-            current_idx.get().saturating_sub(2),
-            (current_idx.get() + 8).min(state.page_count),
+            current_idx.get().saturating_sub(1),
+            (current_idx.get() + 6).min(state.page_count),
         ),
     };
 
@@ -516,6 +692,14 @@ fn update_page_view(state: &AppState, scheduler: &RenderScheduler, window: &AppW
             rotation: state.rotation,
             priority,
         }));
+
+        // Request text geometry on demand if not cached
+        if !state.text_geometries.contains_key(&idx) {
+            scheduler.send_command(RenderCommand::FetchTextGeometry {
+                document_id: doc_id,
+                page_index: p_idx,
+            });
+        }
     }
 }
 
@@ -526,8 +710,8 @@ fn request_thumbnails(state: &AppState, scheduler: &RenderScheduler) {
     };
 
     let gen = scheduler.current_generation();
-    let start_idx = state.current_page.saturating_sub(10);
-    let end_idx = (state.current_page + 40).min(state.page_count);
+    let start_idx = state.current_page.saturating_sub(4);
+    let end_idx = (state.current_page + 12).min(state.page_count);
 
     for idx in start_idx..end_idx {
         let p_idx = PageIndex::from_raw(idx);
@@ -557,13 +741,12 @@ fn request_thumbnails(state: &AppState, scheduler: &RenderScheduler) {
 fn refresh_slint_models(
     state: &AppState,
     window: &AppWindow,
-    page_bitmaps: &std::collections::HashMap<u32, Image>,
-    thumb_bitmaps: &std::collections::HashMap<u32, Image>,
+    page_bitmaps: &mut LruCache<u32, Image>,
+    thumb_bitmaps: &mut LruCache<u32, Image>,
 ) {
     let layout =
         ContinuousLayout::compute(&state.all_page_dims, 1100, 800, state.zoom_mode, 1.0, 12.0);
 
-    // Refresh Visible Pages Model
     let pages_model = VecModel::<PageItem>::default();
     let current_idx = state.current_page;
 
@@ -574,6 +757,14 @@ fn refresh_slint_models(
                     Some(b) => (b, true),
                     None => (Image::default(), false),
                 };
+
+                let sel_boxes = compute_selection_boxes(
+                    state,
+                    current_idx,
+                    box_info.width as f32,
+                    box_info.height as f32,
+                );
+
                 pages_model.push(PageItem {
                     page_index: current_idx as i32,
                     page_number: SharedString::from((current_idx + 1).to_string()),
@@ -582,6 +773,7 @@ fn refresh_slint_models(
                     y_offset: box_info.y_offset,
                     bitmap: bmp,
                     has_bitmap: has_bmp,
+                    selection_boxes: ModelRc::new(VecModel::from(sel_boxes)),
                 });
             }
         }
@@ -591,6 +783,14 @@ fn refresh_slint_models(
                     Some(b) => (b, true),
                     None => (Image::default(), false),
                 };
+
+                let sel_boxes = compute_selection_boxes(
+                    state,
+                    idx as u32,
+                    box_info.width as f32,
+                    box_info.height as f32,
+                );
+
                 pages_model.push(PageItem {
                     page_index: idx as i32,
                     page_number: SharedString::from((idx + 1).to_string()),
@@ -599,16 +799,19 @@ fn refresh_slint_models(
                     y_offset: box_info.y_offset,
                     bitmap: bmp,
                     has_bitmap: has_bmp,
+                    selection_boxes: ModelRc::new(VecModel::from(sel_boxes)),
                 });
             }
         }
     }
     window.set_visible_pages(ModelRc::new(pages_model));
 
-    // Refresh Sidebar Thumbnails Model
+    // Refresh Sidebar Thumbnails Model (lazy range)
     let thumbs_model = VecModel::<ThumbnailItem>::default();
+    let start_idx = state.current_page.saturating_sub(10);
+    let end_idx = (state.current_page + 30).min(state.page_count);
 
-    for idx in 0..state.page_count {
+    for idx in start_idx..end_idx {
         let bmp = thumb_bitmaps.get(&idx).cloned().unwrap_or_default();
         let (w_pts, h_pts) = state
             .all_page_dims
@@ -629,6 +832,88 @@ fn refresh_slint_models(
         });
     }
     window.set_thumbnail_items(ModelRc::new(thumbs_model));
+}
+
+fn compute_selection_boxes(
+    state: &AppState,
+    page_idx: u32,
+    target_w: f32,
+    target_h: f32,
+) -> Vec<SelectionBox> {
+    let sel = match state.selection {
+        Some(ref s) => s,
+        None => return Vec::new(),
+    };
+
+    let p_idx = PageIndex::from_raw(page_idx);
+    let (range_start, range_end) = match sel.range_for_page(p_idx) {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+
+    let geom = match state.text_geometries.get(&page_idx) {
+        Some(g) => g,
+        None => return Vec::new(),
+    };
+
+    let (pw, ph) = state
+        .all_page_dims
+        .get(page_idx as usize)
+        .copied()
+        .unwrap_or(state.first_page_dims);
+
+    let scale_x = target_w / pw.max(1.0);
+    let scale_y = target_h / ph.max(1.0);
+
+    let mut boxes = Vec::new();
+    let start_idx = (range_start as usize).min(geom.glyphs.len());
+    let end_idx = (range_end as usize).min(geom.glyphs.len());
+
+    for g in &geom.glyphs[start_idx..end_idx] {
+        let sx = g.x * scale_x;
+        let sy = (ph - (g.y + g.height)) * scale_y;
+        let sw = g.width * scale_x;
+        let sh = g.height * scale_y;
+
+        boxes.push(SelectionBox {
+            x: sx,
+            y: sy,
+            width: sw,
+            height: sh,
+        });
+    }
+
+    boxes
+}
+
+fn update_ui_strings(window: &AppWindow, lang: ResolvedLanguage) {
+    window.set_text_open(SharedString::from(barepdf_i18n::t(lang, "open.file")));
+    window.set_text_sidebar(SharedString::from(barepdf_i18n::t(lang, "sidebar.toggle")));
+    window.set_text_thumbnails(SharedString::from(barepdf_i18n::t(
+        lang,
+        "sidebar.thumbnails",
+    )));
+    window.set_text_outline(SharedString::from(barepdf_i18n::t(lang, "sidebar.outline")));
+    window.set_text_view(SharedString::from(barepdf_i18n::t(lang, "view.mode")));
+    window.set_text_zoom_in(SharedString::from(barepdf_i18n::t(lang, "zoom.in")));
+    window.set_text_zoom_out(SharedString::from(barepdf_i18n::t(lang, "zoom.out")));
+    window.set_text_fit_width(SharedString::from(barepdf_i18n::t(lang, "zoom.fit_width")));
+    window.set_text_fit_page(SharedString::from(barepdf_i18n::t(lang, "zoom.fit_page")));
+    window.set_text_actual_size(SharedString::from(barepdf_i18n::t(
+        lang,
+        "zoom.actual_size",
+    )));
+    window.set_text_fullscreen(SharedString::from(barepdf_i18n::t(lang, "fullscreen")));
+    window.set_text_presentation(SharedString::from(barepdf_i18n::t(lang, "presentation")));
+    window.set_text_settings(SharedString::from(barepdf_i18n::t(lang, "settings")));
+    window.set_text_copy(SharedString::from(barepdf_i18n::t(lang, "context.copy")));
+    window.set_text_select_all(SharedString::from(barepdf_i18n::t(
+        lang,
+        "context.select_all",
+    )));
+    window.set_text_close(SharedString::from(barepdf_i18n::t(lang, "settings.close")));
+    window.set_text_empty_title(SharedString::from(barepdf_i18n::t(lang, "empty.title")));
+    window.set_text_empty_desc(SharedString::from(barepdf_i18n::t(lang, "empty.desc")));
 }
 
 fn rand_id() -> u64 {

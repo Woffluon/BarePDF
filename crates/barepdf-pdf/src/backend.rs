@@ -1,4 +1,4 @@
-use barepdf_core::{PageCount, PageIndex, PdfError, Rotation};
+use barepdf_core::{PageCount, PageIndex, PageTextGeometry, PdfError, Rotation};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +45,7 @@ pub trait PdfDocument: Send + Sync {
     ) -> Result<RawBitmap, PdfError>;
     fn extract_text(&self, page_index: PageIndex) -> Result<String, PdfError>;
     fn extract_text_spans(&self, page_index: PageIndex) -> Result<Vec<TextSpan>, PdfError>;
+    fn get_page_text_geometry(&self, page_index: PageIndex) -> Result<PageTextGeometry, PdfError>;
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError>;
 }
 

@@ -108,12 +108,14 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
         let pages = self.doc.pages();
         let count = pages.len();
-        let mut dims = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        let first_dim = pages
+            .get(0)
+            .map(|p| (p.width().value, p.height().value))
+            .unwrap_or((612.0, 792.0));
+        let mut dims = vec![first_dim; count as usize];
+        for i in 1..count.min(10) {
             if let Ok(page) = pages.get(i) {
-                dims.push((page.width().value, page.height().value));
-            } else {
-                dims.push((612.0, 792.0));
+                dims[i as usize] = (page.width().value, page.height().value);
             }
         }
         Ok(dims)
@@ -210,6 +212,48 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         }
 
         Ok(spans)
+    }
+
+    fn get_page_text_geometry(
+        &self,
+        page_index: PageIndex,
+    ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+        let pages = self.doc.pages();
+        let page = pages.get(page_index.get() as u16 as i32).map_err(|e| {
+            PdfError::TextExtractionFailed {
+                page_index: page_index.get(),
+                reason: e.to_string(),
+            }
+        })?;
+
+        let text_page = page.text().map_err(|e| PdfError::TextExtractionFailed {
+            page_index: page_index.get(),
+            reason: e.to_string(),
+        })?;
+
+        let mut glyphs = Vec::new();
+        for char_info in text_page.chars().iter() {
+            let ch = char_info.unicode_char().unwrap_or(' ');
+            if let Ok(rect) = char_info.loose_bounds() {
+                glyphs.push(barepdf_core::GlyphRect {
+                    x: rect.left().value,
+                    y: rect.bottom().value,
+                    width: rect.width().value,
+                    height: rect.height().value,
+                    ch,
+                });
+            } else {
+                glyphs.push(barepdf_core::GlyphRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    ch,
+                });
+            }
+        }
+
+        Ok(barepdf_core::PageTextGeometry { page_index, glyphs })
     }
 
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
