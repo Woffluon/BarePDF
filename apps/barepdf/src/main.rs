@@ -3,8 +3,8 @@
 use barepdf_core::{
     compute_target_dimensions, default_config_path, selection::SelectionEngine, ContinuousLayout,
     DocumentId, MemoryBudget, PageCount, PageIndex, PageTextGeometry, PdfError, RequestId,
-    Rotation, TextPosition, TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor,
-    ZoomMode,
+    Rotation, TextPosition, TextSelection, ThemeMode, UserPreferences, ViewingMode, WindowMode,
+    ZoomFactor, ZoomMode,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::PdfiumEngine;
@@ -95,6 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     update_ui_strings(&main_window, state.borrow().preferences.language.resolve());
+    main_window.set_current_theme(match state.borrow().preferences.theme {
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+        _ => 0,
+    });
 
     // Check CLI argument for PDF path
     let args: Vec<String> = env::args().collect();
@@ -324,6 +329,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(win) = window_lang.upgrade() {
             win.set_current_language(lang_idx);
             update_ui_strings(&win, new_lang.resolve());
+        }
+    });
+
+    // Theme switching handler
+    let state_theme = state.clone();
+    let window_theme = main_window.as_weak();
+    let prefs_path_theme = prefs_path.clone();
+    main_window.on_request_change_theme(move |theme_idx| {
+        let mut s = state_theme.borrow_mut();
+        let new_theme = match theme_idx {
+            1 => ThemeMode::Light,
+            2 => ThemeMode::Dark,
+            _ => ThemeMode::System,
+        };
+        s.preferences.theme = new_theme;
+        let _ = s.preferences.save_to_file(&prefs_path_theme);
+        if let Some(win) = window_theme.upgrade() {
+            win.set_current_theme(theme_idx);
         }
     });
 

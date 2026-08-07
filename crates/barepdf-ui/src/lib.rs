@@ -30,12 +30,13 @@ slint::slint! {
         is_selected: bool,
     }
 
-    // Modern Fluent 2 Glassmorphism Button
+    // Modern Fluent 2 Glassmorphism Button (Theme-aware)
     component FluentButton inherits Rectangle {
         in property <string> text: "";
         in property <bool> enabled: true;
         in property <bool> active: false;
         in property <bool> primary: false;
+        in property <bool> is_light: false;
         callback clicked();
 
         height: 32px;
@@ -44,13 +45,15 @@ slint::slint! {
 
         background: !root.enabled ? #00000000 :
                     root.primary ? (touch.has-hover ? #0086f0 : (touch.pressed ? #005a9e : #0078d4)) :
-                    root.active ? (touch.has-hover ? #0078d444 : #0078d428) :
+                    root.active ? (root.is_light ? #0078d420 : #0078d430) :
+                    root.is_light ? (touch.has-hover ? #00000015 : (touch.pressed ? #00000008 : #0000000c)) :
                     (touch.has-hover ? #ffffff18 : (touch.pressed ? #ffffff08 : #ffffff0a));
 
         border-width: 1px;
         border-color: !root.enabled ? #00000000 :
                       root.primary ? (touch.has-hover ? #0094ff : #0078d4) :
                       root.active ? #0078d499 :
+                      root.is_light ? (touch.has-hover ? #00000030 : #00000014) :
                       (touch.has-hover ? #ffffff30 : #ffffff14);
 
         drop-shadow-blur: root.primary && touch.has-hover ? 8px : 0px;
@@ -70,7 +73,10 @@ slint::slint! {
                 text: root.text;
                 font-size: 12px;
                 font-weight: 500;
-                color: !root.enabled ? #555555 : (root.primary ? #ffffff : (root.active ? #60a5fa : #f0f0f0));
+                color: !root.enabled ? (root.is_light ? #aaaaaa : #555555) :
+                       root.primary ? #ffffff :
+                       root.active ? (root.is_light ? #005a9e : #60a5fa) :
+                       (root.is_light ? #1a1a1a : #f0f0f0);
                 vertical-alignment: center;
                 horizontal-alignment: center;
             }
@@ -82,6 +88,7 @@ slint::slint! {
         in property <length> menu_x: 0px;
         in property <length> menu_y: 0px;
         in property <bool> has_selection: false;
+        in property <bool> is_light: false;
         in property <string> text_copy: "Copy";
         in property <string> text_select_all: "Select All";
         callback copy_clicked();
@@ -99,12 +106,12 @@ slint::slint! {
             y: Math.min(root.menu_y, parent.height - 95px);
             width: 170px;
             height: root.has_selection ? 80px : 44px;
-            background: #25272cdd;
+            background: root.is_light ? #ffffffff : #25272cdd;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #ffffff28;
+            border-color: root.is_light ? #00000020 : #ffffff28;
             drop-shadow-blur: 16px;
-            drop-shadow-color: #000000b0;
+            drop-shadow-color: root.is_light ? #00000030 : #000000b0;
 
             VerticalLayout {
                 padding: 5px;
@@ -128,13 +135,13 @@ slint::slint! {
                             text: root.text_copy;
                             font-size: 12px;
                             font-weight: 500;
-                            color: #ffffff;
+                            color: copy_touch.has-hover ? #ffffff : (root.is_light ? #1a1a1a : #ffffff);
                             vertical-alignment: center;
                         }
                         Text {
                             text: "Ctrl+C";
                             font-size: 11px;
-                            color: #bbbbbb;
+                            color: copy_touch.has-hover ? #e0e0e0 : (root.is_light ? #666666 : #bbbbbb);
                             vertical-alignment: center;
                         }
                     }
@@ -158,13 +165,13 @@ slint::slint! {
                             text: root.text_select_all;
                             font-size: 12px;
                             font-weight: 500;
-                            color: #ffffff;
+                            color: sa_touch.has-hover ? #ffffff : (root.is_light ? #1a1a1a : #ffffff);
                             vertical-alignment: center;
                         }
                         Text {
                             text: "Ctrl+A";
                             font-size: 11px;
-                            color: #bbbbbb;
+                            color: sa_touch.has-hover ? #e0e0e0 : (root.is_light ? #666666 : #bbbbbb);
                             vertical-alignment: center;
                         }
                     }
@@ -177,6 +184,7 @@ slint::slint! {
     component PasswordModal inherits Rectangle {
         in property <string> file_name: "";
         in-out property <string> password_input: "";
+        in property <bool> is_light: false;
         in property <string> text_title: "Password Required";
         in property <string> text_desc: "This document is encrypted. Enter password to open:";
         in property <string> text_placeholder: "Password";
@@ -185,17 +193,17 @@ slint::slint! {
         callback submit_password(string);
         callback cancel();
 
-        background: #000000bb;
+        background: root.is_light ? #00000044 : #000000bb;
 
         Rectangle {
             width: 440px;
             height: 240px;
-            background: #24262bdd;
+            background: root.is_light ? #ffffffff : #24262bdd;
             border-radius: 12px;
             border-width: 1px;
-            border-color: #ffffff28;
+            border-color: root.is_light ? #00000020 : #ffffff28;
             drop-shadow-blur: 24px;
-            drop-shadow-color: #000000d0;
+            drop-shadow-color: root.is_light ? #00000040 : #000000d0;
 
             VerticalLayout {
                 padding: 24px;
@@ -205,13 +213,13 @@ slint::slint! {
                     text: root.text_title;
                     font-size: 19px;
                     font-weight: 700;
-                    color: #ffffff;
+                    color: root.is_light ? #1a1a1a : #ffffff;
                 }
 
                 Text {
                     text: root.text_desc;
                     font-size: 13px;
-                    color: #cccccc;
+                    color: root.is_light ? #555555 : #cccccc;
                     wrap: word-wrap;
                 }
 
@@ -227,11 +235,13 @@ slint::slint! {
 
                     FluentButton {
                         text: root.text_cancel;
+                        is_light: root.is_light;
                         clicked => { cancel(); }
                     }
                     FluentButton {
                         text: root.text_unlock;
                         primary: true;
+                        is_light: root.is_light;
                         clicked => { submit_password(password_input); }
                     }
                 }
@@ -244,6 +254,7 @@ slint::slint! {
         in property <int> current_language: 0; // 0: System, 1: English, 2: Turkish
         in property <int> current_theme: 0;    // 0: System, 1: Light, 2: Dark
         in property <int> current_view_mode: 0;// 0: Continuous, 1: Single
+        in property <bool> is_light: false;
         in property <string> text_title: "Preferences";
         in property <string> text_language: "Language";
         in property <string> text_theme: "Theme";
@@ -254,17 +265,17 @@ slint::slint! {
         callback select_view_mode(int);
         callback close();
 
-        background: #000000bb;
+        background: root.is_light ? #00000044 : #000000bb;
 
         Rectangle {
             width: 480px;
             height: 330px;
-            background: #24262bdd;
+            background: root.is_light ? #ffffffff : #24262bdd;
             border-radius: 12px;
             border-width: 1px;
-            border-color: #ffffff28;
+            border-color: root.is_light ? #00000020 : #ffffff28;
             drop-shadow-blur: 24px;
-            drop-shadow-color: #000000d0;
+            drop-shadow-color: root.is_light ? #00000040 : #000000d0;
 
             VerticalLayout {
                 padding: 24px;
@@ -274,28 +285,31 @@ slint::slint! {
                     text: root.text_title;
                     font-size: 20px;
                     font-weight: 700;
-                    color: #ffffff;
+                    color: root.is_light ? #1a1a1a : #ffffff;
                 }
 
                 // Language selection
                 VerticalLayout {
                     spacing: 8px;
-                    Text { text: root.text_language; font-size: 13px; font-weight: 600; color: #bbbbbb; }
+                    Text { text: root.text_language; font-size: 13px; font-weight: 600; color: root.is_light ? #555555 : #bbbbbb; }
                     HorizontalLayout {
                         spacing: 8px;
                         FluentButton {
                             text: "System Default";
                             active: root.current_language == 0;
+                            is_light: root.is_light;
                             clicked => { select_language(0); }
                         }
                         FluentButton {
                             text: "English";
                             active: root.current_language == 1;
+                            is_light: root.is_light;
                             clicked => { select_language(1); }
                         }
                         FluentButton {
                             text: "Türkçe";
                             active: root.current_language == 2;
+                            is_light: root.is_light;
                             clicked => { select_language(2); }
                         }
                     }
@@ -304,22 +318,25 @@ slint::slint! {
                 // Theme selection
                 VerticalLayout {
                     spacing: 8px;
-                    Text { text: root.text_theme; font-size: 13px; font-weight: 600; color: #bbbbbb; }
+                    Text { text: root.text_theme; font-size: 13px; font-weight: 600; color: root.is_light ? #555555 : #bbbbbb; }
                     HorizontalLayout {
                         spacing: 8px;
                         FluentButton {
                             text: "System";
                             active: root.current_theme == 0;
+                            is_light: root.is_light;
                             clicked => { select_theme(0); }
                         }
                         FluentButton {
                             text: "Light";
                             active: root.current_theme == 1;
+                            is_light: root.is_light;
                             clicked => { select_theme(1); }
                         }
                         FluentButton {
                             text: "Dark";
                             active: root.current_theme == 2;
+                            is_light: root.is_light;
                             clicked => { select_theme(2); }
                         }
                     }
@@ -330,6 +347,7 @@ slint::slint! {
                     FluentButton {
                         text: root.text_close;
                         primary: true;
+                        is_light: root.is_light;
                         clicked => { close(); }
                     }
                 }
@@ -338,11 +356,12 @@ slint::slint! {
     }
 
     export component AppWindow inherits Window {
+        forward-focus: main_focus;
         title: root.document_title != "" ? root.document_title + " — BarePDF" : "BarePDF";
         icon: @image-url("../../../assets/logo.svg");
         preferred-width: 1200px;
         preferred-height: 860px;
-        background: #0f1013;
+        background: root.is_light ? #f3f3f6 : #0f1013;
 
         in property <string> document_title: "";
         in property <string> status_text: "Ready";
@@ -368,8 +387,9 @@ slint::slint! {
         in-out property <int> sidebar_tab: 0; // 0: Thumbnails, 1: Outline
         in-out property <int> window_mode: 0; // 0: Normal, 1: FullScreen, 2: Presentation
         in property <string> view_mode_label: "Continuous";
-        in property <int> current_language: 0;
-        in property <int> current_theme: 0;
+        in-out property <int> current_language: 0;
+        in-out property <int> current_theme: 0;
+        out property <bool> is_light: root.current_theme == 1;
 
         // Localized string bindings
         in property <string> text_open: "Open PDF";
@@ -419,7 +439,7 @@ slint::slint! {
         callback pointer_up(int, length, length);
 
         // Keyboard navigation & shortcuts
-        FocusScope {
+        main_focus := FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") { // Esc
                     if (root.context_menu_open) {
@@ -506,168 +526,199 @@ slint::slint! {
             padding: 0px;
             spacing: 0px;
 
-            // Top Command Bar (Fluent 2 Translucent Glass styled)
+            // Top Floating Command Bar with Margin Spacing from Window Top
             if (root.window_mode != 1) : Rectangle {
-                height: 48px;
-                background: #1a1b1edd;
-                border-width: 1px;
-                border-color: #ffffff14;
+                height: 54px;
+                background: #00000000;
 
                 HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
-                    spacing: 10px;
-                    alignment: space-between;
+                    padding-top: 6px;
+                    padding-bottom: 4px;
+                    padding-left: 10px;
+                    padding-right: 10px;
 
-                    // Left group: Open, Sidebar, Navigation Pill
-                    HorizontalLayout {
-                        spacing: 8px;
+                    Rectangle {
+                        height: 44px;
+                        background: root.is_light ? #ffffffff : #1c1e24dd;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: root.is_light ? #00000018 : #ffffff18;
+                        drop-shadow-blur: 12px;
+                        drop-shadow-color: root.is_light ? #00000015 : #00000080;
 
-                        FluentButton {
-                            text: root.text_open;
-                            primary: true;
-                            clicked => { root.request_open_file(); }
-                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            alignment: space-between;
 
-                        FluentButton {
-                            text: root.text_sidebar;
-                            active: root.sidebar_visible;
-                            enabled: root.has_document;
-                            clicked => { root.request_toggle_sidebar(); }
-                        }
-
-                        Rectangle { width: 1px; height: 20px; background: #ffffff18; }
-
-                        // Glass Pill for Page Navigation
-                        Rectangle {
-                            height: 32px;
-                            background: #ffffff06;
-                            border-radius: 6px;
-                            border-width: 1px;
-                            border-color: #ffffff12;
-
+                            // Left group: Open, Sidebar, Navigation Pill
                             HorizontalLayout {
-                                padding-left: 4px;
-                                padding-right: 4px;
-                                spacing: 4px;
+                                spacing: 8px;
 
                                 FluentButton {
-                                    text: "‹";
-                                    enabled: root.has_document;
-                                    clicked => { root.request_prev_page(); }
+                                    text: root.text_open;
+                                    primary: true;
+                                    is_light: root.is_light;
+                                    clicked => { root.request_open_file(); }
                                 }
 
-                                Rectangle {
-                                    height: 26px;
-                                    min-width: 76px;
-                                    background: #00000030;
-                                    border-radius: 4px;
+                                FluentButton {
+                                    text: root.text_sidebar;
+                                    active: root.sidebar_visible;
+                                    enabled: root.has_document;
+                                    is_light: root.is_light;
+                                    clicked => { root.request_toggle_sidebar(); }
+                                }
 
-                                    Text {
-                                        text: root.current_page_str + " / " + root.total_pages_str;
-                                        font-size: 12px;
-                                        font-weight: 600;
-                                        color: #e0e0e0;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                Rectangle { width: 1px; height: 20px; background: root.is_light ? #00000018 : #ffffff18; }
+
+                                // Glass Pill for Page Navigation
+                                Rectangle {
+                                    height: 32px;
+                                    background: root.is_light ? #00000008 : #ffffff06;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: root.is_light ? #00000012 : #ffffff12;
+
+                                    HorizontalLayout {
+                                        padding-left: 4px;
+                                        padding-right: 4px;
+                                        spacing: 4px;
+
+                                        FluentButton {
+                                            text: "‹";
+                                            enabled: root.has_document;
+                                            is_light: root.is_light;
+                                            clicked => { root.request_prev_page(); }
+                                        }
+
+                                        Rectangle {
+                                            height: 26px;
+                                            min-width: 76px;
+                                            background: root.is_light ? #ffffff : #00000030;
+                                            border-radius: 4px;
+                                            border-width: root.is_light ? 1px : 0px;
+                                            border-color: #00000015;
+
+                                            Text {
+                                                text: root.current_page_str + " / " + root.total_pages_str;
+                                                font-size: 12px;
+                                                font-weight: 600;
+                                                color: root.is_light ? #1a1a1a : #e0e0e0;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        FluentButton {
+                                            text: "›";
+                                            enabled: root.has_document;
+                                            is_light: root.is_light;
+                                            clicked => { root.request_next_page(); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Center group: Zoom & View Mode Glass Pill
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Rectangle {
+                                    height: 32px;
+                                    background: root.is_light ? #00000008 : #ffffff06;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: root.is_light ? #00000012 : #ffffff12;
+
+                                    HorizontalLayout {
+                                        padding-left: 4px;
+                                        padding-right: 4px;
+                                        spacing: 4px;
+
+                                        FluentButton {
+                                            text: "−";
+                                            enabled: root.has_document;
+                                            is_light: root.is_light;
+                                            clicked => { root.request_zoom_out(); }
+                                        }
+
+                                        Rectangle {
+                                            height: 26px;
+                                            min-width: 58px;
+                                            background: root.is_light ? #ffffff : #00000030;
+                                            border-radius: 4px;
+                                            border-width: root.is_light ? 1px : 0px;
+                                            border-color: #00000015;
+
+                                            Text {
+                                                text: root.zoom_str;
+                                                font-size: 12px;
+                                                font-weight: 600;
+                                                color: root.is_light ? #1a1a1a : #e0e0e0;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        FluentButton {
+                                            text: "+";
+                                            enabled: root.has_document;
+                                            is_light: root.is_light;
+                                            clicked => { root.request_zoom_in(); }
+                                        }
                                     }
                                 }
 
+                                Rectangle { width: 1px; height: 20px; background: root.is_light ? #00000018 : #ffffff18; }
+
                                 FluentButton {
-                                    text: "›";
+                                    text: root.view_mode_label;
                                     enabled: root.has_document;
-                                    clicked => { root.request_next_page(); }
+                                    is_light: root.is_light;
+                                    clicked => { root.request_toggle_view_mode(); }
+                                }
+
+                                FluentButton {
+                                    text: root.text_fit_width;
+                                    enabled: root.has_document;
+                                    is_light: root.is_light;
+                                    clicked => { root.request_fit_width(); }
+                                }
+
+                                FluentButton {
+                                    text: root.text_fit_page;
+                                    enabled: root.has_document;
+                                    is_light: root.is_light;
+                                    clicked => { root.request_fit_page(); }
                                 }
                             }
-                        }
-                    }
 
-                    // Center group: Zoom & View Mode Glass Pill
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        Rectangle {
-                            height: 32px;
-                            background: #ffffff06;
-                            border-radius: 6px;
-                            border-width: 1px;
-                            border-color: #ffffff12;
-
+                            // Right group: Fullscreen, Presentation, Settings
                             HorizontalLayout {
-                                padding-left: 4px;
-                                padding-right: 4px;
-                                spacing: 4px;
+                                spacing: 8px;
 
                                 FluentButton {
-                                    text: "−";
+                                    text: root.text_fullscreen;
                                     enabled: root.has_document;
-                                    clicked => { root.request_zoom_out(); }
-                                }
-
-                                Rectangle {
-                                    height: 26px;
-                                    min-width: 58px;
-                                    background: #00000030;
-                                    border-radius: 4px;
-
-                                    Text {
-                                        text: root.zoom_str;
-                                        font-size: 12px;
-                                        font-weight: 600;
-                                        color: #e0e0e0;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                    is_light: root.is_light;
+                                    clicked => { root.request_toggle_fullscreen(); }
                                 }
 
                                 FluentButton {
-                                    text: "+";
+                                    text: root.text_presentation;
                                     enabled: root.has_document;
-                                    clicked => { root.request_zoom_in(); }
+                                    is_light: root.is_light;
+                                    clicked => { root.request_presentation_mode(); }
+                                }
+
+                                FluentButton {
+                                    text: "⚙";
+                                    is_light: root.is_light;
+                                    clicked => { root.settings_open = !root.settings_open; }
                                 }
                             }
-                        }
-
-                        Rectangle { width: 1px; height: 20px; background: #ffffff18; }
-
-                        FluentButton {
-                            text: root.view_mode_label;
-                            enabled: root.has_document;
-                            clicked => { root.request_toggle_view_mode(); }
-                        }
-
-                        FluentButton {
-                            text: root.text_fit_width;
-                            enabled: root.has_document;
-                            clicked => { root.request_fit_width(); }
-                        }
-
-                        FluentButton {
-                            text: root.text_fit_page;
-                            enabled: root.has_document;
-                            clicked => { root.request_fit_page(); }
-                        }
-                    }
-
-                    // Right group: Fullscreen, Presentation, Settings
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        FluentButton {
-                            text: root.text_fullscreen;
-                            enabled: root.has_document;
-                            clicked => { root.request_toggle_fullscreen(); }
-                        }
-
-                        FluentButton {
-                            text: root.text_presentation;
-                            enabled: root.has_document;
-                            clicked => { root.request_presentation_mode(); }
-                        }
-
-                        FluentButton {
-                            text: "⚙";
-                            clicked => { root.settings_open = !root.settings_open; }
                         }
                     }
                 }
@@ -677,12 +728,12 @@ slint::slint! {
             HorizontalLayout {
                 spacing: 0px;
 
-                // Segmented Fluent Acrylic Sidebar
+                // Segmented Fluent Acrylic Sidebar (Centered Thumbnails)
                 if (root.sidebar_visible && root.has_document) : Rectangle {
                     width: 240px;
-                    background: #16171add;
+                    background: root.is_light ? #f8f8fad0 : #16171add;
                     border-width: 1px;
-                    border-color: #ffffff12;
+                    border-color: root.is_light ? #00000014 : #ffffff12;
 
                     VerticalLayout {
                         padding: 10px;
@@ -691,10 +742,10 @@ slint::slint! {
                         // Glass Segmented Tab Container
                         Rectangle {
                             height: 36px;
-                            background: #0f1013;
+                            background: root.is_light ? #e8e8ed : #0f1013;
                             border-radius: 6px;
                             border-width: 1px;
-                            border-color: #ffffff10;
+                            border-color: root.is_light ? #00000010 : #ffffff10;
 
                             HorizontalLayout {
                                 padding: 3px;
@@ -703,30 +754,35 @@ slint::slint! {
                                 FluentButton {
                                     text: root.text_thumbnails;
                                     active: root.sidebar_tab == 0;
+                                    is_light: root.is_light;
                                     clicked => { root.sidebar_tab = 0; }
                                 }
                                 FluentButton {
                                     text: root.text_outline;
                                     active: root.sidebar_tab == 1;
+                                    is_light: root.is_light;
                                     clicked => { root.sidebar_tab = 1; }
                                 }
                             }
                         }
 
-                        // Sidebar Thumbnail List with Floating Cards
+                        // Sidebar Thumbnail List with Centered Floating Cards
                         if root.sidebar_tab == 0 : ScrollView {
                             VerticalLayout {
                                 padding: 4px;
-                                spacing: 12px;
+                                spacing: 14px;
+                                alignment: center;
 
                                 for thumb in root.thumbnail_items : Rectangle {
+                                    width: 195px;
                                     height: thumb.height + 28px;
-                                    background: thumb.is_selected ? #0078d430 : (thumb_touch.has-hover ? #ffffff10 : #ffffff06);
+                                    x: (parent.width - self.width) / 2;
+                                    background: thumb.is_selected ? #0078d430 : (thumb_touch.has-hover ? (root.is_light ? #00000010 : #ffffff10) : (root.is_light ? #ffffff : #ffffff06));
                                     border-radius: 8px;
                                     border-width: thumb.is_selected ? 2px : 1px;
-                                    border-color: thumb.is_selected ? #0078d4 : #ffffff14;
-                                    drop-shadow-blur: thumb.is_selected ? 10px : 0px;
-                                    drop-shadow-color: #0078d450;
+                                    border-color: thumb.is_selected ? #0078d4 : (root.is_light ? #00000018 : #ffffff14);
+                                    drop-shadow-blur: thumb.is_selected ? 12px : 4px;
+                                    drop-shadow-color: thumb.is_selected ? #0078d460 : (root.is_light ? #00000010 : #00000040);
 
                                     thumb_touch := TouchArea {
                                         clicked => { root.request_select_page(thumb.page_index); }
@@ -740,6 +796,7 @@ slint::slint! {
                                         Rectangle {
                                             width: thumb.width;
                                             height: thumb.height;
+                                            x: (parent.width - self.width) / 2;
                                             background: #ffffff;
                                             border-radius: 2px;
 
@@ -754,7 +811,7 @@ slint::slint! {
                                             text: thumb.page_number;
                                             font-size: 11px;
                                             font-weight: 500;
-                                            color: thumb.is_selected ? #ffffff : #aaaaaa;
+                                            color: thumb.is_selected ? (root.is_light ? #005a9e : #ffffff) : (root.is_light ? #666666 : #aaaaaa);
                                             horizontal-alignment: center;
                                         }
                                     }
@@ -764,13 +821,13 @@ slint::slint! {
 
                         // Outline View
                         if root.sidebar_tab == 1 : Rectangle {
-                            background: #0f1013;
+                            background: root.is_light ? #f0f0f3 : #0f1013;
                             border-radius: 6px;
 
                             Text {
                                 text: "No Outline available";
                                 font-size: 12px;
-                                color: #666666;
+                                color: root.is_light ? #888888 : #666666;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -778,9 +835,9 @@ slint::slint! {
                     }
                 }
 
-                // Document Viewport Workspace (Floating Paper Cards on Deep Dark Slate)
+                // Document Viewport Workspace (Floating Paper Cards on Deep Dark / Light Slate)
                 Rectangle {
-                    background: #0f1013;
+                    background: root.is_light ? #e4e5e8 : #0f1013;
 
                     // Empty State Screen
                     if (!root.has_document && !root.password_required) : VerticalLayout {
@@ -791,14 +848,14 @@ slint::slint! {
                             text: "BarePDF";
                             font-size: 40px;
                             font-weight: 800;
-                            color: #ffffff;
+                            color: root.is_light ? #1a1a1a : #ffffff;
                             horizontal-alignment: center;
                         }
 
                         Text {
                             text: root.text_empty_desc;
                             font-size: 14px;
-                            color: #888888;
+                            color: root.is_light ? #666666 : #888888;
                             horizontal-alignment: center;
                         }
 
@@ -807,6 +864,7 @@ slint::slint! {
                             FluentButton {
                                 text: root.text_open;
                                 primary: true;
+                                is_light: root.is_light;
                                 clicked => { root.request_open_file(); }
                             }
                         }
@@ -826,7 +884,7 @@ slint::slint! {
                             border-radius: 4px;
                             drop-shadow-blur: 24px;
                             drop-shadow-offset-y: 8px;
-                            drop-shadow-color: #000000c0;
+                            drop-shadow-color: root.is_light ? #00000025 : #000000c0;
 
                             Image {
                                 source: root.page_bitmap;
@@ -847,6 +905,7 @@ slint::slint! {
                             TouchArea {
                                 pointer-event(evt) => {
                                     if (evt.kind == PointerEventKind.down) {
+                                        main_focus.focus();
                                         if (evt.button == PointerEventButton.right) {
                                             root.context_menu_x = self.mouse-x;
                                             root.context_menu_y = self.mouse-y;
@@ -882,7 +941,7 @@ slint::slint! {
                             border-radius: 4px;
                             drop-shadow-blur: 24px;
                             drop-shadow-offset-y: 8px;
-                            drop-shadow-color: #000000c0;
+                            drop-shadow-color: root.is_light ? #00000025 : #000000c0;
 
                             if (page.has_bitmap) : Image {
                                 source: page.bitmap;
@@ -904,6 +963,7 @@ slint::slint! {
                             TouchArea {
                                 pointer-event(evt) => {
                                     if (evt.kind == PointerEventKind.down) {
+                                        main_focus.focus();
                                         if (evt.button == PointerEventButton.right) {
                                             root.context_menu_x = self.mouse-x;
                                             root.context_menu_y = self.mouse-y + page.y_offset;
@@ -936,6 +996,7 @@ slint::slint! {
 
                     if (root.password_required) : PasswordModal {
                         file_name: root.protected_file_name;
+                        is_light: root.is_light;
                         submit_password(pwd) => { root.request_unlock_password(pwd); }
                         cancel => { root.password_required = false; }
                     }
@@ -943,6 +1004,7 @@ slint::slint! {
                     if (root.settings_open) : SettingsModal {
                         current_language: root.current_language;
                         current_theme: root.current_theme;
+                        is_light: root.is_light;
                         text_title: root.text_settings;
                         text_close: root.text_close;
                         select_language(idx) => { root.request_change_language(idx); }
@@ -954,6 +1016,7 @@ slint::slint! {
                         menu_x: root.context_menu_x;
                         menu_y: root.context_menu_y;
                         has_selection: root.has_selection;
+                        is_light: root.is_light;
                         text_copy: root.text_copy;
                         text_select_all: root.text_select_all;
                         copy_clicked() => {
@@ -974,9 +1037,9 @@ slint::slint! {
             // Clean Fluent Status Bar
             if (root.window_mode != 1) : Rectangle {
                 height: 26px;
-                background: #16171add;
+                background: root.is_light ? #f0f0f3dd : #16171add;
                 border-width: 1px;
-                border-color: #ffffff12;
+                border-color: root.is_light ? #00000014 : #ffffff12;
 
                 HorizontalLayout {
                     padding-left: 14px;
@@ -986,14 +1049,14 @@ slint::slint! {
                     Text {
                         text: root.status_text;
                         font-size: 11px;
-                        color: #aaaaaa;
+                        color: root.is_light ? #666666 : #aaaaaa;
                         vertical-alignment: center;
                     }
 
                     Text {
                         text: root.has_document ? root.view_mode_label : "";
                         font-size: 11px;
-                        color: #777777;
+                        color: root.is_light ? #888888 : #777777;
                         vertical-alignment: center;
                     }
                 }

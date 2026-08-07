@@ -37,6 +37,9 @@ impl WindowsClipboard {
 impl ClipboardAccess for WindowsClipboard {
     fn set_text(&self, text: &str) -> Result<(), PdfError> {
         if let Ok(mut lock) = self.inner.lock() {
+            if lock.is_none() {
+                *lock = Clipboard::new().ok();
+            }
             if let Some(ref mut cb) = *lock {
                 return cb
                     .set_text(text)
@@ -48,6 +51,9 @@ impl ClipboardAccess for WindowsClipboard {
 
     fn get_text(&self) -> Result<String, PdfError> {
         if let Ok(mut lock) = self.inner.lock() {
+            if lock.is_none() {
+                *lock = Clipboard::new().ok();
+            }
             if let Some(ref mut cb) = *lock {
                 return cb
                     .get_text()
