@@ -1,5 +1,5 @@
 ; BarePDF Inno Setup Installer Script
-; Windows per-user installation with PDF file association registration
+; Windows per-user installation with PDF file association and Shell Thumbnail Provider registration
 
 #define MyAppName "BarePDF"
 #define MyAppVersion "1.0.0"
@@ -7,6 +7,7 @@
 #define MyAppURL "https://github.com/woffluon/barepdf"
 #define MyAppExeName "BarePDF.exe"
 #define MyProgID "BarePDF.Document.1"
+#define MyThumbnailCLSID "{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}"
 
 [Setup]
 AppId={{B3A82379-88F4-4D4D-A815-998A4476B66C}}
@@ -37,6 +38,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\..\..\target\release\staged\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\target\release\staged\BarePDF.Thumbnail.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -54,8 +56,22 @@ Root: HKCU; Subkey: "Software\Classes\{#MyProgID}"; ValueType: string; ValueName
 Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 
-; Open With integration
+; Native Windows Thumbnail Overlay (TypeOverlay)
+Root: HKCU; Subkey: "Software\Classes\{#MyProgID}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
+
+; Thumbnail Provider Shell Extension Registration ({E357FCCD-A995-4576-B01F-234630154E96} is Win32 IThumbnailProvider Handler GUID)
+Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
+
+; COM Class Registration for BarePDF Thumbnail Provider
+Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}"; ValueType: string; ValueName: ""; ValueData: "BarePDF Thumbnail Provider"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\BarePDF.Thumbnail.dll"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"; Flags: uninsdeletekey
+
+; Open With integration & Applications registration
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "{#MyProgID}"; ValueData: ""; Flags: uninsdeletevalue
 
@@ -66,6 +82,13 @@ Root: HKCU; Subkey: "Software\BarePDF\Capabilities\FileAssociations"; ValueType:
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: "Software\BarePDF\Capabilities"; Flags: uninsdeletevalue
 
 [Code]
+procedure SHChangeNotify(wEventId: LongInt; uFlags: UINT; dwItem1: LongInt; dwItem2: LongInt);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
+const
+  SHCNE_ASSOCCHANGED = $08000000;
+  SHCNF_IDLIST = $0000;
+
 var
   DefaultAppsPage: TWizardPage;
   RadioYes: TRadioButton;
@@ -101,6 +124,22 @@ begin
   RadioNo.Width := DefaultAppsPage.SurfaceWidth - 20;
   RadioNo.Caption := 'No, keep my current default PDF reader';
   RadioNo.Checked := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0);
+  end;
 end;
 
 procedure DeinitializeSetup();

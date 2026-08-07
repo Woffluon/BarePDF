@@ -24,6 +24,12 @@ if (-not (Test-Path $ExePath)) {
 }
 
 Copy-Item $ExePath -Destination (Join-Path $StagedDir "BarePDF.exe")
+
+$ThumbnailDllPath = Join-Path $RepoRoot "target\release\barepdf_thumbnail.dll"
+if (Test-Path $ThumbnailDllPath) {
+    Copy-Item $ThumbnailDllPath -Destination (Join-Path $StagedDir "BarePDF.Thumbnail.dll")
+}
+
 Copy-Item (Join-Path $RepoRoot "README.md") -Destination $StagedDir
 
 $PdfiumDll = Join-Path $RepoRoot "target\release\pdfium.dll"
