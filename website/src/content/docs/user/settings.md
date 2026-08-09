@@ -1,6 +1,6 @@
 ---
 title: "Settings & Configuration"
-description: "How to configure theme, application language, LRU memory budget, and user preferences."
+description: "How to configure theme, application language, and saved user preferences."
 category: "user"
 order: 6
 ---
@@ -23,13 +23,12 @@ BarePDF stores user preferences in a plain JSON configuration file located at:
   - `System` (Default): Follows Windows Dark/Light mode preference.
   - `Light`: Forces bright theme background and controls.
   - `Dark`: Forces dark slint theme.
-- **Viewing Mode**: Default startup mode (`SinglePage`, `ContinuousVertical`, `TwoPageSpread`, `BookMode`).
+- **Viewing Mode**: Default startup mode (`SinglePage` or `ContinuousVertical`).
 - **Reading Direction**: `LeftToRight` or `RightToLeft`.
 - **Zoom Mode**: Default zoom strategy (`FitWidth`, `FitPage`, `ActualSize`, or `Custom`).
-- **Memory Budget**: Configures LRU bitmap cache limit (default: 96MB / 256MB).
 - **Recent Files**: Remembers up to 10 recently opened documents.
 - **Window Geometry**: Remembers last window size and sidebar visibility state.
 
 ## Modifying Preferences
 
-Preferences can be modified directly within the BarePDF **Settings** dialog or edited manually in `config.json`. Changes take effect immediately without requiring application restart.
+Language and theme can be modified from the compact **Settings** popover. BarePDF manages bitmap memory automatically; there is no memory-budget control in the UI. Changes take effect immediately without requiring an application restart.

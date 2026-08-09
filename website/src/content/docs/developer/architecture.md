@@ -23,7 +23,7 @@ BarePDF is structured into decoupled crates to isolate platform API bindings, re
 
 ### 3. `barepdf-render`
 - **Responsibility**: Priority-queued render scheduler and memory management.
-- **Key Mechanics**: LRU byte-budgeted bitmap cache (`lru`), worker thread pool, and generation token cancellation for fast scrolling.
+- **Key Mechanics**: A single PDFium actor, high/low priority channels, byte-budgeted LRU caches (`lru`), deduplication, and generation-token cancellation.
 
 ### 4. `barepdf-platform` & `barepdf-platform-windows`
 - **Responsibility**: System dialogs, clipboard, and printing.

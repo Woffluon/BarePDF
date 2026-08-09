@@ -9,5 +9,6 @@ description = "Windows OS implementation of file dialogs, clipboard, and printin
 barepdf-core = { path = "../barepdf-core" }
 barepdf-platform = { path = "../barepdf-platform" }
 rfd = "0.15"
-arboard = "3.4"
+arboard = { version = "3.4", default-features = false }
 tracing = "0.1"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

@@ -91,3 +91,44 @@ pub fn default_config_path() -> PathBuf {
         PathBuf::from("config.json")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn theme_preference_round_trips() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("barepdf-preferences-{unique}.json"));
+        let mut preferences = UserPreferences {
+            theme: ThemeMode::Dark,
+            language: Language::Turkish,
+            ..UserPreferences::default()
+        };
+        preferences.add_recent_file("C:\\Documents\\book.pdf".into());
+        preferences.save_to_file(&path).expect("save preferences");
+
+        let loaded = UserPreferences::load_from_file(&path);
+        assert_eq!(loaded.theme, ThemeMode::Dark);
+        assert_eq!(loaded.language, Language::Turkish);
+        assert_eq!(loaded.recent_files, vec!["C:\\Documents\\book.pdf"]);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recent_files_are_unique_and_bounded() {
+        let mut preferences = UserPreferences {
+            max_recent_files: 2,
+            ..UserPreferences::default()
+        };
+        preferences.add_recent_file("one.pdf".into());
+        preferences.add_recent_file("two.pdf".into());
+        preferences.add_recent_file("one.pdf".into());
+        preferences.add_recent_file("three.pdf".into());
+        assert_eq!(preferences.recent_files, vec!["three.pdf", "one.pdf"]);
+    }
+}

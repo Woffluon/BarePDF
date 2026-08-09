@@ -7,7 +7,6 @@ description = "PDF Backend traits and PDFium engine adapter for BarePDF"
 
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
-pdfium-render = "0.9"
+pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
 thiserror = "2.0"
 tracing = "0.1"
-image = "0.25"

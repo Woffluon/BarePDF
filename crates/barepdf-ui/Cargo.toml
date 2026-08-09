@@ -9,6 +9,5 @@ description = "Slint desktop interface views, themes, and view-models for BarePD
 barepdf-core = { path = "../barepdf-core" }
 barepdf-render = { path = "../barepdf-render" }
 barepdf-platform = { path = "../barepdf-platform" }
-slint = "1.9"
-image = "0.25"
+slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2"] }
 tracing = "0.1"

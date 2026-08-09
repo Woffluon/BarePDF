@@ -16,7 +16,7 @@ PDFium C++ runtime binaries are interfaced via the `pdfium-render` crate inside 
 ### Key Lifetime Considerations
 - PDFium page instances rely on the parent `FPDF_DOCUMENT` lifetime.
 - `barepdf-pdf` encapsulates PDFium pointers inside thread-safe Rust smart pointers, preventing premature deallocation or use-after-free conditions.
-- Document handles are shared safely across background worker threads for parallel page bitmap rendering.
+- A document handle remains isolated on one background actor thread. BarePDF does not parallelize access to a PDFium document across a worker pool.
 
 ## Text Extraction & Font Metrics
 

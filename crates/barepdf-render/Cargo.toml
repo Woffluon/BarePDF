@@ -3,7 +3,7 @@ name = "barepdf-render"
 version = "1.0.0"
 edition = "2021"
 authors = ["BarePDF Contributors"]
-description = "Demand-driven render scheduler, worker pool, and LRU bitmap cache for BarePDF"
+description = "Demand-driven render scheduler, PDFium actor, and LRU bitmap cache for BarePDF"
 
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }

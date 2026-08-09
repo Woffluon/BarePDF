@@ -35,7 +35,4 @@ Alternatively, right-click any `.pdf` file in File Explorer â†’ **Open with** â†
 
 ## 4. High Memory Usage on Very Large PDFs
 
-BarePDF bounds bitmap memory usage using a Least Recently Used (LRU) cache (default 96MB). If you are viewing technical blueprints or scanned documents with extremely high page dimensions:
-1. Open **Settings**.
-2. Lower the **Memory Budget** limit if operating on memory-constrained hardware.
-3. Pages outside the current viewport are evicted automatically when the memory ceiling is reached.
+BarePDF automatically bounds both raw PDFium bitmaps and the copies attached to Slint using byte-budgeted Least Recently Used (LRU) caches. Pages outside the current viewport are evicted automatically; there is no user-facing memory-budget setting.

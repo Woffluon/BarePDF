@@ -8,9 +8,9 @@ It provides the speed and low resource usage of SumatraPDF paired with a clean d
 
 ## Core Principles
 
-- **Ultra Low Overhead**: <60MB idle memory, ~0% idle CPU, fast document opening.
+- **Low Overhead**: Demand-driven rendering, bounded bitmap caches, and negligible settled idle CPU usage.
 - **Offline & Private**: Zero telemetry, zero analytics, zero AI clutter, zero account requirements.
-- **Demand-Driven Rendering**: LRU byte-budgeted bitmap cache (default 256MB) and generation token cancellation for fast smooth scrolling.
+- **Demand-Driven Rendering**: Automatically bounded raw/UI bitmap caches and generation-token cancellation for fast, smooth scrolling.
 - **Modern Native UI**: Slint UI framework delivering dark/light theme, high-DPI scaling, and responsive controls.
 - **Modular Workspace**: Clean architectural boundaries isolating platform code, render pipeline, PDF engine, and domain logic.
 
@@ -37,7 +37,7 @@ Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-v1.0.0.exe
 
 - `crates/barepdf-core`: Engine-agnostic domain models, page pairing calculations, viewport math, and user preferences.
 - `crates/barepdf-pdf`: Abstract `PdfBackend` / `PdfDocument` traits and PDFium engine adapter.
-- `crates/barepdf-render`: Priority-queued render scheduler, worker pool, and LRU bitmap memory cache.
+- `crates/barepdf-render`: Priority-queued single PDFium actor and LRU bitmap memory cache.
 - `crates/barepdf-platform`: Abstract traits for OS file dialogs, clipboard, and printing.
 - `crates/barepdf-platform-windows`: Native Win32 file dialogs (`rfd`), clipboard (`arboard`), and print spooling.
 - `crates/barepdf-ui`: Modern Slint desktop views, theme integration, view models, and keyboard shortcuts.
@@ -73,8 +73,8 @@ powershell -File packaging/windows/scripts/generate-checksums.ps1
 | Action | Shortcut |
 | --- | --- |
 | Open Document | `Ctrl+O` |
-| Next Page | `PageDown` / `>` |
-| Previous Page | `PageUp` / `<` |
+| Next Page | `PageDown` / Right Arrow |
+| Previous Page | `PageUp` / Left Arrow |
 | Zoom In | `+` / `Ctrl++` |
 | Zoom Out | `-` / `Ctrl+-` |
 | Fit Width | `Fit Width` button |

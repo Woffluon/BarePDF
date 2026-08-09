@@ -1,13 +1,13 @@
 ---
 const features = [
   {
-    title: 'Ultra Low Overhead',
-    description: 'Maintains under 60MB idle RAM usage and near 0% idle CPU for instant, non-intrusive PDF reading.',
+    title: 'Low Overhead',
+    description: 'Demand-driven work and byte-bounded caches keep settled idle CPU usage negligible and memory predictable.',
     icon: `<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>`
   },
   {
     title: 'Demand-Driven Rendering',
-    description: 'LRU byte-budgeted memory cache (96MB/256MB) and generation token cancellation prevent scroll lag on huge files.',
+    description: 'Separate byte-budgeted raw, page, and thumbnail caches plus generation cancellation prevent stale work from piling up.',
     icon: `<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>`
   },
   {
@@ -22,7 +22,7 @@ const features = [
   },
   {
     title: 'Flexible Viewing Modes',
-    description: 'Continuous vertical scrolling, Single Page, Two Page Spread, Book Mode, Full Screen (F11), and Presentation (F5).',
+    description: 'Continuous vertical scrolling and focused Single Page reading, with Full Screen (F11) and Presentation (F5).',
     icon: `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>`
   },
   {

@@ -33,5 +33,5 @@ Thank you for your interest in contributing to BarePDF! We welcome community con
 ## Project Guidelines
 
 - **No AI / Telemetry Clutter**: We maintain a strict zero-telemetry, zero-cloud, and zero-ad philosophy.
-- **Memory Boundaries**: Any new features must respect low idle memory overhead (<60MB).
+- **Memory Boundaries**: New features must preserve demand-driven work and the existing byte-bounded bitmap caches.
 - **Code Style**: Rust code must adhere to `rustfmt` formatting and Clippy warnings guidelines.

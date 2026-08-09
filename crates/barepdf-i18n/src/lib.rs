@@ -105,6 +105,11 @@ fn init_english() -> HashMap<&'static str, &'static str> {
         "empty.desc",
         "Click 'Open PDF' or drag a PDF file here to begin reading.",
     );
+    m.insert("outline.empty", "This document has no outline.");
+    m.insert("recent.title", "Recent files");
+    m.insert("action.retry", "Retry");
+    m.insert("action.dismiss", "Dismiss");
+    m.insert("status.loading", "Loading");
     m
 }
 
@@ -156,6 +161,11 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("status.error", "Hata: {error}");
     m.insert("empty.title", "Yüklü Belge Yok");
     m.insert("empty.desc", "Okumaya başlamak için 'PDF Aç' seçeneğine tıklayın veya bir PDF dosyasını buraya sürükleyin.");
+    m.insert("outline.empty", "Bu belgede içindekiler bulunmuyor.");
+    m.insert("recent.title", "Son dosyalar");
+    m.insert("action.retry", "Tekrar dene");
+    m.insert("action.dismiss", "Kapat");
+    m.insert("status.loading", "Yükleniyor");
     m
 }
 

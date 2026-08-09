@@ -11,7 +11,7 @@ BarePDF is an open-source, ultra-lightweight, fast PDF reader built specifically
 
 ## Key Features
 
-- **Ultra-Low Memory Footprint**: Less than 60MB idle RAM usage.
+- **Bounded Memory Use**: Demand-driven rendering and byte-budgeted bitmap caches prevent usage from growing with page count.
 - **Fast Document Opening**: Instant startup and rendering via native PDFium integration.
 - **Offline & Private**: Zero telemetry, zero analytics, zero AI clutter, and no user accounts.
 - **Modern Desktop UX**: Native dark and light theme integration, high-DPI scaling, and responsive controls.

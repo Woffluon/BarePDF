@@ -1,1059 +1,1967 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use barepdf_core::{
-    compute_target_dimensions, default_config_path, selection::SelectionEngine, ContinuousLayout,
-    DocumentId, MemoryBudget, PageCount, PageIndex, PageTextGeometry, PdfError, RequestId,
-    Rotation, TextPosition, TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor,
-    ZoomMode,
+    default_config_path, selection::SelectionEngine, ContinuousLayout, DocumentId, MemoryBudget,
+    PageIndex, PageTextGeometry, PdfError, RequestId, Rotation, TextPosition, TextSelection,
+    ThemeMode, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
-use barepdf_pdf::PdfiumEngine;
+use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform::{ClipboardAccess, FileDialogs};
-use barepdf_platform_windows::{WindowsClipboard, WindowsFileDialogs};
-use barepdf_render::{Priority, RenderCommand, RenderEvent, RenderJob, RenderScheduler};
-use barepdf_ui::{AppWindow, PageItem, SelectionBox, ThumbnailItem};
+use barepdf_platform_windows::{
+    install_file_drop, show_fatal_error, WindowsClipboard, WindowsFileDialogs,
+};
+use barepdf_render::{
+    Priority, RenderCommand, RenderEvent, RenderJob, RenderKind, RenderScheduler,
+};
+use barepdf_ui::{
+    AppWindow, OutlineItem, PageItem, RecentFileItem, SelectionBox, ThemeTokens, ThumbnailItem,
+};
 use lru::LruCache;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{
-    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode,
-    VecModel,
+    ComponentHandle, Image, LogicalSize, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer,
+    SharedString, Timer, TimerMode, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
+const PAGE_IMAGE_BUDGET: usize = 16 * 1024 * 1024;
+const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
+const THUMB_ROW_HEIGHT: f32 = 188.0;
+const PAGE_GAP: f32 = 14.0;
+const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
+const PRESENTATION_MAX_RENDER_EDGE: u32 = 2560;
+
+#[derive(Clone)]
+struct PendingDocument {
+    id: DocumentId,
+    path: PathBuf,
+    started_at: Instant,
+}
+
+#[derive(Clone, PartialEq)]
+struct LayoutKey {
+    width: u32,
+    height: u32,
+    zoom_mode: ZoomMode,
+    dimensions_revision: u64,
+}
+
+#[derive(Clone)]
+struct FlatOutlineEntry {
+    path: Vec<usize>,
+    page_index: Option<u32>,
+    has_children: bool,
+}
+
+struct CachedImage {
+    image: Image,
+    bytes: usize,
+}
+
+struct UiImageCache {
+    entries: LruCache<u32, CachedImage>,
+    bytes: usize,
+    budget: usize,
+}
+
+impl UiImageCache {
+    fn new(budget: usize) -> Self {
+        Self {
+            entries: LruCache::new(NonZeroUsize::new(512).expect("non-zero")),
+            bytes: 0,
+            budget,
+        }
+    }
+
+    fn get(&mut self, page: u32) -> Option<Image> {
+        self.entries.get(&page).map(|cached| cached.image.clone())
+    }
+
+    fn insert(&mut self, page: u32, image: Image, bytes: usize) {
+        if let Some(old) = self.entries.put(page, CachedImage { image, bytes }) {
+            self.bytes = self.bytes.saturating_sub(old.bytes);
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        while self.bytes > self.budget {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.bytes);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
+}
 
 struct AppState {
-    current_doc_id: Option<DocumentId>,
+    active_document: Option<DocumentId>,
+    pending_document: Option<PendingDocument>,
     current_path: Option<PathBuf>,
+    last_failed_path: Option<PathBuf>,
     page_count: u32,
     current_page: u32,
     viewing_mode: ViewingMode,
     zoom_mode: ZoomMode,
     zoom_factor: ZoomFactor,
     rotation: Rotation,
-    first_page_dims: (f32, f32),
-    all_page_dims: Vec<(f32, f32)>,
+    first_page_dimensions: (f32, f32),
+    page_dimensions: Vec<(f32, f32)>,
+    dimensions_revision: u64,
+    next_dimensions_start: u32,
+    dimensions_request_pending: bool,
+    layout: ContinuousLayout,
+    layout_key: Option<LayoutKey>,
+    visible_page_indices: Vec<u32>,
+    generation: u64,
+    first_page_ready: bool,
+    profile_recorded: bool,
+    open_started_at: Option<Instant>,
     window_mode: WindowMode,
     preferences: UserPreferences,
     text_geometries: HashMap<u32, PageTextGeometry>,
     selection: Option<TextSelection>,
     is_selecting: bool,
-    last_click_time: std::time::Instant,
+    last_click_time: Instant,
     click_count: u32,
     last_scroll_y: f32,
+    last_thumbnail_scroll_y: f32,
+    last_user_scroll_at: Option<Instant>,
+    viewport_width: u32,
+    viewport_height: u32,
+    scale_factor: f32,
+    resize_changed_at: Option<Instant>,
+    outline: Vec<OutlineNode>,
+    outline_requested: bool,
+    expanded_outline: HashSet<Vec<usize>>,
+    flat_outline: Vec<FlatOutlineEntry>,
+    page_images: UiImageCache,
+    thumbnail_images: UiImageCache,
+}
+
+impl AppState {
+    fn new(mut preferences: UserPreferences) -> Self {
+        preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
+        preferences.memory_budget_bytes = RAW_BITMAP_BUDGET;
+        Self {
+            active_document: None,
+            pending_document: None,
+            current_path: None,
+            last_failed_path: None,
+            page_count: 0,
+            current_page: 0,
+            viewing_mode: preferences.viewing_mode,
+            zoom_mode: preferences.zoom_mode,
+            zoom_factor: ZoomFactor::default(),
+            rotation: Rotation::Degrees0,
+            first_page_dimensions: (612.0, 792.0),
+            page_dimensions: Vec::new(),
+            dimensions_revision: 0,
+            next_dimensions_start: 1,
+            dimensions_request_pending: false,
+            layout: ContinuousLayout::default(),
+            layout_key: None,
+            visible_page_indices: Vec::new(),
+            generation: 1,
+            first_page_ready: false,
+            profile_recorded: false,
+            open_started_at: None,
+            window_mode: WindowMode::Normal,
+            preferences,
+            text_geometries: HashMap::new(),
+            selection: None,
+            is_selecting: false,
+            last_click_time: Instant::now(),
+            click_count: 0,
+            last_scroll_y: 0.0,
+            last_thumbnail_scroll_y: 0.0,
+            last_user_scroll_at: None,
+            viewport_width: 900,
+            viewport_height: 700,
+            scale_factor: 1.0,
+            resize_changed_at: None,
+            outline: Vec::new(),
+            outline_requested: false,
+            expanded_outline: HashSet::new(),
+            flat_outline: Vec::new(),
+            page_images: UiImageCache::new(PAGE_IMAGE_BUDGET),
+            thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    tracing::info!("Starting BarePDF application...");
 
     let pdf_engine = match PdfiumEngine::new() {
         Ok(engine) => engine,
-        Err(err) => {
-            tracing::warn!("Failed to initialize PDFium engine: {}", err);
-            PdfiumEngine::new()?
+        Err(error) => {
+            show_fatal_error(
+                "BarePDF",
+                &format!("PDF engine could not be loaded.\n\n{error}"),
+            );
+            return Err(Box::new(error));
         }
     };
 
-    let prefs_path = default_config_path();
-    let preferences = UserPreferences::load_from_file(&prefs_path);
+    let preferences_path = default_config_path();
+    let mut preferences = UserPreferences::load_from_file(&preferences_path);
+    let original_recent_count = preferences.recent_files.len();
+    preferences
+        .recent_files
+        .retain(|path| Path::new(path).is_file());
+    preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
+    if original_recent_count != preferences.recent_files.len() {
+        let _ = preferences.save_to_file(&preferences_path);
+    }
+
     let scheduler = Rc::new(RenderScheduler::spawn(
         pdf_engine,
-        MemoryBudget::new(preferences.memory_budget_bytes),
+        MemoryBudget::new(RAW_BITMAP_BUDGET),
     ));
     let dialogs = Arc::new(WindowsFileDialogs);
     let clipboard = Arc::new(WindowsClipboard::new());
+    let window = AppWindow::new()?;
+    window.window().set_size(LogicalSize::new(
+        preferences.last_window_width.max(760) as f32,
+        preferences.last_window_height.max(520) as f32,
+    ));
 
-    let main_window = AppWindow::new()?;
-    main_window.set_sidebar_visible(preferences.sidebar_visible);
-    main_window.set_view_mode_label(SharedString::from(match preferences.viewing_mode {
-        ViewingMode::ContinuousVertical => "Continuous",
-        ViewingMode::SinglePage => "Single Page",
-        _ => "Continuous",
-    }));
+    let state = Rc::new(RefCell::new(AppState::new(preferences)));
+    initialize_window(&window, &state.borrow());
+    apply_theme(&window, state.borrow().preferences.theme);
+    update_ui_strings(&window, state.borrow().preferences.language.resolve());
+    refresh_recent_files(&mut state.borrow_mut(), &window, &preferences_path);
 
-    let state = Rc::new(RefCell::new(AppState {
-        current_doc_id: None,
-        current_path: None,
-        page_count: 0,
-        current_page: 0,
-        viewing_mode: preferences.viewing_mode,
-        zoom_mode: preferences.zoom_mode,
-        zoom_factor: ZoomFactor::default(),
-        rotation: Rotation::Degrees0,
-        first_page_dims: (612.0, 792.0),
-        all_page_dims: Vec::new(),
-        window_mode: WindowMode::Normal,
-        preferences: preferences.clone(),
-        text_geometries: HashMap::new(),
-        selection: None,
-        is_selecting: false,
-        last_click_time: std::time::Instant::now(),
-        click_count: 0,
-        last_scroll_y: 0.0,
-    }));
+    wire_callbacks(
+        &window,
+        &state,
+        &scheduler,
+        dialogs,
+        clipboard,
+        &preferences_path,
+    );
 
-    update_ui_strings(&main_window, state.borrow().preferences.language.resolve());
-
-    // Check CLI argument for PDF path
-    let args: Vec<String> = env::args().collect();
-    if args.len() > 1 {
-        let initial_path = PathBuf::from(&args[1]);
-        if initial_path.exists() {
-            open_pdf_document(initial_path, None, &state, &scheduler, &main_window);
+    if let Some(argument) = env::args_os().nth(1) {
+        let path = PathBuf::from(argument);
+        if path.is_file() {
+            begin_open(path, None, &state, &scheduler, &window);
         }
     }
 
-    // Connect Slint Callbacks
+    let timer = Timer::default();
+    start_event_timer(&timer, &window, &state, &scheduler, &preferences_path, None);
+    window.run()?;
+
+    let scale = window.window().scale_factor().max(0.1);
+    let size = window.window().size();
+    let mut app = state.borrow_mut();
+    app.preferences.last_window_width = ((size.width as f32) / scale).round() as u32;
+    app.preferences.last_window_height = ((size.height as f32) / scale).round() as u32;
+    let _ = app.preferences.save_to_file(&preferences_path);
+    Ok(())
+}
+
+fn initialize_window(window: &AppWindow, state: &AppState) {
+    window.set_sidebar_visible(state.preferences.sidebar_visible);
+    window.set_current_language(language_index(state.preferences.language));
+    window.set_view_mode(view_mode_index(state.viewing_mode));
+    window.set_view_mode_label(SharedString::from(view_mode_label(
+        state.viewing_mode,
+        state.preferences.language.resolve(),
+    )));
+    window.set_status_text(SharedString::from(barepdf_i18n::t(
+        state.preferences.language.resolve(),
+        "status.ready",
+    )));
+}
+
+fn wire_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    dialogs: Arc<WindowsFileDialogs>,
+    clipboard: Arc<WindowsClipboard>,
+    preferences_path: &Path,
+) {
+    let weak = window.as_weak();
     let state_open = state.clone();
     let scheduler_open = scheduler.clone();
-    let dialogs_open = dialogs.clone();
-    let window_open = main_window.as_weak();
-    main_window.on_request_open_file(move || {
-        if let Some(path) = dialogs_open.pick_file() {
-            if let Some(win) = window_open.upgrade() {
-                open_pdf_document(path, None, &state_open, &scheduler_open, &win);
-            }
+    window.on_request_open_file(move || {
+        if let (Some(path), Some(window)) = (dialogs.pick_file(), weak.upgrade()) {
+            begin_open(path, None, &state_open, &scheduler_open, &window);
         }
     });
 
-    let state_next = state.clone();
-    let scheduler_next = scheduler.clone();
-    let window_next = main_window.as_weak();
-    main_window.on_request_next_page(move || {
-        let mut s = state_next.borrow_mut();
-        if s.current_page + 1 < s.page_count {
-            s.current_page += 1;
-            if let Some(win) = window_next.upgrade() {
-                update_page_view(&s, &scheduler_next, &win);
-                request_thumbnails(&s, &scheduler_next);
-            }
+    connect_navigation_callbacks(window, state, scheduler);
+    connect_zoom_callbacks(window, state, scheduler, preferences_path);
+    connect_view_callbacks(window, state, scheduler, preferences_path);
+    connect_selection_callbacks(window, state, scheduler, clipboard);
+
+    let weak = window.as_weak();
+    let state_password = state.clone();
+    let scheduler_password = scheduler.clone();
+    window.on_request_unlock_password(move |password| {
+        let path = state_password
+            .borrow()
+            .pending_document
+            .as_ref()
+            .map(|pending| pending.path.clone());
+        if let (Some(path), Some(window)) = (path, weak.upgrade()) {
+            begin_open(
+                path,
+                Some(password.to_string()),
+                &state_password,
+                &scheduler_password,
+                &window,
+            );
         }
     });
 
-    let state_prev = state.clone();
-    let scheduler_prev = scheduler.clone();
-    let window_prev = main_window.as_weak();
-    main_window.on_request_prev_page(move || {
-        let mut s = state_prev.borrow_mut();
-        if s.current_page > 0 {
-            s.current_page -= 1;
-            if let Some(win) = window_prev.upgrade() {
-                update_page_view(&s, &scheduler_prev, &win);
-                request_thumbnails(&s, &scheduler_prev);
-            }
-        }
-    });
-
-    let state_sel = state.clone();
-    let scheduler_sel = scheduler.clone();
-    let window_sel = main_window.as_weak();
-    main_window.on_request_select_page(move |page_idx| {
-        let mut s = state_sel.borrow_mut();
-        if page_idx >= 0 && (page_idx as u32) < s.page_count {
-            s.current_page = page_idx as u32;
-            if let Some(win) = window_sel.upgrade() {
-                let layout =
-                    ContinuousLayout::compute(&s.all_page_dims, 1100, 800, s.zoom_mode, 1.0, 12.0);
-                if let Some(box_info) = layout.pages.get(page_idx as usize) {
-                    win.set_current_scroll_y(-box_info.y_offset);
-                }
-                update_page_view(&s, &scheduler_sel, &win);
-                request_thumbnails(&s, &scheduler_sel);
-            }
-        }
-    });
-
-    let state_vm = state.clone();
-    let scheduler_vm = scheduler.clone();
-    let window_vm = main_window.as_weak();
-    let prefs_path_vm = prefs_path.clone();
-    main_window.on_request_toggle_view_mode(move || {
-        let mut s = state_vm.borrow_mut();
-        s.viewing_mode = match s.viewing_mode {
-            ViewingMode::ContinuousVertical => ViewingMode::SinglePage,
-            _ => ViewingMode::ContinuousVertical,
-        };
-        s.preferences.viewing_mode = s.viewing_mode;
-        let _ = s.preferences.save_to_file(&prefs_path_vm);
-
-        if let Some(win) = window_vm.upgrade() {
-            win.set_view_mode_label(SharedString::from(match s.viewing_mode {
-                ViewingMode::ContinuousVertical => "Continuous",
-                ViewingMode::SinglePage => "Single Page",
-                _ => "Continuous",
-            }));
-            update_page_view(&s, &scheduler_vm, &win);
-            request_thumbnails(&s, &scheduler_vm);
-        }
-    });
-
-    let state_zi = state.clone();
-    let scheduler_zi = scheduler.clone();
-    let window_zi = main_window.as_weak();
-    main_window.on_request_zoom_in(move || {
-        let mut s = state_zi.borrow_mut();
-        s.zoom_factor = s.zoom_factor.zoom_in();
-        s.zoom_mode = ZoomMode::Custom(s.zoom_factor);
-        if let Some(win) = window_zi.upgrade() {
-            update_page_view(&s, &scheduler_zi, &win);
-        }
-    });
-
-    let state_zo = state.clone();
-    let scheduler_zo = scheduler.clone();
-    let window_zo = main_window.as_weak();
-    main_window.on_request_zoom_out(move || {
-        let mut s = state_zo.borrow_mut();
-        s.zoom_factor = s.zoom_factor.zoom_out();
-        s.zoom_mode = ZoomMode::Custom(s.zoom_factor);
-        if let Some(win) = window_zo.upgrade() {
-            update_page_view(&s, &scheduler_zo, &win);
-        }
-    });
-
-    let state_fw = state.clone();
-    let scheduler_fw = scheduler.clone();
-    let window_fw = main_window.as_weak();
-    main_window.on_request_fit_width(move || {
-        let mut s = state_fw.borrow_mut();
-        s.zoom_mode = ZoomMode::FitWidth;
-        if let Some(win) = window_fw.upgrade() {
-            update_page_view(&s, &scheduler_fw, &win);
-        }
-    });
-
-    let state_fp = state.clone();
-    let scheduler_fp = scheduler.clone();
-    let window_fp = main_window.as_weak();
-    main_window.on_request_fit_page(move || {
-        let mut s = state_fp.borrow_mut();
-        s.zoom_mode = ZoomMode::FitPage;
-        if let Some(win) = window_fp.upgrade() {
-            update_page_view(&s, &scheduler_fp, &win);
-        }
-    });
-
-    let state_side = state.clone();
-    let window_side = main_window.as_weak();
-    let prefs_path_side = prefs_path.clone();
-    main_window.on_request_toggle_sidebar(move || {
-        if let Some(win) = window_side.upgrade() {
-            let next_val = !win.get_sidebar_visible();
-            win.set_sidebar_visible(next_val);
-            let mut s = state_side.borrow_mut();
-            s.preferences.sidebar_visible = next_val;
-            let _ = s.preferences.save_to_file(&prefs_path_side);
-        }
-    });
-
-    let state_fs = state.clone();
-    let window_fs = main_window.as_weak();
-    main_window.on_request_toggle_fullscreen(move || {
-        if let Some(win) = window_fs.upgrade() {
-            let mut s = state_fs.borrow_mut();
-            if s.window_mode == WindowMode::FullScreen {
-                s.window_mode = WindowMode::Normal;
-                win.set_window_mode(0);
-                win.window().set_fullscreen(false);
-            } else {
-                s.window_mode = WindowMode::FullScreen;
-                win.set_window_mode(1);
-                win.window().set_fullscreen(true);
-            }
-        }
-    });
-
-    let state_pres = state.clone();
-    let window_pres = main_window.as_weak();
-    main_window.on_request_presentation_mode(move || {
-        if let Some(win) = window_pres.upgrade() {
-            let mut s = state_pres.borrow_mut();
-            s.window_mode = WindowMode::Presentation;
-            win.set_window_mode(2);
-            win.window().set_fullscreen(true);
-        }
-    });
-
-    let state_exit = state.clone();
-    let window_exit = main_window.as_weak();
-    main_window.on_request_exit_special_mode(move || {
-        if let Some(win) = window_exit.upgrade() {
-            let mut s = state_exit.borrow_mut();
-            if s.window_mode != WindowMode::Normal {
-                s.window_mode = WindowMode::Normal;
-                win.set_window_mode(0);
-                win.window().set_fullscreen(false);
-            }
-        }
-    });
-
-    let state_pwd = state.clone();
-    let scheduler_pwd = scheduler.clone();
-    let window_pwd = main_window.as_weak();
-    main_window.on_request_unlock_password(move |password| {
-        let s = state_pwd.borrow();
-        if let Some(ref path) = s.current_path {
-            if let Some(win) = window_pwd.upgrade() {
-                win.set_password_required(false);
-                open_pdf_document(
-                    path.clone(),
-                    Some(password.to_string()),
-                    &state_pwd,
-                    &scheduler_pwd,
-                    &win,
-                );
-            }
-        }
-    });
-
-    // Language switching handler
-    let state_lang = state.clone();
-    let window_lang = main_window.as_weak();
-    let prefs_path_lang = prefs_path.clone();
-    main_window.on_request_change_language(move |lang_idx| {
-        let mut s = state_lang.borrow_mut();
-        let new_lang = match lang_idx {
+    let weak = window.as_weak();
+    let state_language = state.clone();
+    let preferences_path_language = preferences_path.to_path_buf();
+    window.on_request_change_language(move |index| {
+        let language = match index {
             1 => Language::English,
             2 => Language::Turkish,
             _ => Language::System,
         };
-        s.preferences.language = new_lang;
-        let _ = s.preferences.save_to_file(&prefs_path_lang);
-        if let Some(win) = window_lang.upgrade() {
-            win.set_current_language(lang_idx);
-            update_ui_strings(&win, new_lang.resolve());
+        let mut app = state_language.borrow_mut();
+        app.preferences.language = language;
+        let _ = app.preferences.save_to_file(&preferences_path_language);
+        if let Some(window) = weak.upgrade() {
+            window.set_current_language(index);
+            window.set_view_mode_label(SharedString::from(view_mode_label(
+                app.viewing_mode,
+                language.resolve(),
+            )));
+            update_ui_strings(&window, language.resolve());
         }
     });
 
-    // Clipboard copy handler
-    let state_copy = state.clone();
-    let clipboard_copy = clipboard.clone();
-    main_window.on_request_copy(move || {
-        let s = state_copy.borrow();
-        if let Some(ref sel) = s.selection {
-            let geoms: Vec<PageTextGeometry> = s.text_geometries.values().cloned().collect();
-            let text = SelectionEngine::get_selected_text(sel, &geoms);
-            if !text.is_empty() {
-                let _ = clipboard_copy.set_text(&text);
-                tracing::info!("Copied {} chars to clipboard", text.len());
-            }
+    let weak = window.as_weak();
+    let state_theme = state.clone();
+    let preferences_path_theme = preferences_path.to_path_buf();
+    window.on_request_change_theme(move |index| {
+        let theme = theme_from_index(index);
+        let mut app = state_theme.borrow_mut();
+        app.preferences.theme = theme;
+        let _ = app.preferences.save_to_file(&preferences_path_theme);
+        if let Some(window) = weak.upgrade() {
+            apply_theme(&window, theme);
         }
     });
 
-    // Select all handler
-    let state_sa = state.clone();
-    let window_sa = main_window.as_weak();
-    main_window.on_request_select_all(move || {
-        let mut s = state_sa.borrow_mut();
-        if s.page_count > 0 {
-            let first = PageIndex::zero();
-            let last = PageIndex::from_raw(s.page_count - 1);
-            let end_char = s
-                .text_geometries
-                .get(&(s.page_count - 1))
-                .map(|g| g.glyphs.len() as u32)
-                .unwrap_or(10000);
-
-            s.selection = Some(TextSelection::new(
-                TextPosition::new(first, 0),
-                TextPosition::new(last, end_char),
-            ));
-
-            if let Some(win) = window_sa.upgrade() {
-                win.window().request_redraw();
-            }
-        }
-    });
-
-    // Memory-bounded LRU caches for page and thumbnail bitmaps
-    let page_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(50).unwrap(),
-    )));
-    let thumb_bitmaps = Rc::new(RefCell::new(LruCache::<u32, Image>::new(
-        NonZeroUsize::new(200).unwrap(),
-    )));
-
-    // Mouse pointer handlers for text selection
-    let state_pd = state.clone();
-    let window_pd = main_window.as_weak();
-    let page_bitmaps_pd = page_bitmaps.clone();
-    let thumb_bitmaps_pd = thumb_bitmaps.clone();
-    main_window.on_pointer_down(move |page_idx_raw, mx, my, _count| {
-        let mut s = state_pd.borrow_mut();
-        if page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
-            return;
-        }
-
-        let p_idx = PageIndex::from_raw(page_idx_raw as u32);
-        let (pw, ph) = s
-            .all_page_dims
-            .get(p_idx.get() as usize)
-            .copied()
-            .unwrap_or(s.first_page_dims);
-
-        let dims = compute_target_dimensions(pw, ph, 1100, 800, s.zoom_mode, 1.0);
-        let scale_x = pw / (dims.width as f32).max(1.0);
-        let scale_y = ph / (dims.height as f32).max(1.0);
-
-        let pdf_x = mx * scale_x;
-        let pdf_y = ph - (my * scale_y);
-
-        let now = std::time::Instant::now();
-        if now.duration_since(s.last_click_time).as_millis() < 400 {
-            s.click_count += 1;
-        } else {
-            s.click_count = 1;
-        }
-        s.last_click_time = now;
-
-        if let Some(geom) = s.text_geometries.get(&p_idx.get()) {
-            let char_idx = SelectionEngine::hit_test(geom, pdf_x, pdf_y);
-            let click = s.click_count;
-            if click == 2 {
-                s.selection = Some(SelectionEngine::select_word(geom, p_idx, char_idx));
-            } else if click >= 3 {
-                s.selection = Some(SelectionEngine::select_line(geom, p_idx, char_idx));
-            } else {
-                let pos = TextPosition::new(p_idx, char_idx);
-                s.selection = Some(TextSelection::new(pos, pos));
-                s.is_selecting = true;
-            }
-        } else {
-            let pos = TextPosition::new(p_idx, 0);
-            s.selection = Some(TextSelection::new(pos, pos));
-            s.is_selecting = true;
-        }
-
-        if let Some(win) = window_pd.upgrade() {
-            let has_sel = s
-                .selection
-                .as_ref()
-                .map(|sel| !sel.is_empty())
-                .unwrap_or(false);
-            win.set_has_selection(has_sel);
-            refresh_slint_models(
-                &s,
-                &win,
-                &mut page_bitmaps_pd.borrow_mut(),
-                &mut thumb_bitmaps_pd.borrow_mut(),
+    let weak = window.as_weak();
+    let state_recent = state.clone();
+    let scheduler_recent = scheduler.clone();
+    window.on_request_open_recent(move |path| {
+        if let Some(window) = weak.upgrade() {
+            begin_open(
+                PathBuf::from(path.as_str()),
+                None,
+                &state_recent,
+                &scheduler_recent,
+                &window,
             );
         }
     });
 
-    let state_pm = state.clone();
-    let window_pm = main_window.as_weak();
-    let page_bitmaps_pm = page_bitmaps.clone();
-    let thumb_bitmaps_pm = thumb_bitmaps.clone();
-    main_window.on_pointer_move(move |page_idx_raw, mx, my| {
-        let mut s = state_pm.borrow_mut();
-        if !s.is_selecting || page_idx_raw < 0 || (page_idx_raw as u32) >= s.page_count {
+    let weak = window.as_weak();
+    let state_drop = state.clone();
+    let scheduler_drop = scheduler.clone();
+    window.on_request_drop(move |transfer| {
+        let Some(window) = weak.upgrade() else {
             return;
-        }
-
-        let p_idx = PageIndex::from_raw(page_idx_raw as u32);
-        let (pw, ph) = s
-            .all_page_dims
-            .get(p_idx.get() as usize)
-            .copied()
-            .unwrap_or(s.first_page_dims);
-
-        let dims = compute_target_dimensions(pw, ph, 1100, 800, s.zoom_mode, 1.0);
-        let scale_x = pw / (dims.width as f32).max(1.0);
-        let scale_y = ph / (dims.height as f32).max(1.0);
-
-        let pdf_x = mx * scale_x;
-        let pdf_y = ph - (my * scale_y);
-
-        let char_idx = if let Some(geom) = s.text_geometries.get(&p_idx.get()) {
-            SelectionEngine::hit_test(geom, pdf_x, pdf_y)
-        } else {
-            0
         };
-
-        if let Some(ref mut sel) = s.selection {
-            sel.focus = TextPosition::new(p_idx, char_idx);
-        }
-
-        if let Some(win) = window_pm.upgrade() {
-            let has_sel = s
-                .selection
-                .as_ref()
-                .map(|sel| !sel.is_empty())
-                .unwrap_or(false);
-            win.set_has_selection(has_sel);
-            refresh_slint_models(
-                &s,
-                &win,
-                &mut page_bitmaps_pm.borrow_mut(),
-                &mut thumb_bitmaps_pm.borrow_mut(),
-            );
+        match transfer
+            .plain_text()
+            .ok()
+            .and_then(|text| parse_drop_paths(text.as_str()))
+        {
+            Some(Ok(path)) => begin_open(path, None, &state_drop, &scheduler_drop, &window),
+            Some(Err(message)) => show_banner(&window, message, false),
+            None => show_banner(&window, "The dropped item is not a PDF file.", false),
         }
     });
 
-    let state_pu = state.clone();
-    let window_pu = main_window.as_weak();
-    let page_bitmaps_pu = page_bitmaps.clone();
-    let thumb_bitmaps_pu = thumb_bitmaps.clone();
-    main_window.on_pointer_up(move |_page_idx_raw, _mx, _my| {
-        let mut s = state_pu.borrow_mut();
-        s.is_selecting = false;
-        if let Some(win) = window_pu.upgrade() {
-            let has_sel = s
-                .selection
-                .as_ref()
-                .map(|sel| !sel.is_empty())
-                .unwrap_or(false);
-            win.set_has_selection(has_sel);
-            refresh_slint_models(
-                &s,
-                &win,
-                &mut page_bitmaps_pu.borrow_mut(),
-                &mut thumb_bitmaps_pu.borrow_mut(),
-            );
+    let weak = window.as_weak();
+    window.on_request_dismiss_banner(move || {
+        if let Some(window) = weak.upgrade() {
+            window.set_banner_visible(false);
         }
     });
 
-    // Event Loop Timer (~60 FPS)
-    let timer = Timer::default();
-    let scheduler_tick = scheduler.clone();
-    let window_tick = main_window.as_weak();
-    let state_tick = state.clone();
-
-    let page_bitmaps_tick = page_bitmaps.clone();
-    let thumb_bitmaps_tick = thumb_bitmaps.clone();
-
-    timer.start(
-        TimerMode::Repeated,
-        std::time::Duration::from_millis(16),
-        move || {
-            if let Some(win) = window_tick.upgrade() {
-                let current_scroll_y = win.get_current_scroll_y();
-                let mut scroll_changed = false;
-                {
-                    let mut s = state_tick.borrow_mut();
-                    if (current_scroll_y - s.last_scroll_y).abs() > 15.0 && s.page_count > 0 {
-                        s.last_scroll_y = current_scroll_y;
-                        let viewport_top = -current_scroll_y;
-                        let layout = ContinuousLayout::compute(
-                            &s.all_page_dims,
-                            1100,
-                            800,
-                            s.zoom_mode,
-                            1.0,
-                            12.0,
-                        );
-                        let primary = layout.primary_page(viewport_top.max(0.0), 800.0);
-                        if primary.get() != s.current_page {
-                            s.current_page = primary.get();
-                            win.set_current_page_str(SharedString::from(
-                                (s.current_page + 1).to_string(),
-                            ));
-                        }
-                        scroll_changed = true;
-                    }
-                }
-                if scroll_changed {
-                    let s = state_tick.borrow();
-                    update_page_view(&s, &scheduler_tick, &win);
-                    request_thumbnails(&s, &scheduler_tick);
-                }
-            }
-
-            while let Some(event) = scheduler_tick.try_recv_event() {
-                if let Some(win) = window_tick.upgrade() {
-                    match event {
-                        RenderEvent::DocumentOpened {
-                            document_id,
-                            page_count,
-                            first_page_dimensions,
-                            all_page_dimensions,
-                        } => {
-                            page_bitmaps_tick.borrow_mut().clear();
-                            thumb_bitmaps_tick.borrow_mut().clear();
-
-                            let mut s = state_tick.borrow_mut();
-                            s.current_doc_id = Some(document_id);
-                            s.page_count = page_count;
-                            s.current_page = 0;
-                            s.first_page_dims = first_page_dimensions;
-                            s.all_page_dims = all_page_dimensions;
-                            s.text_geometries.clear();
-                            s.selection = None;
-
-                            let doc_name = s
-                                .current_path
-                                .as_ref()
-                                .and_then(|p| p.file_name())
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("document.pdf");
-
-                            win.set_has_document(true);
-                            win.set_has_selection(false);
-                            win.set_password_required(false);
-                            win.set_document_title(SharedString::from(doc_name));
-                            win.set_total_pages_str(SharedString::from(page_count.to_string()));
-                            win.set_status_text(SharedString::from(format!(
-                                "Opened {} ({} pages)",
-                                doc_name, page_count
-                            )));
-
-                            update_page_view(&s, &scheduler_tick, &win);
-                            request_thumbnails(&s, &scheduler_tick);
-                        }
-                        RenderEvent::PageRendered {
-                            request_id: _,
-                            generation: _,
-                            document_id: _,
-                            page_index,
-                            bitmap,
-                        } => {
-                            let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                                &bitmap.pixels,
-                                bitmap.width,
-                                bitmap.height,
-                            );
-                            let slint_img = Image::from_rgba8(buffer);
-
-                            if bitmap.width <= 200 {
-                                thumb_bitmaps_tick
-                                    .borrow_mut()
-                                    .put(page_index.get(), slint_img);
-                            } else {
-                                page_bitmaps_tick
-                                    .borrow_mut()
-                                    .put(page_index.get(), slint_img.clone());
-
-                                let s = state_tick.borrow();
-                                if page_index.get() == s.current_page {
-                                    win.set_page_bitmap(slint_img);
-                                }
-                            }
-
-                            let s = state_tick.borrow();
-                            refresh_slint_models(
-                                &s,
-                                &win,
-                                &mut page_bitmaps_tick.borrow_mut(),
-                                &mut thumb_bitmaps_tick.borrow_mut(),
-                            );
-                        }
-                        RenderEvent::TextGeometryFetched {
-                            document_id: _,
-                            page_index,
-                            geometry,
-                        } => {
-                            let mut s = state_tick.borrow_mut();
-                            s.text_geometries.insert(page_index.get(), geometry);
-
-                            refresh_slint_models(
-                                &s,
-                                &win,
-                                &mut page_bitmaps_tick.borrow_mut(),
-                                &mut thumb_bitmaps_tick.borrow_mut(),
-                            );
-                        }
-                        RenderEvent::Error {
-                            request_id: _,
-                            error,
-                        } => match error {
-                            PdfError::PasswordRequired | PdfError::IncorrectPassword => {
-                                let s = state_tick.borrow();
-                                if let Some(ref path) = s.current_path {
-                                    win.set_password_required(true);
-                                    win.set_protected_file_name(SharedString::from(
-                                        path.file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("document.pdf"),
-                                    ));
-                                }
-                            }
-                            other => {
-                                win.set_status_text(SharedString::from(format!("Error: {other}")));
-                            }
-                        },
-                        _ => {}
-                    }
-                }
-            }
-        },
-    );
-
-    main_window.run()?;
-    Ok(())
+    let weak = window.as_weak();
+    let state_retry = state.clone();
+    let scheduler_retry = scheduler.clone();
+    window.on_request_retry(move || {
+        let path = state_retry.borrow().last_failed_path.clone();
+        if let (Some(path), Some(window)) = (path, weak.upgrade()) {
+            begin_open(path, None, &state_retry, &scheduler_retry, &window);
+        }
+    });
 }
 
-fn open_pdf_document(
+fn connect_navigation_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+) {
+    let connect = |register: fn(&AppWindow, Box<dyn Fn()>), target: NavigationTarget| {
+        let weak = window.as_weak();
+        let state = state.clone();
+        let scheduler = scheduler.clone();
+        register(
+            window,
+            Box::new(move || {
+                if let Some(window) = weak.upgrade() {
+                    let page = {
+                        let app = state.borrow();
+                        match target {
+                            NavigationTarget::Previous => app.current_page.saturating_sub(1),
+                            NavigationTarget::Next => {
+                                (app.current_page + 1).min(app.page_count.saturating_sub(1))
+                            }
+                            NavigationTarget::First => 0,
+                            NavigationTarget::Last => app.page_count.saturating_sub(1),
+                        }
+                    };
+                    navigate_to_page(page, &state, &scheduler, &window);
+                }
+            }),
+        );
+    };
+    connect(
+        |w, cb| w.on_request_prev_page(cb),
+        NavigationTarget::Previous,
+    );
+    connect(|w, cb| w.on_request_next_page(cb), NavigationTarget::Next);
+    connect(|w, cb| w.on_request_first_page(cb), NavigationTarget::First);
+    connect(|w, cb| w.on_request_last_page(cb), NavigationTarget::Last);
+
+    let weak = window.as_weak();
+    let state_select = state.clone();
+    let scheduler_select = scheduler.clone();
+    window.on_request_select_page(move |page| {
+        if page >= 0 {
+            if let Some(window) = weak.upgrade() {
+                navigate_to_page(page as u32, &state_select, &scheduler_select, &window);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_entry = state.clone();
+    let scheduler_entry = scheduler.clone();
+    window.on_request_go_to_page(move |text| {
+        let count = state_entry.borrow().page_count;
+        if let Some(page) = validated_page_input(text.as_str(), count) {
+            if let Some(window) = weak.upgrade() {
+                navigate_to_page(page, &state_entry, &scheduler_entry, &window);
+            }
+        } else if let Some(window) = weak.upgrade() {
+            let current = state_entry.borrow().current_page + 1;
+            window.set_current_page_str(SharedString::from(current.to_string()));
+        }
+    });
+}
+
+#[derive(Clone, Copy)]
+enum NavigationTarget {
+    Previous,
+    Next,
+    First,
+    Last,
+}
+
+fn connect_zoom_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    preferences_path: &Path,
+) {
+    let weak = window.as_weak();
+    let state_in = state.clone();
+    let scheduler_in = scheduler.clone();
+    let preferences_path_in = preferences_path.to_path_buf();
+    window.on_request_zoom_in(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_in.borrow_mut();
+            sync_effective_zoom(&mut app);
+            app.zoom_factor = app.zoom_factor.zoom_in();
+            app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+            save_zoom_preference(&mut app, &preferences_path_in);
+            invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_out = state.clone();
+    let scheduler_out = scheduler.clone();
+    let preferences_path_out = preferences_path.to_path_buf();
+    window.on_request_zoom_out(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_out.borrow_mut();
+            sync_effective_zoom(&mut app);
+            app.zoom_factor = app.zoom_factor.zoom_out();
+            app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+            save_zoom_preference(&mut app, &preferences_path_out);
+            invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
+        }
+    });
+
+    connect_zoom_mode(
+        window,
+        state,
+        scheduler,
+        preferences_path,
+        ZoomMode::FitWidth,
+        |w, cb| w.on_request_fit_width(cb),
+    );
+    connect_zoom_mode(
+        window,
+        state,
+        scheduler,
+        preferences_path,
+        ZoomMode::FitPage,
+        |w, cb| w.on_request_fit_page(cb),
+    );
+    connect_zoom_mode(
+        window,
+        state,
+        scheduler,
+        preferences_path,
+        ZoomMode::ActualSize,
+        |w, cb| w.on_request_actual_size(cb),
+    );
+}
+
+fn connect_zoom_mode<F>(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    preferences_path: &Path,
+    mode: ZoomMode,
+    register: F,
+) where
+    F: FnOnce(&AppWindow, Box<dyn Fn()>),
+{
+    let weak = window.as_weak();
+    let state = state.clone();
+    let scheduler = scheduler.clone();
+    let preferences_path = preferences_path.to_path_buf();
+    register(
+        window,
+        Box::new(move || {
+            if let Some(window) = weak.upgrade() {
+                let mut app = state.borrow_mut();
+                app.zoom_mode = mode;
+                save_zoom_preference(&mut app, &preferences_path);
+                invalidate_layout_and_render(&mut app, &scheduler, &window, true);
+            }
+        }),
+    );
+}
+
+fn connect_view_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    preferences_path: &Path,
+) {
+    let weak = window.as_weak();
+    let state_view = state.clone();
+    let scheduler_view = scheduler.clone();
+    let preferences_path_view = preferences_path.to_path_buf();
+    window.on_request_toggle_view_mode(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_view.borrow_mut();
+            app.viewing_mode = match app.viewing_mode {
+                ViewingMode::ContinuousVertical => ViewingMode::SinglePage,
+                _ => ViewingMode::ContinuousVertical,
+            };
+            app.preferences.viewing_mode = app.viewing_mode;
+            let _ = app.preferences.save_to_file(&preferences_path_view);
+            window.set_view_mode(view_mode_index(app.viewing_mode));
+            window.set_view_mode_label(SharedString::from(view_mode_label(
+                app.viewing_mode,
+                app.preferences.language.resolve(),
+            )));
+            navigate_to_page_inner(app.current_page, &mut app, &scheduler_view, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_sidebar = state.clone();
+    let scheduler_sidebar = scheduler.clone();
+    let preferences_path_sidebar = preferences_path.to_path_buf();
+    window.on_request_toggle_sidebar(move || {
+        if let Some(window) = weak.upgrade() {
+            let visible = !window.get_sidebar_visible();
+            window.set_sidebar_visible(visible);
+            let mut app = state_sidebar.borrow_mut();
+            app.preferences.sidebar_visible = visible;
+            app.layout_key = None;
+            let _ = app.preferences.save_to_file(&preferences_path_sidebar);
+            if visible {
+                request_visible_thumbnails(&app, &scheduler_sidebar, &window);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_tab = state.clone();
+    let scheduler_tab = scheduler.clone();
+    window.on_request_sidebar_tab(move |tab| {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_tab.borrow_mut();
+            if tab == 1 && !app.outline_requested {
+                if let Some(document_id) = app.active_document {
+                    app.outline_requested =
+                        scheduler_tab.send_command(RenderCommand::FetchOutline { document_id });
+                }
+            } else if tab == 0 {
+                request_visible_thumbnails(&app, &scheduler_tab, &window);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_outline = state.clone();
+    let scheduler_outline = scheduler.clone();
+    window.on_request_toggle_outline(move |index| {
+        let mut target = None;
+        {
+            let mut app = state_outline.borrow_mut();
+            if let Some(entry) = app.flat_outline.get(index as usize).cloned() {
+                if entry.has_children {
+                    if !app.expanded_outline.remove(&entry.path) {
+                        app.expanded_outline.insert(entry.path.clone());
+                    }
+                    if let Some(window) = weak.upgrade() {
+                        refresh_outline_model(&mut app, &window);
+                    }
+                }
+                target = entry.page_index;
+            }
+        }
+        if let (Some(page), Some(window)) = (target, weak.upgrade()) {
+            navigate_to_page(page, &state_outline, &scheduler_outline, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_fullscreen = state.clone();
+    window.on_request_toggle_fullscreen(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_fullscreen.borrow_mut();
+            let enabled = app.window_mode != WindowMode::FullScreen;
+            app.window_mode = if enabled {
+                WindowMode::FullScreen
+            } else {
+                WindowMode::Normal
+            };
+            window.set_window_mode(if enabled { 1 } else { 0 });
+            window.window().set_fullscreen(enabled);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_presentation = state.clone();
+    let scheduler_presentation = scheduler.clone();
+    window.on_request_presentation_mode(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_presentation.borrow_mut();
+            app.window_mode = WindowMode::Presentation;
+            window.set_window_mode(2);
+            window.window().set_fullscreen(true);
+            app.generation = scheduler_presentation.bump_generation();
+            render_visible_pages(&mut app, &scheduler_presentation, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_exit = state.clone();
+    window.on_request_exit_special_mode(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_exit.borrow_mut();
+            if app.window_mode != WindowMode::Normal {
+                app.window_mode = WindowMode::Normal;
+                window.set_window_mode(0);
+                window.window().set_fullscreen(false);
+            }
+        }
+    });
+}
+
+fn connect_selection_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    clipboard: Arc<WindowsClipboard>,
+) {
+    let state_copy = state.clone();
+    window.on_request_copy(move || {
+        let app = state_copy.borrow();
+        if let Some(selection) = app.selection {
+            let geometries: Vec<_> = app.text_geometries.values().cloned().collect();
+            let text = SelectionEngine::get_selected_text(&selection, &geometries);
+            if !text.is_empty() {
+                let _ = clipboard.set_text(&text);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_all = state.clone();
+    window.on_request_select_all(move || {
+        let mut app = state_all.borrow_mut();
+        if app.page_count == 0 {
+            return;
+        }
+        let last_page = app.page_count - 1;
+        let last_character = app
+            .text_geometries
+            .get(&last_page)
+            .map(|geometry| geometry.glyphs.len() as u32)
+            .unwrap_or(u32::MAX);
+        app.selection = Some(TextSelection::new(
+            TextPosition::new(PageIndex::zero(), 0),
+            TextPosition::new(PageIndex::from_raw(last_page), last_character),
+        ));
+        if let Some(window) = weak.upgrade() {
+            window.set_has_selection(true);
+            refresh_page_model(&mut app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_down = state.clone();
+    let scheduler_down = scheduler.clone();
+    window.on_pointer_down(move |page, x, y, _| {
+        if page < 0 {
+            return;
+        }
+        let mut app = state_down.borrow_mut();
+        let page = page as u32;
+        if page >= app.page_count {
+            return;
+        }
+        if !app.text_geometries.contains_key(&page) {
+            if let Some(document_id) = app.active_document {
+                scheduler_down.send_command(RenderCommand::FetchTextGeometry {
+                    document_id,
+                    generation: app.generation,
+                    page_index: PageIndex::from_raw(page),
+                });
+            }
+        }
+        let (pdf_x, pdf_y) = pointer_to_pdf(&app, page, x, y);
+        let now = Instant::now();
+        app.click_count = if now.duration_since(app.last_click_time) < Duration::from_millis(400) {
+            app.click_count + 1
+        } else {
+            1
+        };
+        app.last_click_time = now;
+        if let Some(geometry) = app.text_geometries.get(&page) {
+            let page_index = PageIndex::from_raw(page);
+            let character = SelectionEngine::hit_test(geometry, pdf_x, pdf_y);
+            app.selection = Some(match app.click_count {
+                2 => SelectionEngine::select_word(geometry, page_index, character),
+                count if count >= 3 => {
+                    SelectionEngine::select_line(geometry, page_index, character)
+                }
+                _ => {
+                    app.is_selecting = true;
+                    let position = TextPosition::new(page_index, character);
+                    TextSelection::new(position, position)
+                }
+            });
+        }
+        if let Some(window) = weak.upgrade() {
+            window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
+            refresh_page_model(&mut app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_move = state.clone();
+    window.on_pointer_move(move |page, x, y| {
+        if page < 0 {
+            return;
+        }
+        let mut app = state_move.borrow_mut();
+        if !app.is_selecting {
+            return;
+        }
+        let page = page as u32;
+        let (pdf_x, pdf_y) = pointer_to_pdf(&app, page, x, y);
+        let character = app
+            .text_geometries
+            .get(&page)
+            .map(|geometry| SelectionEngine::hit_test(geometry, pdf_x, pdf_y))
+            .unwrap_or(0);
+        if let Some(selection) = app.selection.as_mut() {
+            selection.focus = TextPosition::new(PageIndex::from_raw(page), character);
+        }
+        if let Some(window) = weak.upgrade() {
+            window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
+            refresh_page_model(&mut app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_up = state.clone();
+    window.on_pointer_up(move |_, _, _| {
+        let mut app = state_up.borrow_mut();
+        app.is_selecting = false;
+        if let Some(window) = weak.upgrade() {
+            window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
+        }
+    });
+}
+
+fn start_event_timer(
+    timer: &Timer,
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    preferences_path: &Path,
+    mut native_drop_receiver: Option<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
+) {
+    let weak = window.as_weak();
+    let state = state.clone();
+    let scheduler = scheduler.clone();
+    let preferences_path = preferences_path.to_path_buf();
+    timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if native_drop_receiver.is_none() {
+            native_drop_receiver = install_native_file_drop(&window);
+        }
+        if let Some(receiver) = native_drop_receiver.as_ref() {
+            while let Ok(paths) = receiver.try_recv() {
+                match paths.as_slice() {
+                    [path] if is_pdf_path(path) => {
+                        begin_open(path.clone(), None, &state, &scheduler, &window)
+                    }
+                    [_] => show_banner(&window, "Only PDF files are supported.", false),
+                    _ => show_banner(&window, "Drop exactly one PDF file.", false),
+                }
+            }
+        }
+        process_view_changes(&window, &state, &scheduler);
+        while let Some(event) = scheduler.try_recv_event() {
+            handle_render_event(event, &window, &state, &scheduler, &preferences_path);
+        }
+    });
+}
+
+fn install_native_file_drop(window: &AppWindow) -> Option<std::sync::mpsc::Receiver<Vec<PathBuf>>> {
+    let window_handle = window.window().window_handle();
+    let handle = window_handle.window_handle().ok()?;
+    match handle.as_raw() {
+        // SAFETY: Slint supplies the live HWND for this window while the event loop owns it.
+        RawWindowHandle::Win32(handle) => unsafe { install_file_drop(handle.hwnd.get() as _) },
+        _ => None,
+    }
+}
+
+fn process_view_changes(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &RenderScheduler,
+) {
+    let width = window.get_pdf_viewport_width().max(240.0).round() as u32;
+    let height = window.get_pdf_viewport_height().max(240.0).round() as u32;
+    let scale = window.window().scale_factor().max(0.5);
+    let scroll = window.get_current_scroll_y();
+    let thumbnail_scroll = window.get_thumbnail_scroll_y();
+    let now = Instant::now();
+
+    let mut app = state.borrow_mut();
+    if width != app.viewport_width
+        || height != app.viewport_height
+        || (scale - app.scale_factor).abs() > 0.01
+    {
+        app.viewport_width = width;
+        app.viewport_height = height;
+        app.scale_factor = scale;
+        app.resize_changed_at = Some(now);
+    }
+
+    if app
+        .resize_changed_at
+        .is_some_and(|changed| now.duration_since(changed) >= Duration::from_millis(100))
+    {
+        app.resize_changed_at = None;
+        invalidate_layout_and_render(&mut app, scheduler, window, true);
+    }
+
+    if app.viewing_mode == ViewingMode::ContinuousVertical
+        && app.page_count > 0
+        && (scroll - app.last_scroll_y).abs() > 12.0
+    {
+        app.last_scroll_y = scroll;
+        app.last_user_scroll_at = Some(now);
+        ensure_layout(&mut app);
+        let page = app
+            .layout
+            .primary_page((-scroll).max(0.0), app.viewport_height as f32)
+            .get();
+        let previous_page = app.current_page;
+        app.current_page = page;
+        window.set_current_page_str(SharedString::from((page + 1).to_string()));
+        request_next_dimensions_batch(&mut app, scheduler);
+        let pages = visible_page_indices(&app, window);
+        if pages != app.visible_page_indices {
+            app.generation = scheduler.bump_generation();
+            render_visible_pages(&mut app, scheduler, window);
+            request_visible_thumbnails(&app, scheduler, window);
+        } else if previous_page != page && !app.text_geometries.contains_key(&page) {
+            if let Some(document_id) = app.active_document {
+                scheduler.send_command(RenderCommand::FetchTextGeometry {
+                    document_id,
+                    generation: app.generation,
+                    page_index: PageIndex::from_raw(page),
+                });
+            }
+        }
+        refresh_thumbnail_selection(&mut app, window, previous_page);
+    }
+
+    if (thumbnail_scroll - app.last_thumbnail_scroll_y).abs() > THUMB_ROW_HEIGHT * 0.5 {
+        app.last_thumbnail_scroll_y = thumbnail_scroll;
+        request_visible_thumbnails(&app, scheduler, window);
+    }
+}
+
+fn handle_render_event(
+    event: RenderEvent,
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &RenderScheduler,
+    preferences_path: &Path,
+) {
+    match event {
+        RenderEvent::DocumentOpened {
+            document_id,
+            page_count,
+            first_page_dimensions,
+        } => {
+            let mut app = state.borrow_mut();
+            let Some(pending) = app.pending_document.as_ref() else {
+                return;
+            };
+            if pending.id != document_id {
+                return;
+            }
+            let pending = app.pending_document.take().expect("pending checked");
+            app.active_document = Some(document_id);
+            app.current_path = Some(pending.path.clone());
+            app.current_page = 0;
+            app.page_count = page_count;
+            app.first_page_dimensions = first_page_dimensions;
+            app.page_dimensions = vec![first_page_dimensions; page_count as usize];
+            app.dimensions_revision += 1;
+            app.next_dimensions_start = 1;
+            app.dimensions_request_pending = false;
+            app.layout_key = None;
+            app.visible_page_indices.clear();
+            app.first_page_ready = false;
+            app.profile_recorded = false;
+            app.open_started_at = Some(pending.started_at);
+            app.outline.clear();
+            app.outline_requested = false;
+            app.expanded_outline.clear();
+            app.flat_outline.clear();
+            app.text_geometries.clear();
+            app.selection = None;
+            app.last_scroll_y = 0.0;
+            app.last_thumbnail_scroll_y = 0.0;
+            app.last_user_scroll_at = None;
+            app.page_images.clear();
+            app.thumbnail_images.clear();
+            app.preferences
+                .add_recent_file(pending.path.to_string_lossy().into_owned());
+            let _ = app.preferences.save_to_file(preferences_path);
+
+            window.set_has_document(true);
+            window.set_password_required(false);
+            window.set_password_error(SharedString::default());
+            window.set_banner_visible(false);
+            window.set_has_selection(false);
+            let file_name = pending
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("document.pdf");
+            window.set_document_title(SharedString::from(file_name));
+            window.set_total_pages_str(SharedString::from(page_count.to_string()));
+            window.set_status_text(SharedString::from(format!(
+                "{} ({} pages)",
+                file_name, page_count
+            )));
+            refresh_recent_files(&mut app, window, preferences_path);
+            refresh_thumbnail_model(&mut app, window);
+            navigate_to_page_inner(0, &mut app, scheduler, window);
+        }
+        RenderEvent::PageRendered {
+            generation,
+            document_id,
+            page_index,
+            kind,
+            bitmap,
+            ..
+        } => {
+            let mut app = state.borrow_mut();
+            if app.active_document != Some(document_id) || app.generation != generation {
+                return;
+            }
+            let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                &bitmap.pixels,
+                bitmap.width,
+                bitmap.height,
+            );
+            let image = Image::from_rgba8(buffer);
+            match kind {
+                RenderKind::Page => {
+                    app.page_images
+                        .insert(page_index.get(), image.clone(), bitmap.pixels.len());
+                    if page_index.get() == app.current_page {
+                        window.set_page_bitmap(image);
+                    }
+                    if !app.first_page_ready {
+                        app.first_page_ready = true;
+                        record_first_page_profile(&mut app);
+                        start_deferred_document_work(&mut app, scheduler, window);
+                        render_visible_pages(&mut app, scheduler, window);
+                    }
+                    refresh_page_model(&mut app, window);
+                }
+                RenderKind::Thumbnail => {
+                    app.thumbnail_images
+                        .insert(page_index.get(), image, bitmap.pixels.len());
+                    refresh_thumbnail_row(&mut app, window, page_index.get());
+                }
+            }
+        }
+        RenderEvent::TextGeometryFetched {
+            document_id,
+            generation,
+            page_index,
+            geometry,
+        } => {
+            let mut app = state.borrow_mut();
+            if app.active_document == Some(document_id) && app.generation == generation {
+                app.text_geometries.insert(page_index.get(), geometry);
+                refresh_page_model(&mut app, window);
+            }
+        }
+        RenderEvent::OutlineFetched {
+            document_id,
+            outline,
+        } => {
+            let mut app = state.borrow_mut();
+            if app.active_document == Some(document_id) {
+                app.outline = outline;
+                for index in 0..app.outline.len() {
+                    if !app.outline[index].children.is_empty() {
+                        app.expanded_outline.insert(vec![index]);
+                    }
+                }
+                refresh_outline_model(&mut app, window);
+            }
+        }
+        RenderEvent::PageDimensionsFetched {
+            document_id,
+            start,
+            dimensions,
+        } => {
+            let mut app = state.borrow_mut();
+            if app.active_document != Some(document_id) {
+                return;
+            }
+            app.dimensions_request_pending = false;
+            if dimensions.is_empty() {
+                return;
+            }
+            let restore_scroll = !user_is_scrolling(app.last_user_scroll_at, Instant::now());
+            ensure_layout(&mut app);
+            let anchor = app.layout.compute_anchor(
+                (-window.get_current_scroll_y()).max(0.0),
+                app.viewport_height as f32,
+            );
+            for (offset, dimensions) in dimensions.iter().copied().enumerate() {
+                if let Some(slot) = app.page_dimensions.get_mut(start as usize + offset) {
+                    *slot = dimensions;
+                }
+            }
+            app.dimensions_revision += 1;
+            app.layout_key = None;
+            ensure_layout(&mut app);
+            if restore_scroll && app.viewing_mode == ViewingMode::ContinuousVertical {
+                let scroll_y = -app.layout.restore_anchor(anchor);
+                set_scroll_position(&mut app, window, scroll_y);
+            }
+            for index in start..start.saturating_add(dimensions.len() as u32) {
+                refresh_thumbnail_row(&mut app, window, index);
+            }
+            app.next_dimensions_start = start + dimensions.len() as u32;
+            if app.current_page.saturating_add(16) >= app.next_dimensions_start {
+                request_next_dimensions_batch(&mut app, scheduler);
+            }
+            app.generation = scheduler.bump_generation();
+            render_visible_pages(&mut app, scheduler, window);
+        }
+        RenderEvent::Error {
+            document_id,
+            generation,
+            error,
+            ..
+        } => {
+            let mut app = state.borrow_mut();
+            if app
+                .pending_document
+                .as_ref()
+                .is_some_and(|pending| pending.id == document_id)
+            {
+                match error {
+                    PdfError::PasswordRequired => {
+                        let name = app
+                            .pending_document
+                            .as_ref()
+                            .and_then(|pending| pending.path.file_name())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("document.pdf");
+                        window.set_protected_file_name(SharedString::from(name));
+                        window.set_password_error(SharedString::default());
+                        window.set_password_required(true);
+                    }
+                    PdfError::IncorrectPassword => {
+                        window.set_password_error(SharedString::from("Incorrect password."));
+                        window.set_password_required(true);
+                    }
+                    other => {
+                        app.last_failed_path =
+                            app.pending_document.take().map(|pending| pending.path);
+                        show_banner(window, format!("Could not open PDF: {other}"), true);
+                    }
+                }
+            } else if app.active_document == Some(document_id)
+                && generation.is_none_or(|generation| generation == app.generation)
+            {
+                show_banner(window, format!("PDF rendering failed: {error}"), true);
+            }
+        }
+        RenderEvent::TextExtracted { .. } => {}
+    }
+}
+
+fn begin_open(
     path: PathBuf,
     password: Option<String>,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
     window: &AppWindow,
 ) {
-    let doc_id = DocumentId::new(rand_id());
-    {
-        let mut s = state.borrow_mut();
-        s.current_path = Some(path.clone());
-        s.current_doc_id = Some(doc_id);
+    if !path.is_file() || !is_pdf_path(&path) {
+        show_banner(window, "Choose an existing PDF file.", false);
+        return;
     }
-
-    window.set_status_text(SharedString::from("Opening document..."));
+    let pending = PendingDocument {
+        id: DocumentId::new(unique_id()),
+        path: path.clone(),
+        started_at: Instant::now(),
+    };
+    let document_id = pending.id;
+    state.borrow_mut().pending_document = Some(pending);
+    window.set_status_text(SharedString::from("Opening document…"));
+    window.set_password_error(SharedString::default());
     scheduler.send_command(RenderCommand::OpenDocument {
-        document_id: doc_id,
+        document_id,
         path,
         password,
     });
 }
 
-fn update_page_view(state: &AppState, scheduler: &RenderScheduler, window: &AppWindow) {
-    let doc_id = match state.current_doc_id {
-        Some(id) => id,
-        None => return,
-    };
-
-    let layout =
-        ContinuousLayout::compute(&state.all_page_dims, 1100, 800, state.zoom_mode, 1.0, 12.0);
-
-    window.set_document_total_height(layout.total_height);
-    window.set_current_page_str(SharedString::from((state.current_page + 1).to_string()));
-
-    let page_count = PageCount::new(state.page_count.max(1)).expect("non-zero");
-    let current_idx =
-        PageIndex::new(state.current_page, page_count).unwrap_or_else(PageIndex::zero);
-
-    let (pw, ph) = state
-        .all_page_dims
-        .get(current_idx.get() as usize)
-        .copied()
-        .unwrap_or(state.first_page_dims);
-
-    let target_dims = compute_target_dimensions(pw, ph, 1100, 800, state.zoom_mode, 1.0);
-    window.set_page_display_width(target_dims.width as f32);
-    window.set_page_display_height(target_dims.height as f32);
-    window.set_zoom_str(SharedString::from(format!(
-        "{}%",
-        (target_dims.width as f32 / pw * 100.0) as u32
-    )));
-
-    // Request render for visible range based on viewing mode
-    let gen = scheduler.bump_generation();
-
-    let (start_idx, end_idx) = match state.viewing_mode {
-        ViewingMode::SinglePage => (
-            current_idx.get(),
-            (current_idx.get() + 1).min(state.page_count),
-        ),
-        _ => (
-            current_idx.get().saturating_sub(1),
-            (current_idx.get() + 6).min(state.page_count),
-        ),
-    };
-
-    for idx in start_idx..end_idx {
-        let p_idx = PageIndex::from_raw(idx);
-        let (w_pts, h_pts) = state
-            .all_page_dims
-            .get(idx as usize)
-            .copied()
-            .unwrap_or((612.0, 792.0));
-
-        let dims = compute_target_dimensions(w_pts, h_pts, 1100, 800, state.zoom_mode, 1.0);
-
-        let priority = if idx == current_idx.get() {
-            Priority::Visible
-        } else {
-            Priority::Prefetch
-        };
-
-        scheduler.send_command(RenderCommand::RenderPage(RenderJob {
-            request_id: RequestId::new(rand_id()),
-            generation: gen,
-            document_id: doc_id,
-            page_index: p_idx,
-            target_width: dims.width,
-            target_height: dims.height,
-            rotation: state.rotation,
-            priority,
-        }));
-
-        // Request text geometry on demand if not cached
-        if !state.text_geometries.contains_key(&idx) {
-            scheduler.send_command(RenderCommand::FetchTextGeometry {
-                document_id: doc_id,
-                page_index: p_idx,
-            });
-        }
-    }
-}
-
-fn request_thumbnails(state: &AppState, scheduler: &RenderScheduler) {
-    let doc_id = match state.current_doc_id {
-        Some(id) => id,
-        None => return,
-    };
-
-    let gen = scheduler.current_generation();
-    let start_idx = state.current_page.saturating_sub(2);
-    let end_idx = (state.current_page + 8).min(state.page_count);
-
-    for idx in start_idx..end_idx {
-        let p_idx = PageIndex::from_raw(idx);
-        let (w_pts, h_pts) = state
-            .all_page_dims
-            .get(idx as usize)
-            .copied()
-            .unwrap_or((612.0, 792.0));
-
-        let aspect = h_pts / w_pts.max(1.0);
-        let tw = 140u32;
-        let th = ((140.0 * aspect).round() as u32).clamp(100, 220);
-
-        scheduler.send_command(RenderCommand::RenderPage(RenderJob {
-            request_id: RequestId::new(rand_id()),
-            generation: gen,
-            document_id: doc_id,
-            page_index: p_idx,
-            target_width: tw,
-            target_height: th,
-            rotation: state.rotation,
-            priority: Priority::Thumbnail,
-        }));
-    }
-}
-
-fn refresh_slint_models(
-    state: &AppState,
+fn navigate_to_page(
+    page: u32,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &RenderScheduler,
     window: &AppWindow,
-    page_bitmaps: &mut LruCache<u32, Image>,
-    thumb_bitmaps: &mut LruCache<u32, Image>,
 ) {
-    let layout =
-        ContinuousLayout::compute(&state.all_page_dims, 1100, 800, state.zoom_mode, 1.0, 12.0);
+    let mut app = state.borrow_mut();
+    navigate_to_page_inner(page, &mut app, scheduler, window);
+}
 
-    let pages_model = VecModel::<PageItem>::default();
-    let current_idx = state.current_page;
+fn set_scroll_position(app: &mut AppState, window: &AppWindow, scroll_y: f32) {
+    app.last_scroll_y = scroll_y;
+    window.set_current_scroll_y(scroll_y);
+}
 
-    match state.viewing_mode {
-        ViewingMode::SinglePage => {
-            if let Some(box_info) = layout.pages.get(current_idx as usize) {
-                let (bmp, has_bmp) = match page_bitmaps.get(&current_idx).cloned() {
-                    Some(b) => (b, true),
-                    None => (Image::default(), false),
-                };
-
-                let sel_boxes = compute_selection_boxes(
-                    state,
-                    current_idx,
-                    box_info.width as f32,
-                    box_info.height as f32,
-                );
-
-                pages_model.push(PageItem {
-                    page_index: current_idx as i32,
-                    page_number: SharedString::from((current_idx + 1).to_string()),
-                    width: box_info.width as f32,
-                    height: box_info.height as f32,
-                    y_offset: box_info.y_offset,
-                    bitmap: bmp,
-                    has_bitmap: has_bmp,
-                    selection_boxes: ModelRc::new(VecModel::from(sel_boxes)),
-                });
-            }
-        }
-        _ => {
-            for (idx, box_info) in layout.pages.iter().enumerate() {
-                let (bmp, has_bmp) = match page_bitmaps.get(&(idx as u32)).cloned() {
-                    Some(b) => (b, true),
-                    None => (Image::default(), false),
-                };
-
-                let sel_boxes = compute_selection_boxes(
-                    state,
-                    idx as u32,
-                    box_info.width as f32,
-                    box_info.height as f32,
-                );
-
-                pages_model.push(PageItem {
-                    page_index: idx as i32,
-                    page_number: SharedString::from((idx + 1).to_string()),
-                    width: box_info.width as f32,
-                    height: box_info.height as f32,
-                    y_offset: box_info.y_offset,
-                    bitmap: bmp,
-                    has_bitmap: has_bmp,
-                    selection_boxes: ModelRc::new(VecModel::from(sel_boxes)),
-                });
-            }
+fn navigate_to_page_inner(
+    page: u32,
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+) {
+    if app.page_count == 0 {
+        return;
+    }
+    let previous_page = app.current_page;
+    app.current_page = page.min(app.page_count - 1);
+    ensure_layout(app);
+    if app.viewing_mode == ViewingMode::ContinuousVertical
+        && app.window_mode != WindowMode::Presentation
+    {
+        if let Some(scroll_y) = app
+            .layout
+            .pages
+            .get(app.current_page as usize)
+            .map(|page| -page.y_offset)
+        {
+            set_scroll_position(app, window, scroll_y);
         }
     }
-    window.set_visible_pages(ModelRc::new(pages_model));
+    app.generation = scheduler.bump_generation();
+    window.set_current_page_str(SharedString::from((app.current_page + 1).to_string()));
+    request_next_dimensions_batch(app, scheduler);
+    render_visible_pages(app, scheduler, window);
+    refresh_thumbnail_selection(app, window, previous_page);
+    request_visible_thumbnails(app, scheduler, window);
+}
 
-    // Refresh Sidebar Thumbnails Model (lazy range)
-    let thumbs_model = VecModel::<ThumbnailItem>::default();
-    let start_idx = state.current_page.saturating_sub(10);
-    let end_idx = (state.current_page + 30).min(state.page_count);
+fn invalidate_layout_and_render(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+    clear_images: bool,
+) {
+    let old_anchor =
+        if app.viewing_mode == ViewingMode::ContinuousVertical && !app.layout.pages.is_empty() {
+            Some(app.layout.compute_anchor(
+                (-window.get_current_scroll_y()).max(0.0),
+                app.viewport_height as f32,
+            ))
+        } else {
+            None
+        };
+    app.layout_key = None;
+    ensure_layout(app);
+    if let Some(anchor) = old_anchor {
+        set_scroll_position(app, window, -app.layout.restore_anchor(anchor));
+    }
+    if clear_images {
+        app.page_images.clear();
+    }
+    app.generation = scheduler.bump_generation();
+    render_visible_pages(app, scheduler, window);
+}
 
-    for idx in start_idx..end_idx {
-        let bmp = thumb_bitmaps.get(&idx).cloned().unwrap_or_default();
-        let (w_pts, h_pts) = state
-            .all_page_dims
-            .get(idx as usize)
-            .copied()
-            .unwrap_or((612.0, 792.0));
-        let aspect = h_pts / w_pts.max(1.0);
-        let tw = 140.0;
-        let th = (140.0 * aspect).clamp(100.0, 220.0);
+fn ensure_layout(app: &mut AppState) {
+    let key = LayoutKey {
+        width: app.viewport_width,
+        height: app.viewport_height,
+        zoom_mode: app.zoom_mode,
+        dimensions_revision: app.dimensions_revision,
+    };
+    if app.layout_key.as_ref() == Some(&key) {
+        return;
+    }
+    app.layout = ContinuousLayout::compute(
+        &app.page_dimensions,
+        app.viewport_width.saturating_sub(32).max(1),
+        app.viewport_height.saturating_sub(32).max(1),
+        app.zoom_mode,
+        1.0,
+        PAGE_GAP,
+    );
+    app.layout_key = Some(key);
+}
 
-        thumbs_model.push(ThumbnailItem {
-            page_index: idx as i32,
-            page_number: SharedString::from(format!("Page {}", idx + 1)),
-            width: tw,
-            height: th,
-            bitmap: bmp,
-            is_selected: idx == current_idx,
+fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u32> {
+    if app.page_count == 0 {
+        return Vec::new();
+    }
+    if app.window_mode == WindowMode::Presentation || app.viewing_mode == ViewingMode::SinglePage {
+        return vec![app.current_page];
+    }
+    let visible = app.layout.visible_pages(
+        (-window.get_current_scroll_y()).max(0.0),
+        app.viewport_height as f32,
+    );
+    let first = visible
+        .first()
+        .map(|page| page.get())
+        .unwrap_or(app.current_page);
+    let last = visible
+        .last()
+        .map(|page| page.get())
+        .unwrap_or(app.current_page);
+    (first.saturating_sub(1)..=(last + 1).min(app.page_count.saturating_sub(1))).collect()
+}
+
+fn presentation_render_size(page: (f32, f32), viewport: (u32, u32), dpi_scale: f32) -> (u32, u32) {
+    let page_width = page.0.max(1.0);
+    let page_height = page.1.max(1.0);
+    let fit_scale = (viewport.0 as f32 / page_width)
+        .min(viewport.1 as f32 / page_height)
+        .max(0.01);
+    let mut width = page_width * fit_scale * dpi_scale;
+    let mut height = page_height * fit_scale * dpi_scale;
+    let edge_scale = (PRESENTATION_MAX_RENDER_EDGE as f32 / width.max(height)).min(1.0);
+    width *= edge_scale;
+    height *= edge_scale;
+    (
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )
+}
+
+fn user_is_scrolling(last_scroll: Option<Instant>, now: Instant) -> bool {
+    last_scroll.is_some_and(|last| now.saturating_duration_since(last) < SCROLL_IDLE_DELAY)
+}
+
+fn render_visible_pages(app: &mut AppState, scheduler: &RenderScheduler, window: &AppWindow) {
+    let Some(document_id) = app.active_document else {
+        return;
+    };
+    ensure_layout(app);
+    window.set_document_total_height(app.layout.total_height);
+
+    let pages = visible_page_indices(app, window);
+
+    for page in pages.iter().copied() {
+        let Some(layout_page) = app.layout.pages.get(page as usize) else {
+            continue;
+        };
+        // Show the first bitmap at logical resolution, then immediately replace it with the
+        // native-DPI render. This keeps startup responsive without leaving high-DPI displays soft.
+        let render_scale = if app.first_page_ready {
+            app.scale_factor
+        } else {
+            0.45
+        };
+        let (render_width, render_height) = if app.window_mode == WindowMode::Presentation {
+            presentation_render_size(
+                app.page_dimensions
+                    .get(page as usize)
+                    .copied()
+                    .unwrap_or(app.first_page_dimensions),
+                (app.viewport_width, app.viewport_height),
+                render_scale,
+            )
+        } else {
+            (
+                ((layout_page.width as f32) * render_scale).round() as u32,
+                ((layout_page.height as f32) * render_scale).round() as u32,
+            )
+        };
+        scheduler.send_command(RenderCommand::RenderPage(RenderJob {
+            request_id: RequestId::new(unique_id()),
+            generation: app.generation,
+            document_id,
+            page_index: PageIndex::from_raw(page),
+            target_width: render_width.clamp(1, 4096),
+            target_height: render_height.clamp(1, 4096),
+            rotation: app.rotation,
+            priority: if page == app.current_page {
+                Priority::Visible
+            } else {
+                Priority::Prefetch
+            },
+            kind: RenderKind::Page,
+        }));
+    }
+
+    if app.first_page_ready && !app.text_geometries.contains_key(&app.current_page) {
+        scheduler.send_command(RenderCommand::FetchTextGeometry {
+            document_id,
+            generation: app.generation,
+            page_index: PageIndex::from_raw(app.current_page),
         });
     }
-    window.set_thumbnail_items(ModelRc::new(thumbs_model));
+    refresh_page_model(app, window);
+}
+
+fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
+    ensure_layout(app);
+    let indices = visible_page_indices(app, window);
+    app.visible_page_indices.clone_from(&indices);
+
+    let model = VecModel::default();
+    for index in indices {
+        let Some(layout_page) = app.layout.pages.get(index as usize).cloned() else {
+            continue;
+        };
+        let image = app.page_images.get(index);
+        let has_bitmap = image.is_some();
+        let selection_boxes = compute_selection_boxes(
+            app,
+            index,
+            layout_page.width as f32,
+            layout_page.height as f32,
+        );
+        model.push(PageItem {
+            page_index: index as i32,
+            page_number: SharedString::from((index + 1).to_string()),
+            width: layout_page.width as f32,
+            height: layout_page.height as f32,
+            y_offset: layout_page.y_offset,
+            bitmap: image.unwrap_or_default(),
+            has_bitmap,
+            selection_boxes: ModelRc::new(VecModel::from(selection_boxes)),
+        });
+    }
+    window.set_visible_pages(ModelRc::new(model));
+
+    if let Some(page) = app.layout.pages.get(app.current_page as usize) {
+        window.set_page_display_width(page.width as f32);
+        window.set_page_display_height(page.height as f32);
+        let page_width = app
+            .page_dimensions
+            .get(app.current_page as usize)
+            .map(|dimensions| dimensions.0)
+            .unwrap_or(app.first_page_dimensions.0)
+            .max(1.0);
+        let effective_zoom = page.width as f32 / page_width;
+        window.set_zoom_str(SharedString::from(format!(
+            "{}%",
+            (effective_zoom * 100.0).round()
+        )));
+    }
+}
+
+fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
+    let model = VecModel::default();
+    for index in 0..app.page_count {
+        model.push(thumbnail_item(app, index));
+    }
+    window.set_thumbnail_items(ModelRc::new(model));
+}
+
+fn refresh_thumbnail_row(app: &mut AppState, window: &AppWindow, index: u32) {
+    let model = window.get_thumbnail_items();
+    if index < app.page_count && (index as usize) < model.row_count() {
+        model.set_row_data(index as usize, thumbnail_item(app, index));
+    }
+}
+
+fn refresh_thumbnail_selection(app: &mut AppState, window: &AppWindow, previous_page: u32) {
+    refresh_thumbnail_row(app, window, previous_page);
+    if previous_page != app.current_page {
+        refresh_thumbnail_row(app, window, app.current_page);
+    }
+}
+
+fn thumbnail_item(app: &mut AppState, index: u32) -> ThumbnailItem {
+    let (width, height) = app
+        .page_dimensions
+        .get(index as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    let display_width = 140.0;
+    let display_height = (display_width * height / width.max(1.0)).min(150.0);
+    let image = app.thumbnail_images.get(index);
+    ThumbnailItem {
+        page_index: index as i32,
+        page_number: SharedString::from(format!("Page {}", index + 1)),
+        width: display_width,
+        height: display_height,
+        bitmap: image.clone().unwrap_or_default(),
+        has_bitmap: image.is_some(),
+        is_selected: index == app.current_page,
+    }
+}
+
+fn request_visible_thumbnails(app: &AppState, scheduler: &RenderScheduler, window: &AppWindow) {
+    if !app.first_page_ready
+        || !window.get_sidebar_visible()
+        || window.get_sidebar_tab() != 0
+        || app.page_count == 0
+    {
+        return;
+    }
+    let Some(document_id) = app.active_document else {
+        return;
+    };
+    let first_visible = ((-window.get_thumbnail_scroll_y()).max(0.0) / THUMB_ROW_HEIGHT) as u32;
+    let visible_count =
+        (window.get_thumbnail_viewport_height().max(1.0) / THUMB_ROW_HEIGHT).ceil() as u32;
+    let start = first_visible.saturating_sub(4);
+    let end = (first_visible + visible_count + 4).min(app.page_count);
+    for index in start..end {
+        let (width, height) = app
+            .page_dimensions
+            .get(index as usize)
+            .copied()
+            .unwrap_or(app.first_page_dimensions);
+        let target_width = (140.0 * app.scale_factor).round() as u32;
+        let target_height = (target_width as f32 * height / width.max(1.0)).round() as u32;
+        scheduler.send_command(RenderCommand::RenderPage(RenderJob {
+            request_id: RequestId::new(unique_id()),
+            generation: app.generation,
+            document_id,
+            page_index: PageIndex::from_raw(index),
+            target_width: target_width.clamp(1, 512),
+            target_height: target_height.clamp(1, 768),
+            rotation: app.rotation,
+            priority: Priority::Thumbnail,
+            kind: RenderKind::Thumbnail,
+        }));
+    }
+}
+
+fn start_deferred_document_work(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+) {
+    request_next_dimensions_batch(app, scheduler);
+    request_visible_thumbnails(app, scheduler, window);
+    if window.get_sidebar_tab() == 1 && !app.outline_requested {
+        if let Some(document_id) = app.active_document {
+            app.outline_requested =
+                scheduler.send_command(RenderCommand::FetchOutline { document_id });
+        }
+    }
+    if let Some(document_id) = app.active_document {
+        scheduler.send_command(RenderCommand::FetchTextGeometry {
+            document_id,
+            generation: app.generation,
+            page_index: PageIndex::from_raw(app.current_page),
+        });
+    }
+}
+
+fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler) {
+    if app.dimensions_request_pending || app.next_dimensions_start >= app.page_count {
+        return;
+    }
+    if let Some(document_id) = app.active_document {
+        app.dimensions_request_pending =
+            scheduler.send_command(RenderCommand::FetchPageDimensions {
+                document_id,
+                start: app.next_dimensions_start,
+                count: 32,
+            });
+    }
+}
+
+fn refresh_outline_model(app: &mut AppState, window: &AppWindow) {
+    let mut items = Vec::new();
+    let mut flat = Vec::new();
+    flatten_outline(
+        &app.outline,
+        &app.expanded_outline,
+        &mut Vec::new(),
+        0,
+        &mut items,
+        &mut flat,
+    );
+    app.flat_outline = flat;
+    window.set_outline_items(ModelRc::new(VecModel::from(items)));
+}
+
+fn flatten_outline(
+    nodes: &[OutlineNode],
+    expanded: &HashSet<Vec<usize>>,
+    path: &mut Vec<usize>,
+    depth: i32,
+    items: &mut Vec<OutlineItem>,
+    flat: &mut Vec<FlatOutlineEntry>,
+) {
+    for (index, node) in nodes.iter().enumerate() {
+        path.push(index);
+        let has_children = !node.children.is_empty();
+        let is_expanded = has_children && expanded.contains(path);
+        items.push(OutlineItem {
+            title: SharedString::from(if node.title.is_empty() {
+                "Untitled"
+            } else {
+                &node.title
+            }),
+            page_index: node.page_index.map(|page| page as i32).unwrap_or(-1),
+            depth,
+            has_children,
+            expanded: is_expanded,
+        });
+        flat.push(FlatOutlineEntry {
+            path: path.clone(),
+            page_index: node.page_index,
+            has_children,
+        });
+        if is_expanded {
+            flatten_outline(&node.children, expanded, path, depth + 1, items, flat);
+        }
+        path.pop();
+    }
+}
+
+fn refresh_recent_files(app: &mut AppState, window: &AppWindow, preferences_path: &Path) {
+    let before = app.preferences.recent_files.len();
+    app.preferences
+        .recent_files
+        .retain(|path| Path::new(path).is_file());
+    if before != app.preferences.recent_files.len() {
+        let _ = app.preferences.save_to_file(preferences_path);
+    }
+    let items = app
+        .preferences
+        .recent_files
+        .iter()
+        .take(5)
+        .map(|path| {
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path);
+            RecentFileItem {
+                name: SharedString::from(name),
+                path: SharedString::from(path),
+            }
+        })
+        .collect::<Vec<_>>();
+    window.set_recent_files(ModelRc::new(VecModel::from(items)));
+}
+
+fn pointer_to_pdf(app: &AppState, page: u32, x: f32, y: f32) -> (f32, f32) {
+    let (page_width, page_height) = app
+        .page_dimensions
+        .get(page as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    let (display_width, display_height) = app
+        .layout
+        .pages
+        .get(page as usize)
+        .map(|page| (page.width as f32, page.height as f32))
+        .unwrap_or((page_width, page_height));
+    (
+        x * page_width / display_width.max(1.0),
+        page_height - y * page_height / display_height.max(1.0),
+    )
 }
 
 fn compute_selection_boxes(
-    state: &AppState,
-    page_idx: u32,
-    target_w: f32,
-    target_h: f32,
+    app: &AppState,
+    page: u32,
+    target_width: f32,
+    target_height: f32,
 ) -> Vec<SelectionBox> {
-    let sel = match state.selection {
-        Some(ref s) => s,
-        None => return Vec::new(),
-    };
-
-    let p_idx = PageIndex::from_raw(page_idx);
-    let (range_start, range_end) = match sel.range_for_page(p_idx) {
-        Some(r) => r,
-        None => return Vec::new(),
-    };
-
-    let geom = match state.text_geometries.get(&page_idx) {
-        Some(g) => g,
-        None => return Vec::new(),
-    };
-
-    let (pw, ph) = state
-        .all_page_dims
-        .get(page_idx as usize)
-        .copied()
-        .unwrap_or(state.first_page_dims);
-
-    let scale_x = target_w / pw.max(1.0);
-    let scale_y = target_h / ph.max(1.0);
-
-    let start_idx = (range_start as usize).min(geom.glyphs.len());
-    let end_idx = (range_end as usize).min(geom.glyphs.len());
-
-    if start_idx >= end_idx {
+    let Some(selection) = app.selection else {
         return Vec::new();
-    }
-
-    let selected_glyphs = &geom.glyphs[start_idx..end_idx];
-
-    // Merge adjacent glyphs on the same text line into single continuous rectangles (Chrome PDF Viewer style)
-    let mut line_rects: Vec<(f32, f32, f32, f32)> = Vec::new(); // (min_x, max_x, min_y, max_y)
-
-    for g in selected_glyphs {
-        if g.ch == '\n' || g.ch == '\r' || (g.width <= 0.001 && g.height <= 0.001) {
-            continue;
-        }
-
-        let gx1 = g.x;
-        let gx2 = g.x + g.width;
-        let gy1 = g.y;
-        let gy2 = g.y + g.height;
-
-        let mut merged = false;
-        if let Some(last) = line_rects.last_mut() {
-            let y_overlap = (gy2.min(last.3) - gy1.max(last.2)).max(0.0);
-            let avg_h = ((gy2 - gy1) + (last.3 - last.2)) / 2.0;
-
-            // Same line if vertical overlap is significant or baselines are close
-            if y_overlap > avg_h * 0.3 || (gy1 - last.2).abs() < avg_h * 0.4 {
-                last.0 = last.0.min(gx1);
-                last.1 = last.1.max(gx2);
-                last.2 = last.2.min(gy1);
-                last.3 = last.3.max(gy2);
-                merged = true;
-            }
-        }
-
-        if !merged {
-            line_rects.push((gx1, gx2, gy1, gy2));
-        }
-    }
-
-    // Convert merged PDF line bounds to viewport pixel selection boxes
-    let mut boxes = Vec::new();
-    for (lx1, lx2, ly1, ly2) in line_rects {
-        let line_h = (ly2 - ly1).max(1.0);
-        // PDFium loose font bounds include ~16% EM ascent leading padding above cap height.
-        // Adjusting ly2 and ly1 aligns the selection box rectangle precisely over drawn character ink.
-        let adj_ly2 = ly2 - (line_h * 0.16);
-        let adj_ly1 = ly1 - (line_h * 0.04);
-
-        let sx = lx1 * scale_x;
-        let sy = (ph - adj_ly2) * scale_y;
-        let sw = (lx2 - lx1) * scale_x;
-        let sh = (adj_ly2 - adj_ly1) * scale_y;
-
-        if sw > 0.5 && sh > 0.5 {
-            boxes.push(SelectionBox {
-                x: sx,
-                y: sy,
-                width: sw,
-                height: sh,
-            });
-        }
-    }
-
-    boxes
+    };
+    let Some((start, end)) = selection.range_for_page(PageIndex::from_raw(page)) else {
+        return Vec::new();
+    };
+    let Some(geometry) = app.text_geometries.get(&page) else {
+        return Vec::new();
+    };
+    let (page_width, page_height) = app
+        .page_dimensions
+        .get(page as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    let start = (start as usize).min(geometry.glyphs.len());
+    let end = (end as usize).min(geometry.glyphs.len());
+    geometry.glyphs[start..end]
+        .iter()
+        .filter(|glyph| glyph.width > 0.0 && glyph.height > 0.0)
+        .map(|glyph| SelectionBox {
+            x: glyph.x * target_width / page_width.max(1.0),
+            y: (page_height - glyph.y - glyph.height) * target_height / page_height.max(1.0),
+            width: glyph.width * target_width / page_width.max(1.0),
+            height: glyph.height * target_height / page_height.max(1.0),
+        })
+        .collect()
 }
 
-fn update_ui_strings(window: &AppWindow, lang: ResolvedLanguage) {
-    window.set_text_open(SharedString::from(barepdf_i18n::t(lang, "open.file")));
-    window.set_text_sidebar(SharedString::from(barepdf_i18n::t(lang, "sidebar.toggle")));
-    window.set_text_thumbnails(SharedString::from(barepdf_i18n::t(
-        lang,
-        "sidebar.thumbnails",
-    )));
-    window.set_text_outline(SharedString::from(barepdf_i18n::t(lang, "sidebar.outline")));
-    window.set_text_view(SharedString::from(barepdf_i18n::t(lang, "view.mode")));
-    window.set_text_zoom_in(SharedString::from(barepdf_i18n::t(lang, "zoom.in")));
-    window.set_text_zoom_out(SharedString::from(barepdf_i18n::t(lang, "zoom.out")));
-    window.set_text_fit_width(SharedString::from(barepdf_i18n::t(lang, "zoom.fit_width")));
-    window.set_text_fit_page(SharedString::from(barepdf_i18n::t(lang, "zoom.fit_page")));
-    window.set_text_actual_size(SharedString::from(barepdf_i18n::t(
-        lang,
-        "zoom.actual_size",
-    )));
-    window.set_text_fullscreen(SharedString::from(barepdf_i18n::t(lang, "fullscreen")));
-    window.set_text_presentation(SharedString::from(barepdf_i18n::t(lang, "presentation")));
-    window.set_text_settings(SharedString::from(barepdf_i18n::t(lang, "settings")));
-    window.set_text_copy(SharedString::from(barepdf_i18n::t(lang, "context.copy")));
-    window.set_text_select_all(SharedString::from(barepdf_i18n::t(
-        lang,
-        "context.select_all",
-    )));
-    window.set_text_close(SharedString::from(barepdf_i18n::t(lang, "settings.close")));
-    window.set_text_empty_title(SharedString::from(barepdf_i18n::t(lang, "empty.title")));
-    window.set_text_empty_desc(SharedString::from(barepdf_i18n::t(lang, "empty.desc")));
+fn sync_effective_zoom(app: &mut AppState) {
+    if matches!(app.zoom_mode, ZoomMode::Custom(_)) {
+        return;
+    }
+    ensure_layout(app);
+    let Some(layout_page) = app.layout.pages.get(app.current_page as usize) else {
+        return;
+    };
+    let page_width = app
+        .page_dimensions
+        .get(app.current_page as usize)
+        .map(|dimensions| dimensions.0)
+        .unwrap_or(app.first_page_dimensions.0)
+        .max(1.0);
+    app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
 }
 
-fn rand_id() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
+fn save_zoom_preference(app: &mut AppState, preferences_path: &Path) {
+    app.preferences.zoom_mode = app.zoom_mode;
+    let _ = app.preferences.save_to_file(preferences_path);
+}
+
+fn record_first_page_profile(app: &mut AppState) {
+    if app.profile_recorded {
+        return;
+    }
+    app.profile_recorded = true;
+    let Some(started) = app.open_started_at else {
+        return;
+    };
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if let Some(path) = env::var_os("BAREPDF_PROFILE_FILE") {
+        let payload = format!("{{\"first_bitmap_ms\":{elapsed_ms:.2}}}\n");
+        let _ = std::fs::write(path, payload);
+    }
+}
+
+fn apply_theme(window: &AppWindow, theme: ThemeMode) {
+    window.set_current_theme(theme_index(theme));
+    window
+        .global::<ThemeTokens>()
+        .set_theme_mode(theme_index(theme));
+}
+
+fn show_banner(window: &AppWindow, message: impl Into<SharedString>, can_retry: bool) {
+    window.set_banner_text(message.into());
+    window.set_banner_can_retry(can_retry);
+    window.set_banner_visible(true);
+}
+
+fn parse_drop_paths(text: &str) -> Option<Result<PathBuf, &'static str>> {
+    let paths = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let decoded = line
+                .strip_prefix("file:///")
+                .unwrap_or(line)
+                .replace("%20", " ")
+                .replace('/', "\\");
+            PathBuf::from(decoded)
+        })
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return None;
+    }
+    if paths.len() != 1 {
+        return Some(Err("Drop exactly one PDF file."));
+    }
+    let path = paths.into_iter().next().expect("one path");
+    if !is_pdf_path(&path) {
+        return Some(Err("Only PDF files are supported."));
+    }
+    Some(Ok(path))
+}
+
+fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn validated_page_input(input: &str, page_count: u32) -> Option<u32> {
+    input
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|page| (1..=page_count).contains(page))
+        .map(|page| page - 1)
+}
+
+fn normalize_viewing_mode(mode: ViewingMode) -> ViewingMode {
+    match mode {
+        ViewingMode::SinglePage => ViewingMode::SinglePage,
+        _ => ViewingMode::ContinuousVertical,
+    }
+}
+
+fn theme_from_index(index: i32) -> ThemeMode {
+    match index {
+        1 => ThemeMode::Light,
+        2 => ThemeMode::Dark,
+        _ => ThemeMode::System,
+    }
+}
+
+fn theme_index(theme: ThemeMode) -> i32 {
+    match theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    }
+}
+
+fn language_index(language: Language) -> i32 {
+    match language {
+        Language::System => 0,
+        Language::English => 1,
+        Language::Turkish => 2,
+    }
+}
+
+fn view_mode_index(mode: ViewingMode) -> i32 {
+    i32::from(mode == ViewingMode::SinglePage)
+}
+
+fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> &'static str {
+    barepdf_i18n::t(
+        language,
+        if mode == ViewingMode::SinglePage {
+            "view.mode.single"
+        } else {
+            "view.mode.continuous"
+        },
+    )
+}
+
+fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) {
+    macro_rules! set_text {
+        ($setter:ident, $key:literal) => {
+            window.$setter(SharedString::from(barepdf_i18n::t(language, $key)))
+        };
+    }
+    set_text!(set_text_open, "open.file");
+    set_text!(set_text_sidebar, "sidebar.toggle");
+    set_text!(set_text_thumbnails, "sidebar.thumbnails");
+    set_text!(set_text_outline, "sidebar.outline");
+    set_text!(set_text_view, "view.mode");
+    set_text!(set_text_zoom_in, "zoom.in");
+    set_text!(set_text_zoom_out, "zoom.out");
+    set_text!(set_text_fit_width, "zoom.fit_width");
+    set_text!(set_text_fit_page, "zoom.fit_page");
+    set_text!(set_text_actual_size, "zoom.actual_size");
+    set_text!(set_text_fullscreen, "fullscreen");
+    set_text!(set_text_presentation, "presentation");
+    set_text!(set_text_settings, "settings");
+    set_text!(set_text_copy, "context.copy");
+    set_text!(set_text_select_all, "context.select_all");
+    set_text!(set_text_close, "settings.close");
+    set_text!(set_text_empty_title, "empty.title");
+    set_text!(set_text_empty_desc, "empty.desc");
+    set_text!(set_text_no_outline, "outline.empty");
+    set_text!(set_text_recent, "recent.title");
+    set_text!(set_text_retry, "action.retry");
+    set_text!(set_text_dismiss, "action.dismiss");
+    set_text!(set_text_loading, "status.loading");
+}
+
+fn unique_id() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
+        .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_input_is_one_based_and_bounded() {
+        assert_eq!(validated_page_input("1", 12), Some(0));
+        assert_eq!(validated_page_input("12", 12), Some(11));
+        assert_eq!(validated_page_input("0", 12), None);
+        assert_eq!(validated_page_input("13", 12), None);
+        assert_eq!(validated_page_input("abc", 12), None);
+    }
+
+    #[test]
+    fn unsupported_view_modes_normalize_to_continuous() {
+        assert_eq!(
+            normalize_viewing_mode(ViewingMode::BookMode),
+            ViewingMode::ContinuousVertical
+        );
+        assert_eq!(
+            normalize_viewing_mode(ViewingMode::TwoPageSpread),
+            ViewingMode::ContinuousVertical
+        );
+        assert_eq!(
+            normalize_viewing_mode(ViewingMode::SinglePage),
+            ViewingMode::SinglePage
+        );
+    }
+
+    #[test]
+    fn dropped_file_must_be_one_pdf() {
+        assert!(matches!(parse_drop_paths("C:/book.pdf"), Some(Ok(_))));
+        assert!(matches!(
+            parse_drop_paths("C:/one.pdf\nC:/two.pdf"),
+            Some(Err(_))
+        ));
+        assert!(matches!(parse_drop_paths("C:/note.txt"), Some(Err(_))));
+    }
+
+    #[test]
+    fn theme_indices_map_to_all_supported_modes() {
+        assert_eq!(theme_from_index(0), ThemeMode::System);
+        assert_eq!(theme_from_index(1), ThemeMode::Light);
+        assert_eq!(theme_from_index(2), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn outline_flattens_nested_targets_and_respects_expansion() {
+        let outline = vec![OutlineNode {
+            title: "Chapter".into(),
+            page_index: None,
+            children: vec![OutlineNode {
+                title: "Section".into(),
+                page_index: Some(3),
+                children: Vec::new(),
+            }],
+        }];
+        let mut expanded = HashSet::new();
+        expanded.insert(vec![0]);
+        let mut items = Vec::new();
+        let mut flat = Vec::new();
+        flatten_outline(
+            &outline,
+            &expanded,
+            &mut Vec::new(),
+            0,
+            &mut items,
+            &mut flat,
+        );
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].depth, 1);
+        assert_eq!(flat[1].page_index, Some(3));
+    }
+
+    #[test]
+    fn active_scroll_does_not_allow_anchor_restore() {
+        let now = Instant::now();
+        assert!(user_is_scrolling(
+            Some(now - Duration::from_millis(50)),
+            now
+        ));
+        assert!(!user_is_scrolling(
+            Some(now - Duration::from_millis(250)),
+            now
+        ));
+        assert!(!user_is_scrolling(None, now));
+    }
+
+    #[test]
+    fn presentation_render_is_bounded_and_keeps_aspect_ratio() {
+        let (width, height) = presentation_render_size((612.0, 792.0), (3840, 2160), 2.0);
+        assert!(width <= PRESENTATION_MAX_RENDER_EDGE);
+        assert!(height <= PRESENTATION_MAX_RENDER_EDGE);
+        assert!((width as f32 / height as f32 - 612.0 / 792.0).abs() < 0.01);
+    }
 }

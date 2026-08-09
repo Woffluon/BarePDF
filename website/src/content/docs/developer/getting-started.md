@@ -14,7 +14,7 @@ BarePDF is written entirely in **Rust** (Edition 2021) and uses a modular Cargo 
 - **Language**: Rust (Stable Edition 2021+).
 - **UI Framework**: [Slint UI](https://slint.dev/) (v1.9) with native Win32 platform integration.
 - **PDF Engine**: Google PDFium via `pdfium-render` Rust bindings.
-- **Async Runtime / Logging**: `tokio`, `tracing`, `tracing-subscriber`.
+- **Background Work / Logging**: Crossbeam channels with a single PDFium actor, `tracing`, and `tracing-subscriber`.
 - **Packaging**: Inno Setup (installer) & PowerShell automation.
 
 ## Workspace Layout Overview
@@ -27,7 +27,7 @@ BarePDF/
 ├── crates/
 │   ├── barepdf-core/           # Domain models, viewport math, preferences
 │   ├── barepdf-pdf/            # PdfBackend trait & PDFium integration
-│   ├── barepdf-render/         # Render scheduler, LRU cache, worker pool
+│   ├── barepdf-render/         # Render scheduler, LRU cache, PDFium actor
 │   ├── barepdf-platform/       # Abstract platform traits (dialogs, print, clipboard)
 │   ├── barepdf-platform-windows/ # Win32 native implementations (rfd, arboard)
 │   ├── barepdf-i18n/           # Multi-language string tables (en, tr)

@@ -1,90 +1,96 @@
-# BarePDF Profiling Script
+# BarePDF release profiling. First-page time is emitted by the application when the
+# first page bitmap is attached to the Slint model; Start-Process duration is not used.
 param (
     [string]$PdfPath = "$env:USERPROFILE\Desktop\kitap.pdf",
-    [int]$DurationSeconds = 5
+    [int]$DurationSeconds = 20,
+    [int]$Runs = 5
 )
 
-$ExePath = Join-Path $PSScriptRoot "..\target\release\barepdf.exe"
-if (-not (Test-Path $ExePath)) {
-    Write-Error "Release executable not found at $ExePath. Run 'cargo build --release' first."
+$ExePath = Resolve-Path (Join-Path $PSScriptRoot "..\target\release\barepdf.exe") -ErrorAction SilentlyContinue
+if (-not $ExePath) {
+    Write-Error "Release executable not found. Run 'cargo build --release --locked' first."
     exit 1
 }
-
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  BarePDF Baseline Profiling Report" -ForegroundColor Cyan
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "Target PDF: $PdfPath"
-Write-Host "Executable: $ExePath"
-Write-Host ""
-
-# 1. Idle Application (No PDF)
-Write-Host "[1/2] Launching BarePDF Idle (No PDF)..." -ForegroundColor Yellow
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$procIdle = Start-Process -FilePath $ExePath -PassThru
-$sw.Stop()
-
-Start-Sleep -Seconds 2
-$idleProcStats = Get-Process -Id $procIdle.Id
-$idleWs = [math]::Round($idleProcStats.WorkingSet64 / 1MB, 2)
-$idlePriv = [math]::Round($idleProcStats.PrivateMemorySize64 / 1MB, 2)
-$idleThreads = $idleProcStats.Threads.Count
-$idleHandles = $idleProcStats.HandleCount
-
-Write-Host "   Startup Time: $($sw.ElapsedMilliseconds) ms"
-Write-Host "   Working Set:  $idleWs MB"
-Write-Host "   Private Bytes:$idlePriv MB"
-Write-Host "   Threads:      $idleThreads"
-Write-Host "   Handles:      $idleHandles"
-
-Stop-Process -Id $procIdle.Id -Force
-Start-Sleep -Seconds 1
-
-# 2. Open PDF (kitap.pdf)
-if (-not (Test-Path $PdfPath)) {
+if (-not (Test-Path -LiteralPath $PdfPath -PathType Leaf)) {
     Write-Error "PDF file not found: $PdfPath"
     exit 1
 }
 
-Write-Host ""
-Write-Host "[2/2] Launching BarePDF with kitap.pdf..." -ForegroundColor Yellow
-$swPdf = [System.Diagnostics.Stopwatch]::StartNew()
-$procPdf = Start-Process -FilePath $ExePath -ArgumentList "`"$PdfPath`"" -PassThru
-$swPdf.Stop()
+function Get-Median([double[]]$Values) {
+    $sorted = $Values | Sort-Object
+    $count = $sorted.Count
+    if ($count -eq 0) { return 0 }
+    if ($count % 2 -eq 1) { return $sorted[[int]($count / 2)] }
+    return ($sorted[$count / 2 - 1] + $sorted[$count / 2]) / 2
+}
 
-# Sample metrics over duration
-$samples = @()
-for ($i = 0; $i -lt $DurationSeconds; $i++) {
-    Start-Sleep -Seconds 1
-    $p = Get-Process -Id $procPdf.Id -ErrorAction SilentlyContinue
-    if ($p) {
-        $samples += [PSCustomObject]@{
-            Second = $i + 1
-            WorkingSetMB = [math]::Round($p.WorkingSet64 / 1MB, 2)
-            PrivateBytesMB = [math]::Round($p.PrivateMemorySize64 / 1MB, 2)
-            CPU = $p.CPU
-            Threads = $p.Threads.Count
-            Handles = $p.HandleCount
-        }
+function Stop-BarePdfProcess($Process) {
+    if ($Process -and -not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        $Process.WaitForExit()
     }
 }
 
-$settled = Get-Process -Id $procPdf.Id
-$settledWs = [math]::Round($settled.WorkingSet64 / 1MB, 2)
-$settledPriv = [math]::Round($settled.PrivateMemorySize64 / 1MB, 2)
-$settledThreads = $settled.Threads.Count
-$settledHandles = $settled.HandleCount
+$idleWorkingSets = @()
+for ($run = 1; $run -le $Runs; $run++) {
+    $process = Start-Process -FilePath $ExePath -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 3
+    $sample = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+    if ($sample) { $idleWorkingSets += $sample.WorkingSet64 / 1MB }
+    Stop-BarePdfProcess $process
+}
 
+$results = @()
+for ($run = 1; $run -le $Runs; $run++) {
+    $profilePath = Join-Path $env:TEMP "barepdf-profile-$([guid]::NewGuid().ToString('N')).json"
+    $previousProfilePath = $env:BAREPDF_PROFILE_FILE
+    $env:BAREPDF_PROFILE_FILE = $profilePath
+    $process = Start-Process -FilePath $ExePath -ArgumentList "`"$PdfPath`"" -PassThru -WindowStyle Hidden
+    if ($null -eq $previousProfilePath) {
+        Remove-Item Env:BAREPDF_PROFILE_FILE
+    } else {
+        $env:BAREPDF_PROFILE_FILE = $previousProfilePath
+    }
+
+    $peakPrivate = 0.0
+    $settledWorkingSet = 0.0
+    $settledPrivate = 0.0
+    for ($sampleIndex = 0; $sampleIndex -lt ($DurationSeconds * 4); $sampleIndex++) {
+        Start-Sleep -Milliseconds 250
+        $sample = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $sample) { break }
+        $privateMb = $sample.PrivateMemorySize64 / 1MB
+        $peakPrivate = [math]::Max($peakPrivate, $privateMb)
+        $settledWorkingSet = $sample.WorkingSet64 / 1MB
+        $settledPrivate = $privateMb
+    }
+
+    $firstBitmapMs = 0.0
+    if (Test-Path -LiteralPath $profilePath) {
+        $profile = Get-Content -LiteralPath $profilePath -Raw | ConvertFrom-Json
+        $firstBitmapMs = [double]$profile.first_bitmap_ms
+        Remove-Item -LiteralPath $profilePath -Force
+    }
+
+    $results += [PSCustomObject]@{
+        Run = $run
+        FirstBitmapMs = [math]::Round($firstBitmapMs, 2)
+        SettledWorkingSetMB = [math]::Round($settledWorkingSet, 2)
+        SettledPrivateMB = [math]::Round($settledPrivate, 2)
+        PeakPrivateMB = [math]::Round($peakPrivate, 2)
+    }
+    Stop-BarePdfProcess $process
+}
+
+$firstPageValues = @($results | ForEach-Object { $_.FirstBitmapMs } | Where-Object { $_ -gt 0 })
+$settledValues = @($results | ForEach-Object { $_.SettledWorkingSetMB })
+$peakValues = @($results | ForEach-Object { $_.PeakPrivateMB })
+
+Write-Host "BarePDF release profile ($Runs runs)" -ForegroundColor Cyan
+Write-Host "PDF: $PdfPath"
+Write-Host "Idle working set median:       $([math]::Round((Get-Median $idleWorkingSets), 2)) MB"
+Write-Host "First bitmap median:           $([math]::Round((Get-Median $firstPageValues), 2)) ms"
+Write-Host "Settled working set median:    $([math]::Round((Get-Median $settledValues), 2)) MB"
+Write-Host "Peak private memory median:    $([math]::Round((Get-Median $peakValues), 2)) MB"
 Write-Host ""
-Write-Host "--- Summary Results ---" -ForegroundColor Green
-Write-Host "Application Idle Working Set:  $idleWs MB"
-Write-Host "Application Idle Private Bytes: $idlePriv MB"
-Write-Host "kitap.pdf First Page Time:      $($swPdf.ElapsedMilliseconds) ms"
-Write-Host "kitap.pdf Settled Working Set:  $settledWs MB"
-Write-Host "kitap.pdf Settled Private Bytes:$settledPriv MB"
-Write-Host "kitap.pdf Settled Threads:      $settledThreads"
-Write-Host "kitap.pdf Settled Handles:      $settledHandles"
-Write-Host ""
-
-$samples | Format-Table -AutoSize
-
-Stop-Process -Id $procPdf.Id -Force
+$results | Format-Table -AutoSize

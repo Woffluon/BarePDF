@@ -14,11 +14,11 @@ BarePDF features a clean desktop layout designed to maximize reading area while 
 Located at the top of the application window:
 
 - **Open File**: Select and open PDF documents (`Ctrl+O`).
-- **Page Navigation**: Page number input box, Previous Page (`PageUp` / `<`), and Next Page (`PageDown` / `>`).
+- **Page Navigation**: Validated page number input, Previous Page (`PageUp` / Left Arrow), and Next Page (`PageDown` / Right Arrow).
 - **Zoom Controls**: Zoom Out (`-`), Zoom level display, Zoom In (`+`), **Fit Width**, and **Fit Page** buttons.
 - **Sidebar Toggle**: Collapse or expand the navigation sidebar.
 - **Window Modes**: Full Screen (`F11`) and Presentation Mode (`F5`).
-- **Settings**: Open preferences modal for language, theme, and memory budget.
+- **Settings**: Open the compact language and theme popover.
 
 ## Navigation Sidebar
 

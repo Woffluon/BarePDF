@@ -122,18 +122,18 @@ impl IThumbnailProvider_Impl for BarePdfThumbnailProvider_Impl {
 
             let render_config = PdfRenderConfig::new()
                 .set_target_width(target_w as i32)
-                .set_target_height(target_h as i32);
+                .set_target_height(target_h as i32)
+                .limit_render_image_cache_size(true);
 
             let bitmap = first_page
                 .render_with_config(&render_config)
                 .map_err(|_| Error::from(E_FAIL))?;
 
-            let image = bitmap.as_image().map_err(|_| Error::from(E_FAIL))?;
+            let rgba = bitmap.as_rgba_bytes();
+            let real_w = bitmap.width() as u32;
+            let real_h = bitmap.height() as u32;
 
-            let rgba = image.to_rgba8();
-            let (real_w, real_h) = rgba.dimensions();
-
-            let hbitmap = create_32bit_dib_section(real_w, real_h, rgba.as_raw())
+            let hbitmap = create_32bit_dib_section(real_w, real_h, &rgba)
                 .ok_or_else(|| Error::from(E_FAIL))?;
 
             // SAFETY: Dereferencing valid non-null out pointers verified above.

@@ -45,12 +45,7 @@ impl PdfBackend for PdfiumEngine {
         let doc = self
             .pdfium
             .load_pdf_from_file(path_str, password)
-            .map_err(|e| match e {
-                PdfiumError::PdfiumLibraryInternalError(_) => {
-                    PdfError::InvalidPdf("Internal PDFium error".into())
-                }
-                _ => PdfError::FileNotFound(e.to_string()),
-            })?;
+            .map_err(|error| map_load_error(error, password.is_some()))?;
 
         let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
 
@@ -68,12 +63,7 @@ impl PdfBackend for PdfiumEngine {
         let doc = self
             .pdfium
             .load_pdf_from_byte_vec(bytes, password)
-            .map_err(|e| match e {
-                PdfiumError::PdfiumLibraryInternalError(_) => {
-                    PdfError::InvalidPdf("Internal PDFium error".into())
-                }
-                _ => PdfError::InvalidPdf(e.to_string()),
-            })?;
+            .map_err(|error| map_load_error(error, password.is_some()))?;
 
         let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
 
@@ -105,22 +95,6 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         Ok((width, height))
     }
 
-    fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
-        let pages = self.doc.pages();
-        let count = pages.len();
-        let first_dim = pages
-            .get(0)
-            .map(|p| (p.width().value, p.height().value))
-            .unwrap_or((612.0, 792.0));
-        let mut dims = vec![first_dim; count as usize];
-        for i in 1..count.min(5) {
-            if let Ok(page) = pages.get(i) {
-                dims[i as usize] = (page.width().value, page.height().value);
-            }
-        }
-        Ok(dims)
-    }
-
     fn render_page(
         &self,
         page_index: PageIndex,
@@ -139,7 +113,8 @@ impl CorePdfDocument for PdfiumDocumentOwned {
 
         let render_config = PdfRenderConfig::new()
             .set_target_width(target_width as i32)
-            .set_target_height(target_height as i32);
+            .set_target_height(target_height as i32)
+            .limit_render_image_cache_size(true);
 
         let bitmap =
             page.render_with_config(&render_config)
@@ -148,18 +123,14 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                     reason: e.to_string(),
                 })?;
 
-        let image = bitmap.as_image().map_err(|e| PdfError::RenderingFailed {
-            page_index: page_index.get(),
-            reason: e.to_string(),
-        })?;
-
-        let rgba = image.to_rgba8();
-        let (w, h) = rgba.dimensions();
+        let w = bitmap.width() as u32;
+        let h = bitmap.height() as u32;
+        let pixels = bitmap.as_rgba_bytes();
 
         Ok(RawBitmap {
             width: w,
             height: h,
-            pixels: rgba.into_raw(),
+            pixels,
         })
     }
 
@@ -261,6 +232,63 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
-        Ok(Vec::new())
+        let mut nodes = Vec::new();
+        let mut current = self.doc.bookmarks().root();
+        while let Some(bookmark) = current {
+            nodes.push(outline_node(&bookmark));
+            current = bookmark.next_sibling();
+        }
+        Ok(nodes)
     }
+}
+
+fn map_load_error(error: PdfiumError, password_supplied: bool) -> PdfError {
+    match error {
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+            if password_supplied {
+                PdfError::IncorrectPassword
+            } else {
+                PdfError::PasswordRequired
+            }
+        }
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FileError) => {
+            PdfError::FileNotFound(error.to_string())
+        }
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
+            PdfError::InvalidPdf(error.to_string())
+        }
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::SecurityError) => {
+            PdfError::UnsupportedEncryption(error.to_string())
+        }
+        _ => PdfError::InvalidPdf(error.to_string()),
+    }
+}
+
+fn outline_node(bookmark: &PdfBookmark<'_>) -> OutlineNode {
+    OutlineNode {
+        title: bookmark.title().unwrap_or_default(),
+        page_index: bookmark_page_index(bookmark),
+        children: bookmark
+            .iter_direct_children()
+            .map(|child| outline_node(&child))
+            .collect(),
+    }
+}
+
+fn bookmark_page_index(bookmark: &PdfBookmark<'_>) -> Option<u32> {
+    if let Some(index) = bookmark
+        .destination()
+        .and_then(|destination| destination.page_index().ok())
+        .and_then(|index| u32::try_from(index).ok())
+    {
+        return Some(index);
+    }
+    bookmark
+        .action()?
+        .as_local_destination_action()?
+        .destination()
+        .ok()?
+        .page_index()
+        .ok()
+        .and_then(|index| u32::try_from(index).ok())
 }

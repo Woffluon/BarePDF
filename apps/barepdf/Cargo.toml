@@ -13,13 +13,12 @@ barepdf-platform = { path = "../../crates/barepdf-platform" }
 barepdf-platform-windows = { path = "../../crates/barepdf-platform-windows" }
 barepdf-i18n = { path = "../../crates/barepdf-i18n" }
 barepdf-ui = { path = "../../crates/barepdf-ui" }
-slint = "1.9"
+slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2", "raw-window-handle-06"] }
 lru = "0.13"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-image = "0.25"
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
-image = "0.25"
 

@@ -12,8 +12,8 @@ BarePDF provides keyboard shortcuts for fast document navigation.
 | Action | Primary Shortcut | Alternative Shortcut |
 | :--- | :--- | :--- |
 | **Open Document** | `Ctrl + O` | None |
-| **Next Page** | `PageDown` | `>` |
-| **Previous Page** | `PageUp` | `<` |
+| **Next Page** | `PageDown` | Right Arrow |
+| **Previous Page** | `PageUp` | Left Arrow |
 | **Zoom In** | `+` | `Ctrl + +` |
 | **Zoom Out** | `-` | `Ctrl + -` |
 | **Fit Width** | `Fit Width` toolbar button | None |
