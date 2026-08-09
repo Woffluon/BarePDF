@@ -123,33 +123,13 @@ export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
 function getFallbackCommits(): GitHubCommit[] {
   return [
     {
-      sha: 'a1b2c3d4e5f6',
-      shortSha: 'a1b2c3d',
-      message: 'feat(website): add Astro site, documentation, releases, and changelog',
-      subject: 'feat(website): add Astro site, documentation, releases, and changelog',
+      sha: 'b3a4102089a8a5ec5351c43afe8be68d0a599f80',
+      shortSha: 'b3a4102',
+      message: 'feat: ship premium UI and stabilize PDF rendering',
+      subject: 'feat: ship premium UI and stabilize PDF rendering',
       body: null,
       authorName: 'BarePDF Team',
-      date: '2026-08-07T18:00:00Z',
-      url: `https://github.com/${repository.owner}/${repository.name}`,
-    },
-    {
-      sha: 'f7e6d5c4b3a2',
-      shortSha: 'f7e6d5c',
-      message: 'ci: add release packaging pipeline and checksum generation',
-      subject: 'ci: add release packaging pipeline and checksum generation',
-      body: null,
-      authorName: 'BarePDF Team',
-      date: '2026-08-07T15:00:00Z',
-      url: `https://github.com/${repository.owner}/${repository.name}`,
-    },
-    {
-      sha: '9876543210ab',
-      shortSha: '9876543',
-      message: 'feat(ui): implement continuous vertical reading and Slint dark theme',
-      subject: 'feat(ui): implement continuous vertical reading and Slint dark theme',
-      body: null,
-      authorName: 'BarePDF Team',
-      date: '2026-08-07T12:00:00Z',
+      date: '2026-08-10T01:35:47+03:00',
       url: `https://github.com/${repository.owner}/${repository.name}`,
     },
   ];

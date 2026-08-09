@@ -21,5 +21,5 @@ BarePDF provides keyboard shortcuts for fast document navigation.
 | **Copy Text** | `Ctrl + C` | None |
 | **Full Screen** | `F11` | None |
 | **Presentation Mode** | `F5` | None |
-| **Exit Full Screen / Presentation** | `Esc` | `F11` / `F5` |
+| **Exit Full Screen / Presentation** | `Esc` | None |
 | **Password Unlock** | `Enter` (inside password modal) | None |

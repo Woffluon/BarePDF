@@ -7,7 +7,7 @@ order: 5
 
 # Rendering Pipeline & Cache
 
-BarePDF's rendering engine (`crates/barepdf-render`) is engineered for smooth 60fps continuous scrolling over multi-thousand page documents without excessive memory usage.
+BarePDF's rendering engine (`crates/barepdf-render`) uses demand-driven work and bounded caches to keep continuous scrolling responsive on large documents without allowing bitmap usage to grow with page count.
 
 ## Demand-Driven Architecture
 
