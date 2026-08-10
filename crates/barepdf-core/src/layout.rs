@@ -195,9 +195,9 @@ impl ContinuousLayout {
     #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn visible_pages(&self, viewport_top: f32, viewport_height: f32) -> Vec<PageIndex> {
         let viewport_bottom = viewport_top + viewport_height;
-        let first = self.pages.partition_point(|page| {
-            page.y_offset + page.height as f32 <= viewport_top
-        });
+        let first = self
+            .pages
+            .partition_point(|page| page.y_offset + page.height as f32 <= viewport_top);
         self.pages[first..]
             .iter()
             .take_while(|page| page.y_offset <= viewport_bottom)
@@ -212,9 +212,9 @@ impl ContinuousLayout {
         let mut best_page = PageIndex::zero();
         let mut best_dist = f32::MAX;
 
-        let first = self.pages.partition_point(|page| {
-            page.y_offset + page.height as f32 <= viewport_top
-        });
+        let first = self
+            .pages
+            .partition_point(|page| page.y_offset + page.height as f32 <= viewport_top);
         for page in self.pages[first..]
             .iter()
             .take_while(|page| page.y_offset <= viewport_top + viewport_height)

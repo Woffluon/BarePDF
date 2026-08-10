@@ -16,12 +16,18 @@ impl PdfiumEngine {
     /// Returns a platform error when the sibling `PDFium` library cannot be located or bound.
     pub fn new() -> Result<Self, PdfError> {
         let library_path = std::env::current_exe()
-            .map_err(|error| PdfError::PlatformError(format!("Cannot locate application executable: {error}")))?
+            .map_err(|error| {
+                PdfError::PlatformError(format!("Cannot locate application executable: {error}"))
+            })?
             .parent()
             .map(|directory| directory.join(Pdfium::pdfium_platform_library_name()))
-            .ok_or_else(|| PdfError::PlatformError("Application executable has no parent directory".into()))?
+            .ok_or_else(|| {
+                PdfError::PlatformError("Application executable has no parent directory".into())
+            })?
             .canonicalize()
-            .map_err(|error| PdfError::PlatformError(format!("Cannot locate sibling PDFium library: {error}")))?;
+            .map_err(|error| {
+                PdfError::PlatformError(format!("Cannot locate sibling PDFium library: {error}"))
+            })?;
         let bindings = Pdfium::bind_to_library(library_path)
             .map_err(|e| PdfError::PlatformError(format!("Failed to bind PDFium library: {e}")))?;
 
@@ -112,10 +118,11 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             page_index: page_index.get(),
             reason: "target width exceeds PDFium's supported range".into(),
         })?;
-        let target_height = i32::try_from(target_height).map_err(|_| PdfError::RenderingFailed {
-            page_index: page_index.get(),
-            reason: "target height exceeds PDFium's supported range".into(),
-        })?;
+        let target_height =
+            i32::try_from(target_height).map_err(|_| PdfError::RenderingFailed {
+                page_index: page_index.get(),
+                reason: "target height exceeds PDFium's supported range".into(),
+            })?;
         let pages = self.doc.pages();
         let page =
             pages

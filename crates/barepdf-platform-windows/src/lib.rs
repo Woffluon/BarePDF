@@ -12,8 +12,8 @@ use windows_sys::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteW, HDROP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, SW_SHOWNORMAL,
-    WM_DROPFILES, WM_NCDESTROY, WNDPROC,
+    CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, SW_SHOWNORMAL, WM_DROPFILES,
+    WM_NCDESTROY, WNDPROC,
 };
 
 pub struct WindowsFileDialogs;
@@ -126,15 +126,17 @@ fn handle_drop_message(hwnd: HWND, message: u32, wparam: WPARAM) -> Result<(), (
         // SAFETY: Querying length does not write through the null buffer pointer.
         let length = unsafe { DragQueryFileW(drop_handle.0, index, std::ptr::null_mut(), 0) };
         let length = usize::try_from(length).map_err(|_| ())?;
-        let buffer_len = length.checked_add(1).filter(|len| *len <= MAX_DROP_PATH_UNITS).ok_or(())?;
+        let buffer_len = length
+            .checked_add(1)
+            .filter(|len| *len <= MAX_DROP_PATH_UNITS)
+            .ok_or(())?;
         let mut buffer = Vec::new();
         buffer.try_reserve_exact(buffer_len).map_err(|_| ())?;
         buffer.resize(buffer_len, 0);
         let buffer_len_u32 = u32::try_from(buffer.len()).map_err(|_| ())?;
         // SAFETY: Buffer has exactly the declared writable UTF-16 capacity.
-        let copied = unsafe {
-            DragQueryFileW(drop_handle.0, index, buffer.as_mut_ptr(), buffer_len_u32)
-        };
+        let copied =
+            unsafe { DragQueryFileW(drop_handle.0, index, buffer.as_mut_ptr(), buffer_len_u32) };
         if usize::try_from(copied).map_err(|_| ())? != length {
             return Err(());
         }
