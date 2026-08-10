@@ -12,9 +12,24 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.92"
+authors = ["BarePDF Contributors"]
+license = "MIT"
+repository = "https://github.com/Woffluon/BarePDF"
+
+[workspace.dependencies]
+lru = "0.16.3"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+[profile.release-unwind]
+inherits = "release"
+panic = "unwind"

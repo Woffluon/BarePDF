@@ -5,6 +5,7 @@ pub struct SelectionEngine;
 impl SelectionEngine {
     /// Hit-tests a point `(x, y)` in PDF page coordinates against page text glyphs.
     /// Returns the 0-based character index closest to the point.
+    #[must_use]
     pub fn hit_test(geom: &PageTextGeometry, x: f32, y: f32) -> u32 {
         if geom.glyphs.is_empty() {
             return 0;
@@ -16,7 +17,7 @@ impl SelectionEngine {
         for (idx, g) in geom.glyphs.iter().enumerate() {
             // Check if point is inside bounding box
             if x >= g.x && x <= g.x + g.width && y >= g.y && y <= g.y + g.height {
-                return idx as u32;
+                return u32::try_from(idx).unwrap_or(u32::MAX);
             }
 
             // Calculate center distance
@@ -28,7 +29,7 @@ impl SelectionEngine {
 
             if dist_sq < min_dist_sq {
                 min_dist_sq = dist_sq;
-                closest_idx = idx as u32;
+                closest_idx = u32::try_from(idx).unwrap_or(u32::MAX);
             }
         }
 
@@ -36,13 +37,14 @@ impl SelectionEngine {
     }
 
     /// Extends selection to word boundaries around `char_index` (Unicode & Turkish aware).
+    #[must_use]
     pub fn select_word(geom: &PageTextGeometry, page: PageIndex, char_index: u32) -> TextSelection {
         if geom.glyphs.is_empty() {
             let pos = TextPosition::new(page, 0);
             return TextSelection::new(pos, pos);
         }
 
-        let len = geom.glyphs.len() as u32;
+        let len = u32::try_from(geom.glyphs.len()).unwrap_or(u32::MAX);
         let target = char_index.min(len.saturating_sub(1));
 
         let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == '’';
@@ -73,17 +75,20 @@ impl SelectionEngine {
     }
 
     /// Selects the line containing `char_index`.
+    #[must_use]
     pub fn select_line(geom: &PageTextGeometry, page: PageIndex, char_index: u32) -> TextSelection {
         if geom.glyphs.is_empty() {
             let pos = TextPosition::new(page, 0);
             return TextSelection::new(pos, pos);
         }
 
-        let target_glyph = &geom.glyphs[char_index.min(geom.glyphs.len() as u32 - 1) as usize];
+        let last = u32::try_from(geom.glyphs.len() - 1).unwrap_or(u32::MAX);
+        let target = char_index.min(last);
+        let target_glyph = &geom.glyphs[target as usize];
         let line_y = target_glyph.y;
         let line_h = target_glyph.height.max(1.0);
 
-        let mut start = char_index;
+        let mut start = target;
         while start > 0 {
             let prev = &geom.glyphs[start as usize - 1];
             if (prev.y - line_y).abs() > line_h * 0.8 || prev.ch == '\n' || prev.ch == '\r' {
@@ -92,7 +97,7 @@ impl SelectionEngine {
             start -= 1;
         }
 
-        let mut end = char_index;
+        let mut end = target;
         while (end as usize) < geom.glyphs.len() {
             let curr = &geom.glyphs[end as usize];
             if (curr.y - line_y).abs() > line_h * 0.8 || curr.ch == '\n' || curr.ch == '\r' {
@@ -104,7 +109,8 @@ impl SelectionEngine {
         TextSelection::new(TextPosition::new(page, start), TextPosition::new(page, end))
     }
 
-    /// Formats selected text across pages into clipboard string.
+    /// Formats selected text across pages into clipboard string in page order.
+    #[must_use]
     pub fn get_selected_text(selection: &TextSelection, geometries: &[PageTextGeometry]) -> String {
         if selection.is_empty() {
             return String::new();
@@ -113,7 +119,10 @@ impl SelectionEngine {
         let mut result = String::new();
         let (start_pos, end_pos) = selection.start_and_end();
 
-        for geom in geometries {
+        let mut ordered_geometries: Vec<_> = geometries.iter().collect();
+        ordered_geometries.sort_unstable_by_key(|geom| geom.page_index);
+
+        for geom in ordered_geometries {
             if geom.page_index < start_pos.page || geom.page_index > end_pos.page {
                 continue;
             }
@@ -127,7 +136,7 @@ impl SelectionEngine {
             let end_idx = if geom.page_index == end_pos.page {
                 end_pos.char_index
             } else {
-                geom.glyphs.len() as u32
+                u32::try_from(geom.glyphs.len()).unwrap_or(u32::MAX)
             };
 
             let page_glyphs = &geom.glyphs;
@@ -186,5 +195,48 @@ mod tests {
         let sel = SelectionEngine::select_word(&geom, PageIndex::zero(), 16);
         let txt = SelectionEngine::get_selected_text(&sel, &[geom]);
         assert_eq!(txt, "Türkçe");
+    }
+
+    #[test]
+    fn select_line_clamps_out_of_range_index() {
+        let geom = sample_geometry();
+
+        let selection = SelectionEngine::select_line(&geom, PageIndex::zero(), u32::MAX);
+
+        let (_, end) = selection.start_and_end();
+        assert!(end.char_index <= u32::try_from(geom.glyphs.len()).unwrap());
+    }
+
+    #[test]
+    fn selected_text_is_sorted_by_page_index() {
+        let page_one = PageTextGeometry {
+            page_index: PageIndex::from_raw(1),
+            glyphs: vec![GlyphRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                ch: 'B',
+            }],
+        };
+        let page_zero = PageTextGeometry {
+            page_index: PageIndex::zero(),
+            glyphs: vec![GlyphRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                ch: 'A',
+            }],
+        };
+        let selection = TextSelection::new(
+            TextPosition::new(PageIndex::zero(), 0),
+            TextPosition::new(PageIndex::from_raw(1), 1),
+        );
+
+        assert_eq!(
+            SelectionEngine::get_selected_text(&selection, &[page_one, page_zero]),
+            "A\nB"
+        );
     }
 }

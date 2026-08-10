@@ -1,14 +1,19 @@
-use std::path::Path;
-
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        let ico_path = Path::new("../../assets/app.ico");
+        let manifest_dir = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"),
+        );
+        let ico_path = manifest_dir.join("../../assets/app.ico");
+        assert!(
+            ico_path.is_file(),
+            "Required application icon is missing: {}",
+            ico_path.display()
+        );
+        println!("cargo:rerun-if-changed={}", ico_path.display());
 
         let mut res = winres::WindowsResource::new();
-        if ico_path.exists() {
-            res.set_icon("../../assets/app.ico");
-        }
+        res.set_icon(ico_path.to_str().expect("Icon path is not UTF-8"));
         res.set_manifest(
             r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -21,6 +26,6 @@ fn main() {
 </assembly>
 "#,
         );
-        let _ = res.compile();
+        res.compile().expect("Windows resource compilation failed");
     }
 }

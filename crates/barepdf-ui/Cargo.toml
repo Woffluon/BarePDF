@@ -1,8 +1,11 @@
 [package]
 name = "barepdf-ui"
-version = "1.0.0"
-edition = "2021"
-authors = ["BarePDF Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Slint desktop interface views, themes, and view-models for BarePDF"
 
 [dependencies]
@@ -10,4 +13,3 @@ barepdf-core = { path = "../barepdf-core" }
 barepdf-render = { path = "../barepdf-render" }
 barepdf-platform = { path = "../barepdf-platform" }
 slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2"] }
-tracing = "0.1"

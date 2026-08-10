@@ -3,9 +3,32 @@ use std::ptr::null_mut;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Gdi::{
     CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HBITMAP, HDC,
+    RGBQUAD,
 };
 
+struct OwnedBitmap(HBITMAP);
+
+impl Drop for OwnedBitmap {
+    fn drop(&mut self) {
+        // SAFETY: This type owns the HBITMAP returned by CreateDIBSection until into_raw().
+        unsafe {
+            let _ = DeleteObject(self.0);
+        }
+    }
+}
+
+impl OwnedBitmap {
+    fn into_raw(self) -> HBITMAP {
+        let bitmap = self.0;
+        std::mem::forget(self);
+        bitmap
+    }
+}
+
 /// Fits target dimensions within `cx * cx` box while preserving aspect ratio.
+#[must_use]
+#[allow(clippy::cast_precision_loss)] // Thumbnail dimensions are bounded by the Shell request.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Positive finite values are clamped to 1..=cx.
 pub fn calculate_thumbnail_dimensions(page_width: f32, page_height: f32, cx: u32) -> (u32, u32) {
     if page_width <= 0.0 || page_height <= 0.0 || cx == 0 {
         return (cx.max(1), cx.max(1));
@@ -30,63 +53,69 @@ pub fn calculate_thumbnail_dimensions(page_width: f32, page_height: f32, cx: u32
 }
 
 /// Converts RGBA buffer to BGRA and creates a 32-bit top-down Win32 DIB Section HBITMAP.
+#[must_use]
 pub fn create_32bit_dib_section(width: u32, height: u32, rgba_pixels: &[u8]) -> Option<HBITMAP> {
     if width == 0 || height == 0 {
         return None;
     }
 
-    let expected_len = (width as usize)
-        .checked_mul(height as usize)?
-        .checked_mul(4)?;
+    let width_i32 = i32::try_from(width).ok()?;
+    let height_i32 = i32::try_from(height).ok()?;
+    let pixel_count = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?;
+    let expected_len = pixel_count.checked_mul(4)?;
+    if expected_len > isize::MAX as usize {
+        return None;
+    }
+    let image_size = u32::try_from(expected_len).ok()?;
 
-    if rgba_pixels.len() < expected_len {
+    if rgba_pixels.len() != expected_len {
         return None;
     }
 
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width as i32,
-            biHeight: -(height as i32), // Top-down orientation
+            biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).ok()?,
+            biWidth: width_i32,
+            biHeight: height_i32.checked_neg()?, // Top-down orientation
             biPlanes: 1,
             biBitCount: 32,
             biCompression: 0, // BI_RGB
-            biSizeImage: expected_len as u32,
+            biSizeImage: image_size,
             biXPelsPerMeter: 0,
             biYPelsPerMeter: 0,
             biClrUsed: 0,
             biClrImportant: 0,
         },
-        bmiColors: [Default::default()],
+        bmiColors: [RGBQUAD::default()],
     };
 
     let mut bits_ptr: *mut c_void = null_mut();
 
     // SAFETY: CreateDIBSection takes BITMAPINFO pointer and returns handle and buffer pointer.
-    let hbitmap = unsafe {
-        CreateDIBSection(
-            HDC::default(),
-            &bmi as *const BITMAPINFO,
-            DIB_RGB_COLORS,
-            &mut bits_ptr as *mut *mut c_void,
-            HANDLE::default(),
-            0,
-        )
-    }
-    .ok()?;
+    let hbitmap = OwnedBitmap(
+        unsafe {
+            CreateDIBSection(
+                HDC::default(),
+                &raw const bmi,
+                DIB_RGB_COLORS,
+                &raw mut bits_ptr,
+                HANDLE::default(),
+                0,
+            )
+        }
+        .ok()?,
+    );
 
     if bits_ptr.is_null() {
-        // SAFETY: Delete handle on failure.
-        unsafe {
-            let _ = DeleteObject(hbitmap);
-        }
         return None;
     }
 
     // SAFETY: Copy RGBA to BGRA in DIB section memory buffer.
     unsafe {
-        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, expected_len);
-        for i in 0..(width * height) as usize {
+        let dest = std::slice::from_raw_parts_mut(bits_ptr.cast::<u8>(), expected_len);
+        for i in 0..pixel_count {
             let src_idx = i * 4;
             let r = rgba_pixels[src_idx];
             let g = rgba_pixels[src_idx + 1];
@@ -100,7 +129,7 @@ pub fn create_32bit_dib_section(width: u32, height: u32, rgba_pixels: &[u8]) -> 
         }
     }
 
-    Some(hbitmap)
+    Some(hbitmap.into_raw())
 }
 
 #[cfg(test)]

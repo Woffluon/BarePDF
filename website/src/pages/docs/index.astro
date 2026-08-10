@@ -44,7 +44,7 @@ const devDocs = allDocs.filter((d) => d.data.category === 'developer').sort((a, 
           <ul class="docs-links-list">
             {userDocs.map((doc) => (
               <li>
-                <a href={`${baseUrl}/docs/${doc.slug}`} class="doc-link-item">
+                <a href={`${baseUrl}/docs/${doc.id}`} class="doc-link-item">
                   <span class="doc-link-title">{doc.data.title}</span>
                   <span class="doc-link-desc">{doc.data.description}</span>
                 </a>
@@ -71,7 +71,7 @@ const devDocs = allDocs.filter((d) => d.data.category === 'developer').sort((a, 
           <ul class="docs-links-list">
             {devDocs.map((doc) => (
               <li>
-                <a href={`${baseUrl}/docs/${doc.slug}`} class="doc-link-item">
+                <a href={`${baseUrl}/docs/${doc.id}`} class="doc-link-item">
                   <span class="doc-link-title">{doc.data.title}</span>
                   <span class="doc-link-desc">{doc.data.description}</span>
                 </a>

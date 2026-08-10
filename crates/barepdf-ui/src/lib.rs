@@ -615,10 +615,10 @@ slint::slint! {
                         }
                     }
 
-                    if root.password-required : PasswordPopover {
+                    if root.password-required : password-popup := PasswordPopover {
                         file-name: root.protected-file-name; error-text: root.password-error;
-                        submit(password) => { root.request-unlock-password(password); }
-                        cancel => { root.password-required = false; }
+                        submit(password) => { root.request-unlock-password(password); password-popup.password-input = ""; }
+                        cancel => { password-popup.password-input = ""; root.password-required = false; }
                     }
 
                     if root.settings-open : Rectangle {
@@ -669,11 +669,17 @@ pub struct UiApp {
 }
 
 impl UiApp {
+    /// # Errors
+    ///
+    /// Returns a `slint::PlatformError` when the UI cannot be created.
     pub fn new() -> Result<Self, slint::PlatformError> {
         let window = AppWindow::new()?;
         Ok(Self { window })
     }
 
+    /// # Errors
+    ///
+    /// Returns a `slint::PlatformError` when the event loop cannot run.
     pub fn run(&self) -> Result<(), slint::PlatformError> {
         self.window.run()
     }

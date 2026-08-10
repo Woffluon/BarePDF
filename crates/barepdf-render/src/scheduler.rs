@@ -1,14 +1,14 @@
 use crate::cache::{CacheKey, SharedBitmapCache};
 use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId, Rotation};
 use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
+use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priority {
     Visible = 0,
     Prefetch = 1,
@@ -132,19 +132,35 @@ pub enum RenderEvent {
 }
 
 pub struct RenderScheduler {
-    high_cmd_sender: Sender<RenderCommand>,
+    control_cmd_sender: Sender<RenderCommand>,
+    visible_cmd_sender: Sender<RenderCommand>,
     low_cmd_sender: Sender<RenderCommand>,
+    critical_event_receiver: Receiver<RenderEvent>,
     event_receiver: Receiver<RenderEvent>,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
     cache: SharedBitmapCache,
 }
 
+fn emit_data(event_sender: &Sender<RenderEvent>, event: RenderEvent) -> bool {
+    !matches!(
+        event_sender.try_send(event),
+        Err(TrySendError::Disconnected(_))
+    )
+}
+
+fn emit_critical(event_sender: &Sender<RenderEvent>, event: RenderEvent) -> bool {
+    event_sender.send(event).is_ok()
+}
+
 impl RenderScheduler {
+    #[allow(clippy::too_many_lines)] // Worker command handling stays co-located with its channels and state.
     pub fn spawn<B: PdfBackend + 'static>(backend: B, budget: MemoryBudget) -> Self {
         // Control and visible work must never block the UI thread.
-        let (high_tx, high_rx) = unbounded::<RenderCommand>();
+        let (control_tx, control_rx) = bounded::<RenderCommand>(8);
+        let (visible_tx, visible_rx) = bounded::<RenderCommand>(32);
         let (low_tx, low_rx) = bounded::<RenderCommand>(128);
+        let (critical_event_tx, critical_event_rx) = bounded::<RenderEvent>(32);
         let (event_tx, event_rx) = bounded::<RenderEvent>(128);
         let current_gen = Arc::new(AtomicU64::new(1));
         let pending_renders = Arc::new(Mutex::new(HashSet::new()));
@@ -157,11 +173,12 @@ impl RenderScheduler {
         thread::spawn(move || {
             let mut active_doc: Option<(DocumentId, Box<dyn PdfDocument>)> = None;
 
-            loop {
-                let cmd = match high_rx.try_recv() {
+            'worker: loop {
+                let cmd = match control_rx.try_recv() {
                     Ok(command) => command,
                     Err(_) => match crossbeam_channel::select! {
-                        recv(high_rx) -> message => message,
+                        recv(control_rx) -> message => message,
+                        recv(visible_rx) -> message => message,
                         recv(low_rx) -> message => message,
                     } {
                         Ok(command) => command,
@@ -176,25 +193,67 @@ impl RenderScheduler {
                         password,
                     } => match backend.open_path(&path, password.as_deref()) {
                         Ok(doc) => {
-                            let count = doc.page_count().get();
-                            let first_dims = doc
-                                .page_dimensions(PageIndex::zero())
-                                .unwrap_or((612.0, 792.0));
-                            active_doc = Some((document_id, doc));
-                            cache_clone.clear();
-                            let _ = event_tx.send(RenderEvent::DocumentOpened {
-                                document_id,
-                                page_count: count,
-                                first_page_dimensions: first_dims,
-                            });
+                            match doc.page_count().and_then(|count| {
+                                doc.page_dimensions(PageIndex::zero())
+                                    .map(|dimensions| (count, dimensions))
+                            }) {
+                                Ok((count, first_page_dimensions)) => {
+                                    active_doc = Some((document_id, doc));
+                                    match cache_clone.clear() {
+                                        Ok(()) => {
+                                            if !emit_critical(
+                                                &critical_event_tx,
+                                                RenderEvent::DocumentOpened {
+                                                    document_id,
+                                                    page_count: count.get(),
+                                                    first_page_dimensions,
+                                                },
+                                            ) {
+                                                break 'worker;
+                                            }
+                                        }
+                                        Err(error) => {
+                                            if !emit_critical(
+                                                &critical_event_tx,
+                                                RenderEvent::Error {
+                                                    request_id: None,
+                                                    document_id,
+                                                    generation: None,
+                                                    error,
+                                                },
+                                            ) {
+                                                break 'worker;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    if !emit_critical(
+                                        &critical_event_tx,
+                                        RenderEvent::Error {
+                                            request_id: None,
+                                            document_id,
+                                            generation: None,
+                                            error,
+                                        },
+                                    ) {
+                                        break 'worker;
+                                    }
+                                }
+                            }
                         }
                         Err(error) => {
-                            let _ = event_tx.send(RenderEvent::Error {
-                                request_id: None,
-                                document_id,
-                                generation: None,
-                                error,
-                            });
+                            if !emit_critical(
+                                &critical_event_tx,
+                                RenderEvent::Error {
+                                    request_id: None,
+                                    document_id,
+                                    generation: None,
+                                    error,
+                                },
+                            ) {
+                                break 'worker;
+                            }
                         }
                     },
                     RenderCommand::RenderPage(job) => {
@@ -218,17 +277,42 @@ impl RenderScheduler {
                             rotation: job.rotation,
                         };
 
-                        if let Some(bitmap) = cache_clone.get(&cache_key) {
-                            let _ = event_tx.send(RenderEvent::PageRendered {
-                                request_id: job.request_id,
-                                generation: job.generation,
-                                document_id: job.document_id,
-                                page_index: job.page_index,
-                                kind: job.kind,
-                                bitmap,
-                            });
-                            finish();
-                            continue;
+                        match cache_clone.get(&cache_key) {
+                            Ok(Some(bitmap)) => {
+                                let emitted = emit_data(
+                                    &event_tx,
+                                    RenderEvent::PageRendered {
+                                        request_id: job.request_id,
+                                        generation: job.generation,
+                                        document_id: job.document_id,
+                                        page_index: job.page_index,
+                                        kind: job.kind,
+                                        bitmap,
+                                    },
+                                );
+                                finish();
+                                if !emitted {
+                                    break 'worker;
+                                }
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                let emitted = emit_critical(
+                                    &critical_event_tx,
+                                    RenderEvent::Error {
+                                        request_id: Some(job.request_id),
+                                        document_id: job.document_id,
+                                        generation: Some(job.generation),
+                                        error,
+                                    },
+                                );
+                                finish();
+                                if !emitted {
+                                    break 'worker;
+                                }
+                                continue;
+                            }
                         }
 
                         if let Some((doc_id, ref doc)) = active_doc {
@@ -240,23 +324,52 @@ impl RenderScheduler {
                                     job.rotation,
                                 ) {
                                     Ok(raw_bitmap) => {
-                                        let bitmap = cache_clone.insert(cache_key, raw_bitmap);
-                                        let _ = event_tx.send(RenderEvent::PageRendered {
-                                            request_id: job.request_id,
-                                            generation: job.generation,
-                                            document_id: job.document_id,
-                                            page_index: job.page_index,
-                                            kind: job.kind,
-                                            bitmap,
-                                        });
+                                        match cache_clone.insert(cache_key, raw_bitmap) {
+                                            Ok(bitmap) => {
+                                                if !emit_data(
+                                                    &event_tx,
+                                                    RenderEvent::PageRendered {
+                                                        request_id: job.request_id,
+                                                        generation: job.generation,
+                                                        document_id: job.document_id,
+                                                        page_index: job.page_index,
+                                                        kind: job.kind,
+                                                        bitmap,
+                                                    },
+                                                ) {
+                                                    finish();
+                                                    break 'worker;
+                                                }
+                                            }
+                                            Err(error) => {
+                                                if !emit_critical(
+                                                    &critical_event_tx,
+                                                    RenderEvent::Error {
+                                                        request_id: Some(job.request_id),
+                                                        document_id: job.document_id,
+                                                        generation: Some(job.generation),
+                                                        error,
+                                                    },
+                                                ) {
+                                                    finish();
+                                                    break 'worker;
+                                                }
+                                            }
+                                        }
                                     }
                                     Err(error) => {
-                                        let _ = event_tx.send(RenderEvent::Error {
-                                            request_id: Some(job.request_id),
-                                            document_id: job.document_id,
-                                            generation: Some(job.generation),
-                                            error,
-                                        });
+                                        if !emit_critical(
+                                            &critical_event_tx,
+                                            RenderEvent::Error {
+                                                request_id: Some(job.request_id),
+                                                document_id: job.document_id,
+                                                generation: Some(job.generation),
+                                                error,
+                                            },
+                                        ) {
+                                            finish();
+                                            break 'worker;
+                                        }
                                     }
                                 }
                             }
@@ -273,15 +386,38 @@ impl RenderScheduler {
                         }
                         if let Some((doc_id, ref doc)) = active_doc {
                             if doc_id == document_id {
-                                let text = doc.extract_text(page_index).unwrap_or_default();
-                                let spans = doc.extract_text_spans(page_index).unwrap_or_default();
-                                let _ = event_tx.send(RenderEvent::TextExtracted {
-                                    document_id,
-                                    generation,
-                                    page_index,
-                                    text,
-                                    spans,
-                                });
+                                match doc.extract_text(page_index).and_then(|text| {
+                                    doc.extract_text_spans(page_index)
+                                        .map(|spans| (text, spans))
+                                }) {
+                                    Ok((text, spans)) => {
+                                        if !emit_data(
+                                            &event_tx,
+                                            RenderEvent::TextExtracted {
+                                                document_id,
+                                                generation,
+                                                page_index,
+                                                text,
+                                                spans,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        if !emit_critical(
+                                            &critical_event_tx,
+                                            RenderEvent::Error {
+                                                request_id: None,
+                                                document_id,
+                                                generation: Some(generation),
+                                                error,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -295,13 +431,33 @@ impl RenderScheduler {
                         }
                         if let Some((doc_id, ref doc)) = active_doc {
                             if doc_id == document_id {
-                                if let Ok(geometry) = doc.get_page_text_geometry(page_index) {
-                                    let _ = event_tx.send(RenderEvent::TextGeometryFetched {
-                                        document_id,
-                                        generation,
-                                        page_index,
-                                        geometry,
-                                    });
+                                match doc.get_page_text_geometry(page_index) {
+                                    Ok(geometry) => {
+                                        if !emit_data(
+                                            &event_tx,
+                                            RenderEvent::TextGeometryFetched {
+                                                document_id,
+                                                generation,
+                                                page_index,
+                                                geometry,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        if !emit_critical(
+                                            &critical_event_tx,
+                                            RenderEvent::Error {
+                                                request_id: None,
+                                                document_id,
+                                                generation: Some(generation),
+                                                error,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -309,11 +465,31 @@ impl RenderScheduler {
                     RenderCommand::FetchOutline { document_id } => {
                         if let Some((doc_id, ref doc)) = active_doc {
                             if doc_id == document_id {
-                                if let Ok(outline) = doc.get_outline() {
-                                    let _ = event_tx.send(RenderEvent::OutlineFetched {
-                                        document_id,
-                                        outline,
-                                    });
+                                match doc.get_outline() {
+                                    Ok(outline) => {
+                                        if !emit_data(
+                                            &event_tx,
+                                            RenderEvent::OutlineFetched {
+                                                document_id,
+                                                outline,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        if !emit_critical(
+                                            &critical_event_tx,
+                                            RenderEvent::Error {
+                                                request_id: None,
+                                                document_id,
+                                                generation: None,
+                                                error,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -325,24 +501,75 @@ impl RenderScheduler {
                     } => {
                         if let Some((doc_id, ref doc)) = active_doc {
                             if doc_id == document_id {
-                                let end = start.saturating_add(count).min(doc.page_count().get());
-                                let dimensions = (start..end)
-                                    .filter_map(|index| {
-                                        doc.page_dimensions(PageIndex::from_raw(index)).ok()
-                                    })
-                                    .collect();
-                                let _ = event_tx.send(RenderEvent::PageDimensionsFetched {
-                                    document_id,
-                                    start,
-                                    dimensions,
-                                });
+                                match doc.page_count() {
+                                    Ok(page_count) => {
+                                        let end = start.saturating_add(count).min(page_count.get());
+                                        let dimensions = (start..end)
+                                            .map(|index| {
+                                                doc.page_dimensions(PageIndex::from_raw(index))
+                                            })
+                                            .collect::<Result<Vec<_>, _>>();
+                                        match dimensions {
+                                            Ok(dimensions) => {
+                                                if !emit_data(
+                                                    &event_tx,
+                                                    RenderEvent::PageDimensionsFetched {
+                                                        document_id,
+                                                        start,
+                                                        dimensions,
+                                                    },
+                                                ) {
+                                                    break 'worker;
+                                                }
+                                            }
+                                            Err(error) => {
+                                                if !emit_critical(
+                                                    &critical_event_tx,
+                                                    RenderEvent::Error {
+                                                        request_id: None,
+                                                        document_id,
+                                                        generation: None,
+                                                        error,
+                                                    },
+                                                ) {
+                                                    break 'worker;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        if !emit_critical(
+                                            &critical_event_tx,
+                                            RenderEvent::Error {
+                                                request_id: None,
+                                                document_id,
+                                                generation: None,
+                                                error,
+                                            },
+                                        ) {
+                                            break 'worker;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                     RenderCommand::CloseDocument(doc_id) => {
                         if active_doc.as_ref().is_some_and(|(id, _)| *id == doc_id) {
                             active_doc = None;
-                            cache_clone.clear();
+                            if let Err(error) = cache_clone.clear() {
+                                if !emit_critical(
+                                    &critical_event_tx,
+                                    RenderEvent::Error {
+                                        request_id: None,
+                                        document_id: doc_id,
+                                        generation: None,
+                                        error,
+                                    },
+                                ) {
+                                    break 'worker;
+                                }
+                            }
                         }
                     }
                 }
@@ -350,8 +577,10 @@ impl RenderScheduler {
         });
 
         Self {
-            high_cmd_sender: high_tx,
+            control_cmd_sender: control_tx,
+            visible_cmd_sender: visible_tx,
             low_cmd_sender: low_tx,
+            critical_event_receiver: critical_event_rx,
             event_receiver: event_rx,
             current_generation: current_gen,
             pending_renders,
@@ -359,6 +588,7 @@ impl RenderScheduler {
         }
     }
 
+    #[must_use]
     pub fn bump_generation(&self) -> u64 {
         let generation = self.current_generation.fetch_add(1, Ordering::AcqRel) + 1;
         if let Ok(mut pending) = self.pending_renders.lock() {
@@ -367,12 +597,14 @@ impl RenderScheduler {
         generation
     }
 
+    #[must_use]
     pub fn current_generation(&self) -> u64 {
         self.current_generation.load(Ordering::Acquire)
     }
 
     /// Queues work without blocking the caller. Returns false for duplicate work or a full
     /// background queue so the UI can remain responsive under load.
+    #[must_use]
     pub fn send_command(&self, cmd: RenderCommand) -> bool {
         let pending_key = match &cmd {
             RenderCommand::RenderPage(job) => {
@@ -388,18 +620,30 @@ impl RenderScheduler {
             _ => None,
         };
 
-        let high_priority = matches!(
+        let control_command = matches!(
             &cmd,
-            RenderCommand::OpenDocument { .. }
-                | RenderCommand::CloseDocument(_)
-                | RenderCommand::RenderPage(RenderJob {
-                    priority: Priority::Visible,
-                    ..
-                })
+            RenderCommand::OpenDocument { .. } | RenderCommand::CloseDocument(_)
+        );
+        let visible_render = matches!(
+            &cmd,
+            RenderCommand::RenderPage(RenderJob {
+                priority: Priority::Visible,
+                ..
+            })
         );
 
-        let result = if high_priority {
-            self.high_cmd_sender.send(cmd).map_err(|_| ())
+        let result = if control_command {
+            self.control_cmd_sender
+                .try_send(cmd)
+                .map_err(|error| match error {
+                    TrySendError::Full(_) | TrySendError::Disconnected(_) => (),
+                })
+        } else if visible_render {
+            self.visible_cmd_sender
+                .try_send(cmd)
+                .map_err(|error| match error {
+                    TrySendError::Full(_) | TrySendError::Disconnected(_) => (),
+                })
         } else {
             self.low_cmd_sender
                 .try_send(cmd)
@@ -417,10 +661,31 @@ impl RenderScheduler {
         true
     }
 
-    pub fn try_recv_event(&self) -> Option<RenderEvent> {
-        self.event_receiver.try_recv().ok()
+    /// Returns `Ok(None)` while worker remains live without an event, and
+    /// `PdfError::WorkerTerminated` after worker event senders are disconnected.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError::WorkerTerminated` when the worker has stopped and all queued events
+    /// were already received.
+    pub fn try_recv_event(&self) -> Result<Option<RenderEvent>, PdfError> {
+        match self.critical_event_receiver.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(TryRecvError::Empty) => match self.event_receiver.try_recv() {
+                Ok(event) => Ok(Some(event)),
+                Err(TryRecvError::Empty) => Ok(None),
+                Err(TryRecvError::Disconnected) => Err(PdfError::WorkerTerminated),
+            },
+            Err(TryRecvError::Disconnected) => match self.event_receiver.try_recv() {
+                Ok(event) => Ok(Some(event)),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                    Err(PdfError::WorkerTerminated)
+                }
+            },
+        }
     }
 
+    #[must_use]
     pub fn cache(&self) -> &SharedBitmapCache {
         &self.cache
     }
@@ -462,8 +727,8 @@ mod tests {
     }
 
     impl PdfDocument for MockDocument {
-        fn page_count(&self) -> PageCount {
-            PageCount::new(4).expect("non-zero")
+        fn page_count(&self) -> Result<PageCount, PdfError> {
+            Ok(PageCount::new(4).expect("non-zero"))
         }
 
         fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
@@ -536,7 +801,7 @@ mod tests {
         while Instant::now() < deadline {
             if matches!(
                 scheduler.try_recv_event(),
-                Some(RenderEvent::DocumentOpened { document_id, .. }) if document_id == id
+                Ok(Some(RenderEvent::DocumentOpened { document_id, .. })) if document_id == id
             ) {
                 return;
             }
@@ -558,6 +823,33 @@ mod tests {
     }
 
     #[test]
+    fn disconnected_event_channels_report_worker_termination() {
+        let (control_sender, _control_receiver) = bounded(1);
+        let (visible_sender, _visible_receiver) = bounded(1);
+        let (low_sender, _low_receiver) = bounded(1);
+        let (critical_sender, critical_receiver) = bounded(1);
+        let (event_sender, event_receiver) = bounded(1);
+        drop(critical_sender);
+        drop(event_sender);
+
+        let scheduler = RenderScheduler {
+            control_cmd_sender: control_sender,
+            visible_cmd_sender: visible_sender,
+            low_cmd_sender: low_sender,
+            critical_event_receiver: critical_receiver,
+            event_receiver,
+            current_generation: Arc::new(AtomicU64::new(1)),
+            pending_renders: Arc::new(Mutex::new(HashSet::new())),
+            cache: SharedBitmapCache::new(MemoryBudget::new(1024)),
+        };
+
+        assert!(matches!(
+            scheduler.try_recv_event(),
+            Err(PdfError::WorkerTerminated)
+        ));
+    }
+
+    #[test]
     fn duplicate_render_is_only_queued_once() {
         let scheduler = scheduler(Duration::from_millis(80));
         open_document(&scheduler, DocumentId::new(7));
@@ -571,7 +863,7 @@ mod tests {
         let scheduler = scheduler(Duration::ZERO);
         open_document(&scheduler, DocumentId::new(7));
         let stale_generation = scheduler.current_generation();
-        scheduler.bump_generation();
+        let _ = scheduler.bump_generation();
         assert!(scheduler.send_command(RenderCommand::RenderPage(job(
             stale_generation,
             RenderKind::Page,
@@ -579,7 +871,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         assert!(!matches!(
             scheduler.try_recv_event(),
-            Some(RenderEvent::PageRendered { .. })
+            Ok(Some(RenderEvent::PageRendered { .. }))
         ));
     }
 
@@ -594,7 +886,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         assert!(!matches!(
             scheduler.try_recv_event(),
-            Some(RenderEvent::PageRendered { .. })
+            Ok(Some(RenderEvent::PageRendered { .. }))
         ));
     }
 

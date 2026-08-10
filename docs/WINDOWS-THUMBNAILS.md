@@ -31,7 +31,9 @@ Windows Shell automatically overlays the BarePDF application icon in the lower-r
 
 ## Safety & Crash Isolation
 
-- All COM vtable calls and exports wrap execution in `std::panic::catch_unwind`.
+- The staged thumbnail DLL uses Cargo's `release-unwind` profile. COM vtable calls and exports
+  convert unwind-capable Rust panics to `E_UNEXPECTED`; native access violations and OOM aborts
+  remain process-fatal and are not recoverable by `catch_unwind`.
 - Invalid, missing, or password-protected PDFs return `E_FAIL` without UI popups, allowing Windows Explorer to fallback gracefully to the standard document icon.
 - `pdfium.dll` path is deterministically resolved relative to `BarePDF.Thumbnail.dll` module directory, avoiding DLL search path vulnerabilities.
 

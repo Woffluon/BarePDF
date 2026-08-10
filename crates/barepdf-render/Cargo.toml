@@ -1,14 +1,15 @@
 [package]
 name = "barepdf-render"
-version = "1.0.0"
-edition = "2021"
-authors = ["BarePDF Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Demand-driven render scheduler, PDFium actor, and LRU bitmap cache for BarePDF"
 
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
 barepdf-pdf = { path = "../barepdf-pdf" }
 crossbeam-channel = "0.5"
-lru = "0.13"
-tracing = "0.1"
-thiserror = "2.0"
+lru.workspace = true

@@ -2,13 +2,18 @@ use arboard::Clipboard;
 use barepdf_core::PdfError;
 use barepdf_platform::{ClipboardAccess, FileDialogs, PrinterAccess};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageLevel};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
+use windows_sys::Win32::UI::Shell::{
+    DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteW, HDROP,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_DROPFILES, WNDPROC,
+    CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, SW_SHOWNORMAL,
+    WM_DROPFILES, WM_NCDESTROY, WNDPROC,
 };
 
 pub struct WindowsFileDialogs;
@@ -30,6 +35,18 @@ struct DropTarget {
 static DROP_TARGETS: OnceLock<Mutex<std::collections::HashMap<usize, DropTarget>>> =
     OnceLock::new();
 
+const MAX_DROP_FILES: u32 = 64;
+const MAX_DROP_PATH_UNITS: usize = 32_768;
+
+struct OwnedDropHandle(HDROP);
+
+impl Drop for OwnedDropHandle {
+    fn drop(&mut self) {
+        // SAFETY: WM_DROPFILES transfers ownership of this handle to the window procedure.
+        unsafe { DragFinish(self.0) };
+    }
+}
+
 /// Enables Windows Explorer file drops for a Slint Win32 window. The receiver is intentionally
 /// polled by the Slint event timer so the native window procedure never touches UI state.
 ///
@@ -46,17 +63,24 @@ pub unsafe fn install_file_drop(hwnd: HWND) -> Option<Receiver<Vec<PathBuf>>> {
     if previous_window_proc == 0 {
         return None;
     }
-    DROP_TARGETS
+    let inserted = DROP_TARGETS
         .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
         .lock()
-        .ok()?
-        .insert(
-            hwnd as usize,
-            DropTarget {
-                sender,
-                previous_window_proc,
-            },
-        );
+        .ok()
+        .map(|mut targets| {
+            targets.insert(
+                hwnd as usize,
+                DropTarget {
+                    sender,
+                    previous_window_proc,
+                },
+            );
+        });
+    if inserted.is_none() {
+        // SAFETY: Restore the exact window procedure replaced above when registration fails.
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, previous_window_proc) };
+        return None;
+    }
     unsafe { DragAcceptFiles(hwnd, 1) };
     Some(receiver)
 }
@@ -68,27 +92,61 @@ unsafe extern "system" fn drop_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if message == WM_DROPFILES {
-        let drop_handle = wparam as HDROP;
-        let count = unsafe { DragQueryFileW(drop_handle, u32::MAX, std::ptr::null_mut(), 0) };
-        let mut paths = Vec::with_capacity(count as usize);
-        for index in 0..count {
-            let length = unsafe { DragQueryFileW(drop_handle, index, std::ptr::null_mut(), 0) };
-            let mut buffer = vec![0u16; length as usize + 1];
-            unsafe { DragQueryFileW(drop_handle, index, buffer.as_mut_ptr(), buffer.len() as u32) };
-            buffer.truncate(length as usize);
-            paths.push(PathBuf::from(String::from_utf16_lossy(&buffer)));
-        }
-        unsafe { DragFinish(drop_handle) };
-        if let Some(targets) = DROP_TARGETS.get() {
-            if let Ok(targets) = targets.lock() {
-                if let Some(target) = targets.get(&(hwnd as usize)) {
-                    let _ = target.sender.try_send(paths);
-                }
-            }
-        }
+        let _ = std::panic::catch_unwind(|| handle_drop_message(hwnd, message, wparam));
         return 0;
     }
 
+    let _ = std::panic::catch_unwind(|| handle_drop_message(hwnd, message, wparam));
+
+    forward_window_proc(hwnd, message, wparam, lparam)
+}
+
+fn handle_drop_message(hwnd: HWND, message: u32, wparam: WPARAM) -> Result<(), ()> {
+    if message == WM_NCDESTROY {
+        if let Some(targets) = DROP_TARGETS.get() {
+            let mut targets = targets.lock().map_err(|_| ())?;
+            targets.remove(&(hwnd as usize));
+        }
+        return Err(());
+    }
+    if message != WM_DROPFILES {
+        return Err(());
+    }
+
+    let drop_handle = OwnedDropHandle(wparam as HDROP);
+    // SAFETY: OwnedDropHandle owns the valid HDROP supplied by WM_DROPFILES.
+    let count = unsafe { DragQueryFileW(drop_handle.0, u32::MAX, std::ptr::null_mut(), 0) };
+    if count > MAX_DROP_FILES {
+        return Err(());
+    }
+    let capacity = usize::try_from(count).map_err(|_| ())?;
+    let mut paths = Vec::new();
+    paths.try_reserve(capacity).map_err(|_| ())?;
+    for index in 0..count {
+        // SAFETY: Querying length does not write through the null buffer pointer.
+        let length = unsafe { DragQueryFileW(drop_handle.0, index, std::ptr::null_mut(), 0) };
+        let length = usize::try_from(length).map_err(|_| ())?;
+        let buffer_len = length.checked_add(1).filter(|len| *len <= MAX_DROP_PATH_UNITS).ok_or(())?;
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(buffer_len).map_err(|_| ())?;
+        buffer.resize(buffer_len, 0);
+        let buffer_len_u32 = u32::try_from(buffer.len()).map_err(|_| ())?;
+        // SAFETY: Buffer has exactly the declared writable UTF-16 capacity.
+        let copied = unsafe {
+            DragQueryFileW(drop_handle.0, index, buffer.as_mut_ptr(), buffer_len_u32)
+        };
+        if usize::try_from(copied).map_err(|_| ())? != length {
+            return Err(());
+        }
+        buffer.truncate(length);
+        paths.push(PathBuf::from(String::from_utf16_lossy(&buffer)));
+    }
+    let targets = DROP_TARGETS.get().ok_or(())?.lock().map_err(|_| ())?;
+    let target = targets.get(&(hwnd as usize)).ok_or(())?;
+    target.sender.try_send(paths).map_err(|_| ())
+}
+
+unsafe fn forward_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let previous_window_proc = DROP_TARGETS
         .get()
         .and_then(|targets| targets.lock().ok())
@@ -99,10 +157,11 @@ unsafe extern "system" fn drop_window_proc(
         });
     match previous_window_proc {
         Some(previous) => {
+            // SAFETY: The procedure is retained only while its HWND registry entry is alive.
             let previous: WNDPROC = unsafe { std::mem::transmute(previous) };
             unsafe { CallWindowProcW(previous, hwnd, message, wparam, lparam) }
         }
-        None => 0,
+        None => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
 }
 
@@ -125,6 +184,7 @@ impl Default for WindowsClipboard {
 }
 
 impl WindowsClipboard {
+    #[must_use]
     pub fn new() -> Self {
         let cb = Clipboard::new().ok();
         Self {
@@ -161,17 +221,30 @@ pub struct WindowsPrinter;
 
 impl PrinterAccess for WindowsPrinter {
     fn print_file(&self, path: &Path) -> Result<(), PdfError> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| PdfError::PrintingFailed("Invalid path".into()))?;
-        std::process::Command::new("powershell")
-            .args([
-                "-Command",
-                &format!("Start-Process -FilePath \"{}\" -Verb Print", path_str),
-            ])
-            .spawn()
-            .map_err(|e| PdfError::PrintingFailed(e.to_string()))?;
+        let path = wide_null(path.as_os_str());
+        let verb = wide_null(OsStr::new("print"));
+        // SAFETY: Both strings are NUL-terminated and remain alive for the call.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                path.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if (result as usize) <= 32 {
+            return Err(PdfError::PrintingFailed(format!(
+                "ShellExecuteW failed with code {}",
+                result as usize
+            )));
+        }
 
         Ok(())
     }
+}
+
+fn wide_null(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
 }

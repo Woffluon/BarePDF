@@ -10,7 +10,8 @@ $CargoPath = Get-Command "cargo" -ErrorAction SilentlyContinue | Select-Object -
 if (-not $CargoPath) {
     $CargoPath = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
 }
-& $CargoPath build --workspace --release --locked
+& $CargoPath build --workspace --exclude barepdf-thumbnail --release --locked
+& $CargoPath build --package barepdf-thumbnail --profile release-unwind --locked
 
 $StagedDir = Join-Path $RepoRoot "target\release\staged"
 if (Test-Path $StagedDir) {
@@ -25,28 +26,17 @@ if (-not (Test-Path $ExePath)) {
 
 Copy-Item $ExePath -Destination (Join-Path $StagedDir "BarePDF.exe")
 
-$ThumbnailDllPath = Join-Path $RepoRoot "target\release\barepdf_thumbnail.dll"
-if (Test-Path $ThumbnailDllPath) {
-    Copy-Item $ThumbnailDllPath -Destination (Join-Path $StagedDir "BarePDF.Thumbnail.dll")
+$ThumbnailDllPath = Join-Path $RepoRoot "target\release-unwind\barepdf_thumbnail.dll"
+if (-not (Test-Path $ThumbnailDllPath)) {
+    throw "Thumbnail DLL not found: $ThumbnailDllPath"
 }
+Copy-Item $ThumbnailDllPath -Destination (Join-Path $StagedDir "BarePDF.Thumbnail.dll")
 
 Copy-Item (Join-Path $RepoRoot "README.md") -Destination $StagedDir
 
 $PdfiumDll = Join-Path $RepoRoot "target\release\pdfium.dll"
 if (-not (Test-Path $PdfiumDll)) {
-    Write-Host "pdfium.dll missing in target\release, fetching PDFium binary package..." -ForegroundColor Yellow
-    $TempDir = Join-Path $RepoRoot "target\release\pdfium_temp"
-    $TgzPath = Join-Path $RepoRoot "target\release\pdfium-win-x64.tgz"
-    if (-not (Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir | Out-Null }
-    
-    Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-win-x64.tgz" -OutFile $TgzPath
-    tar -xzf $TgzPath -C $TempDir
-    Copy-Item (Join-Path $TempDir "bin\pdfium.dll") $PdfiumDll -Force
-    Remove-Item $TgzPath, $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-if (-not (Test-Path $PdfiumDll)) {
-    Write-Error "pdfium.dll is missing and could not be downloaded."
+    throw "pdfium.dll is missing. Supply a separately verified PDFium binary at $PdfiumDll; staging never downloads unsigned native code."
 }
 
 Copy-Item $PdfiumDll -Destination $StagedDir -Force

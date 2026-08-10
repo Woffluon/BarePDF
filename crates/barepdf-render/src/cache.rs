@@ -1,4 +1,4 @@
-use barepdf_core::{DocumentId, MemoryBudget, PageIndex, Rotation};
+use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, Rotation};
 use barepdf_pdf::RawBitmap;
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -20,6 +20,10 @@ pub struct BitmapCache {
 }
 
 impl BitmapCache {
+    #[must_use]
+    /// # Panics
+    ///
+    /// This cannot panic: the fixed cache entry count is non-zero.
     pub fn new(budget: MemoryBudget) -> Self {
         Self {
             // High capacity bound; memory byte budget controls eviction
@@ -35,10 +39,13 @@ impl BitmapCache {
 
     pub fn insert(&mut self, key: CacheKey, bitmap: RawBitmap) -> Arc<RawBitmap> {
         let bitmap_bytes = bitmap.pixels.len();
+        let arc_bitmap = Arc::new(bitmap);
+        if bitmap_bytes > self.budget_bytes {
+            return arc_bitmap;
+        }
         self.evict_for(bitmap_bytes);
 
-        let arc_bitmap = Arc::new(bitmap);
-        if let Some(old) = self.cache.put(key, arc_bitmap.clone()) {
+        if let Some((_, old)) = self.cache.push(key, arc_bitmap.clone()) {
             self.current_bytes = self.current_bytes.saturating_sub(old.pixels.len());
         }
         self.current_bytes += bitmap_bytes;
@@ -46,7 +53,9 @@ impl BitmapCache {
     }
 
     pub fn evict_for(&mut self, required_bytes: usize) {
-        while self.current_bytes + required_bytes > self.budget_bytes && !self.cache.is_empty() {
+        while self.current_bytes.saturating_add(required_bytes) > self.budget_bytes
+            && !self.cache.is_empty()
+        {
             if let Some((_, popped)) = self.cache.pop_lru() {
                 self.current_bytes = self.current_bytes.saturating_sub(popped.pixels.len());
             }
@@ -58,7 +67,8 @@ impl BitmapCache {
         self.current_bytes = 0;
     }
 
-    pub fn current_bytes(&self) -> usize {
+    #[must_use]
+    pub const fn current_bytes(&self) -> usize {
         self.current_bytes
     }
 }
@@ -69,28 +79,44 @@ pub struct SharedBitmapCache {
 }
 
 impl SharedBitmapCache {
+    #[must_use]
     pub fn new(budget: MemoryBudget) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BitmapCache::new(budget))),
         }
     }
 
-    pub fn get(&self, key: &CacheKey) -> Option<Arc<RawBitmap>> {
-        if let Ok(mut cache) = self.inner.lock() {
-            cache.get(key)
-        } else {
-            None
-        }
+    /// # Errors
+    ///
+    /// Returns `PdfError::CacheError` if the shared cache lock is poisoned.
+    pub fn get(&self, key: &CacheKey) -> Result<Option<Arc<RawBitmap>>, PdfError> {
+        let mut cache = self
+            .inner
+            .lock()
+            .map_err(|_| PdfError::CacheError("bitmap cache lock poisoned".into()))?;
+        Ok(cache.get(key))
     }
 
-    pub fn insert(&self, key: CacheKey, bitmap: RawBitmap) -> Arc<RawBitmap> {
-        let mut cache = self.inner.lock().expect("cache lock");
-        cache.insert(key, bitmap)
+    /// # Errors
+    ///
+    /// Returns `PdfError::CacheError` if the shared cache lock is poisoned.
+    pub fn insert(&self, key: CacheKey, bitmap: RawBitmap) -> Result<Arc<RawBitmap>, PdfError> {
+        let mut cache = self
+            .inner
+            .lock()
+            .map_err(|_| PdfError::CacheError("bitmap cache lock poisoned".into()))?;
+        Ok(cache.insert(key, bitmap))
     }
 
-    pub fn clear(&self) {
-        if let Ok(mut cache) = self.inner.lock() {
-            cache.clear();
-        }
+    /// # Errors
+    ///
+    /// Returns `PdfError::CacheError` if the shared cache lock is poisoned.
+    pub fn clear(&self) -> Result<(), PdfError> {
+        let mut cache = self
+            .inner
+            .lock()
+            .map_err(|_| PdfError::CacheError("bitmap cache lock poisoned".into()))?;
+        cache.clear();
+        Ok(())
     }
 }

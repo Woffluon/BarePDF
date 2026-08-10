@@ -4,13 +4,9 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
 
-# Get Version
-$AppCargoContent = Get-Content (Join-Path $RepoRoot "apps\barepdf\Cargo.toml") -Raw
-if ($AppCargoContent -match 'version\s*=\s*"([^"]+)"') {
-    $Version = $Matches[1]
-} else {
-    Write-Error "Could not parse version from Cargo.toml"
-}
+$Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+$Version = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
+if (-not $Version) { throw "barepdf package version not found" }
 
 $StagedDir = Join-Path $RepoRoot "target\release\staged"
 if (-not (Test-Path $StagedDir)) {

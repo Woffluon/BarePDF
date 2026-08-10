@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    tags: [ "v*" ]
 
 permissions:
   contents: read
@@ -15,11 +14,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
 
       - name: Validate Version Consistency
@@ -35,6 +35,12 @@ jobs:
       - name: Unit Tests
         run: cargo test --workspace --all-features --locked
 
+      - name: RustSec Audit
+        shell: powershell
+        run: |
+          cargo install cargo-audit --version 0.22.0 --locked
+          cargo audit --deny warnings
+
   publish-release:
     name: 2. Build, Package & Publish Release
     needs: validate
@@ -44,10 +50,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.95.0
 
       - name: Install Inno Setup
         shell: powershell
@@ -56,30 +64,43 @@ jobs:
       - name: Extract Application Version
         shell: powershell
         run: |
-          $Content = Get-Content apps/barepdf/Cargo.toml -Raw
-          if ($Content -match 'version\s*=\s*"([^"]+)"') {
-              $Ver = $Matches[1]
-              Write-Host "Extracted Version: $Ver"
-              "APP_VERSION=$Ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-              Write-Error "Failed to parse version"
-          }
+          $Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $Ver = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
+          if (-not $Ver) { throw "barepdf package version not found" }
+          "APP_VERSION=$Ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Reject an existing release tag
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release already exists: $env:GITHUB_REF_NAME" }
 
       - name: Stage Release Executable & Assets
         shell: powershell
         run: powershell -File packaging/windows/scripts/stage-release.ps1
 
-      - name: Optional Code Signing (Executable)
+      - name: Sign staged native binaries
         shell: powershell
-        if: env.WINDOWS_SIGNING_CERTIFICATE_BASE64 != ''
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
+          foreach ($name in "WINDOWS_SIGNING_CERTIFICATE_BASE64", "WINDOWS_SIGNING_CERTIFICATE_PASSWORD", "WINDOWS_SIGNING_TIMESTAMP_URL") {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing required release signing secret: $name" }
+          }
           $CertPath = "$env:TEMP\cert.pfx"
           [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
-          & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 target/release/staged/BarePDF.exe
+          $Targets = @("target/release/staged/BarePDF.exe", "target/release/staged/BarePDF.Thumbnail.dll", "target/release/staged/pdfium.dll")
+          foreach ($Target in $Targets) {
+            if (-not (Test-Path $Target)) { throw "Missing signing target: $Target" }
+            & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Target
+            if ($LASTEXITCODE -ne 0) { throw "Signing failed: $Target" }
+            & signtool.exe verify /pa $Target
+            if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $Target" }
+          }
           Remove-Item $CertPath -Force
 
       - name: Build Portable Package
@@ -90,18 +111,20 @@ jobs:
         shell: powershell
         run: powershell -File packaging/windows/scripts/build-installer.ps1
 
-      - name: Optional Code Signing (Installer)
+      - name: Sign installer
         shell: powershell
-        if: env.WINDOWS_SIGNING_CERTIFICATE_BASE64 != ''
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
           $CertPath = "$env:TEMP\cert.pfx"
           [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
           $InstallerExe = Get-Item target/release/installer/BarePDF-Setup-*.exe
           & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $InstallerExe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Installer signing failed" }
+          & signtool.exe verify /pa $InstallerExe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed" }
           Remove-Item $CertPath -Force
 
       - name: Validate Installer & Registry Configuration
@@ -119,9 +142,9 @@ jobs:
           "COMMIT_MSG=$Msg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
-          tag_name: v${{ env.APP_VERSION }}
+          tag_name: ${{ github.ref_name }}
           name: BarePDF v${{ env.APP_VERSION }}
           body: ${{ env.COMMIT_MSG }}
           target_commitish: ${{ github.sha }}

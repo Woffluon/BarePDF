@@ -7,9 +7,9 @@ import { repository } from '../lib/repository';
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 const release = await getLatestRelease();
 
-const installerAsset = release.assets.find((a) => a.type === 'installer') || release.assets[0];
-const portableAsset = release.assets.find((a) => a.type === 'portable') || release.assets[1] || installerAsset;
-const checksumAsset = release.assets.find((a) => a.type === 'checksum') || release.assets[2] || installerAsset;
+const installerAsset = release.assets.find((a) => a.type === 'installer');
+const portableAsset = release.assets.find((a) => a.type === 'portable');
+const checksumAsset = release.assets.find((a) => a.type === 'checksum');
 ---
 
 <BaseLayout
@@ -61,7 +61,7 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum') || relea
         )}
       </div>
 
-      <div class="verification-guide-box">
+      {checksumAsset && <div class="verification-guide-box">
         <h3 class="guide-title">How to Verify Download Hashes</h3>
         <p class="guide-desc">
           You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
@@ -70,7 +70,7 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum') || relea
         <p class="guide-note">
           Compare the output hash against the SHA256SUMS manifest file listed above.
         </p>
-      </div>
+      </div>}
 
       <div class="all-releases-banner">
         <div>

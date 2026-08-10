@@ -1,5 +1,5 @@
 ---
-import { formatDate, cleanReleaseNotes } from '../lib/releases';
+import { formatDate } from '../lib/releases';
 import type { GitHubRelease } from '../lib/github';
 
 interface Props {
@@ -7,7 +7,6 @@ interface Props {
 }
 
 const { release } = Astro.props;
-const formattedNotes = cleanReleaseNotes(release.notes);
 ---
 
 <article class="release-card">
@@ -19,7 +18,7 @@ const formattedNotes = cleanReleaseNotes(release.notes);
     <time class="release-date">{formatDate(release.publishedAt)}</time>
   </div>
 
-  <div class="release-notes" set:html={formattedNotes}></div>
+  <div class="release-notes">{release.notes || 'Official release of BarePDF.'}</div>
 
   <div class="release-footer">
     <a href={release.url} target="_blank" rel="noopener noreferrer" class="release-link">

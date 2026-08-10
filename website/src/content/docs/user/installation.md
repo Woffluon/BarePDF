@@ -36,7 +36,7 @@ Download `BarePDF-Portable-x64-v1.0.0.zip` from official GitHub Releases.
 
 ## Verifying Release Checksums
 
-You can verify the authenticity of downloaded releases using PowerShell:
+You can compare downloaded release integrity with the published checksum manifest using PowerShell:
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-v1.0.0.exe

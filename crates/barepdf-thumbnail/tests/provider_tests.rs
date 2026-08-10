@@ -6,7 +6,7 @@ use windows::core::GUID;
 fn test_clsid_is_stable_and_valid() {
     assert_ne!(CLSID_BAREPDF_THUMBNAIL, GUID::zeroed());
     assert_eq!(
-        format!("{:?}", CLSID_BAREPDF_THUMBNAIL),
+        format!("{CLSID_BAREPDF_THUMBNAIL:?}"),
         "4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B"
     );
 }

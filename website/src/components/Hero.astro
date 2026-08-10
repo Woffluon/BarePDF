@@ -8,8 +8,7 @@ interface Props {
 const { release } = Astro.props;
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-// Find setup installer asset or fallback
-const installerAsset = release.assets.find((a) => a.type === 'installer') || release.assets[0];
+const installerAsset = release.assets.find((a) => a.type === 'installer');
 ---
 
 <section class="hero-section">

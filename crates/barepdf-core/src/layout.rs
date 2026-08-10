@@ -8,6 +8,7 @@ pub struct PagePairing {
     pub right: Option<PageIndex>,
 }
 
+#[must_use]
 pub fn calculate_page_pairings(
     viewing_mode: ViewingMode,
     reading_direction: ReadingDirection,
@@ -74,6 +75,9 @@ pub fn calculate_page_pairings(
     pairings
 }
 
+#[must_use]
+#[allow(clippy::cast_precision_loss)] // Viewport pixels are bounded by the UI and converted for PDF point math.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Finite positive values are clamped to 1..=4096.
 pub fn compute_target_dimensions(
     page_width_pts: f32,
     page_height_pts: f32,
@@ -136,6 +140,8 @@ pub struct ScrollAnchor {
 }
 
 impl ContinuousLayout {
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn compute(
         page_dimensions: &[(f32, f32)],
         viewport_width: u32,
@@ -153,6 +159,9 @@ impl ContinuousLayout {
         let mut max_w = 0u32;
 
         for (idx, &(pw, ph)) in page_dimensions.iter().enumerate() {
+            let Ok(page_index) = u32::try_from(idx) else {
+                break;
+            };
             let dims = compute_target_dimensions(
                 pw,
                 ph,
@@ -163,7 +172,7 @@ impl ContinuousLayout {
             );
 
             pages.push(PageLayoutBox {
-                page_index: PageIndex::from_raw(idx as u32),
+                page_index: PageIndex::from_raw(page_index),
                 y_offset: current_y,
                 width: dims.width,
                 height: dims.height,
@@ -182,25 +191,34 @@ impl ContinuousLayout {
         }
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn visible_pages(&self, viewport_top: f32, viewport_height: f32) -> Vec<PageIndex> {
         let viewport_bottom = viewport_top + viewport_height;
-        self.pages
+        let first = self.pages.partition_point(|page| {
+            page.y_offset + page.height as f32 <= viewport_top
+        });
+        self.pages[first..]
             .iter()
-            .filter(|p| {
-                let page_top = p.y_offset;
-                let page_bottom = p.y_offset + p.height as f32;
-                page_bottom >= viewport_top && page_top <= viewport_bottom
-            })
+            .take_while(|page| page.y_offset <= viewport_bottom)
             .map(|p| p.page_index)
             .collect()
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn primary_page(&self, viewport_top: f32, viewport_height: f32) -> PageIndex {
         let viewport_center = viewport_top + viewport_height * 0.5;
         let mut best_page = PageIndex::zero();
         let mut best_dist = f32::MAX;
 
-        for page in &self.pages {
+        let first = self.pages.partition_point(|page| {
+            page.y_offset + page.height as f32 <= viewport_top
+        });
+        for page in self.pages[first..]
+            .iter()
+            .take_while(|page| page.y_offset <= viewport_top + viewport_height)
+        {
             let page_center = page.y_offset + page.height as f32 * 0.5;
             let dist = (page_center - viewport_center).abs();
             if dist < best_dist {
@@ -212,6 +230,8 @@ impl ContinuousLayout {
         best_page
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn compute_anchor(&self, viewport_top: f32, viewport_height: f32) -> ScrollAnchor {
         let primary = self.primary_page(viewport_top, viewport_height);
         if let Some(page) = self.pages.iter().find(|p| p.page_index == primary) {
@@ -229,6 +249,8 @@ impl ContinuousLayout {
         }
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
     pub fn restore_anchor(&self, anchor: ScrollAnchor) -> f32 {
         if let Some(page) = self
             .pages
@@ -247,6 +269,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)] // Fixed small test fixtures are exactly representable.
     fn test_continuous_layout_compute() {
         let dims = vec![(600.0, 800.0), (600.0, 800.0)];
         let layout = ContinuousLayout::compute(&dims, 800, 1000, ZoomMode::FitWidth, 1.0, 10.0);

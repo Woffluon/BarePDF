@@ -4,14 +4,9 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
 
-# Extract version from apps/barepdf/Cargo.toml
-$AppCargoPath = Join-Path $RepoRoot "apps\barepdf\Cargo.toml"
-$AppCargoContent = Get-Content $AppCargoPath -Raw
-if ($AppCargoContent -match 'version\s*=\s*"([^"]+)"') {
-    $CargoVersion = $Matches[1]
-} else {
-    Write-Error "Failed to extract version from apps/barepdf/Cargo.toml"
-}
+$Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+$CargoVersion = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
+if (-not $CargoVersion) { throw "barepdf package version not found" }
 
 # Extract version from BarePDF.iss
 $IssPath = Join-Path $RepoRoot "packaging\windows\installer\BarePDF.iss"

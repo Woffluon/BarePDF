@@ -1,8 +1,11 @@
 [package]
 name = "barepdf"
-version = "1.0.0"
-edition = "2021"
-authors = ["BarePDF Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "BarePDF: Bare, Fast, Yours. Ultra-lightweight PDF reader executable"
 
 [dependencies]
@@ -14,8 +17,7 @@ barepdf-platform-windows = { path = "../../crates/barepdf-platform-windows" }
 barepdf-i18n = { path = "../../crates/barepdf-i18n" }
 barepdf-ui = { path = "../../crates/barepdf-ui" }
 slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2", "raw-window-handle-06"] }
-lru = "0.13"
-tracing = "0.1"
+lru.workspace = true
 tracing-subscriber = "0.3"
 raw-window-handle = "0.6"
 

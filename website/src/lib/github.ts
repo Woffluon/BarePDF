@@ -22,6 +22,57 @@ export interface GitHubCommit {
 }
 
 const GITHUB_API_BASE = 'https://api.github.com';
+const GITHUB_HOST = 'github.com';
+const GITHUB_CONTENT_HOST_SUFFIX = '.githubusercontent.com';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function finiteSize(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function trustedGitHubUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  try {
+    const url = new URL(value);
+    const trustedHost = url.hostname === GITHUB_HOST || url.hostname.endsWith(GITHUB_CONTENT_HOST_SUFFIX);
+    return url.protocol === 'https:' && trustedHost ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function isReleaseAssetUrl(url: string, tag: string): boolean {
+  const expectedPath = `/${repository.owner}/${repository.name}/releases/download/${encodeURIComponent(tag)}/`;
+  return new URL(url).hostname === GITHUB_HOST && new URL(url).pathname.startsWith(expectedPath);
+}
+
+function isReleasePageUrl(url: string, tag: string): boolean {
+  const expectedPath = `/${repository.owner}/${repository.name}/releases/tag/${encodeURIComponent(tag)}`;
+  const parsedUrl = new URL(url);
+  return parsedUrl.hostname === GITHUB_HOST && parsedUrl.pathname === expectedPath;
+}
+
+function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((asset) => {
+    if (!isRecord(asset)) return [];
+    const name = stringValue(asset.name);
+    const size = finiteSize(asset.size);
+    const downloadUrl = trustedGitHubUrl(asset.browser_download_url);
+    if (!name || size === null || !downloadUrl || !isReleaseAssetUrl(downloadUrl, tag)) return [];
+
+    return [{ name, size, downloadUrl, type: classifyAsset(name) }];
+  });
+}
 
 function getHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -29,8 +80,7 @@ function getHeaders(): Record<string, string> {
     'Accept': 'application/vnd.github.v3+json',
   };
   
-  // Use GITHUB_TOKEN environment variable if available during build
-  const token = import.meta.env.GITHUB_TOKEN || (typeof globalThis !== 'undefined' && (globalThis as any).process?.env?.GITHUB_TOKEN);
+  const token = import.meta.env.GITHUB_TOKEN;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -60,22 +110,22 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
       console.warn(`[GitHub API] Failed to fetch latest release (${res.status} ${res.statusText}). Using static fallback.`);
       return defaultReleaseFallback;
     }
-    const data = await res.json();
-    
-    const assets: ReleaseAsset[] = (data.assets || []).map((a: any) => ({
-      name: a.name || 'unnamed',
-      size: a.size || 0,
-      downloadUrl: a.browser_download_url || '',
-      type: classifyAsset(a.name || ''),
-    }));
+    const data: unknown = await res.json();
+    if (!isRecord(data)) return defaultReleaseFallback;
+
+    const tag = stringValue(data.tag_name);
+    const releaseUrl = trustedGitHubUrl(data.html_url);
+    if (!tag || !releaseUrl || !isReleasePageUrl(releaseUrl, tag)) return defaultReleaseFallback;
+    const assets = parseReleaseAssets(data.assets, tag);
+    if (assets.length === 0) return defaultReleaseFallback;
 
     return {
-      tag: data.tag_name || 'v1.0.0',
-      name: data.name || data.tag_name || 'BarePDF Release',
-      publishedAt: data.published_at || null,
-      url: data.html_url || `https://github.com/${repository.owner}/${repository.name}/releases`,
-      notes: data.body || 'No release notes provided.',
-      assets: assets.length > 0 ? assets : defaultReleaseFallback.assets,
+      tag,
+      name: stringValue(data.name) ?? tag,
+      publishedAt: stringValue(data.published_at),
+      url: releaseUrl,
+      notes: stringValue(data.body) ?? 'No release notes provided.',
+      assets,
     };
   } catch (err) {
     console.warn(`[GitHub API] Error fetching latest release:`, err);
@@ -96,24 +146,31 @@ export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
       return getFallbackCommits();
     }
 
-    return data.map((c: any) => {
-      const fullMsg = c.commit?.message || '';
+    const commits = data.flatMap((commit) => {
+      if (!isRecord(commit) || !isRecord(commit.commit)) return [];
+      const fullMsg = stringValue(commit.commit.message);
+      const sha = stringValue(commit.sha);
+      const url = trustedGitHubUrl(commit.html_url);
+      if (!fullMsg || !sha || !/^[a-f0-9]{7,64}$/i.test(sha) || !url) return [];
       const lines = fullMsg.split('\n');
       const subject = lines[0] || 'No commit message';
       const body = lines.slice(1).join('\n').trim() || null;
-      const sha = c.sha || 'unknown';
+      const author = isRecord(commit.author) ? stringValue(commit.author.login) : null;
+      const metadata = isRecord(commit.commit.author) ? commit.commit.author : null;
 
-      return {
+      return [{
         sha,
         shortSha: sha.substring(0, 7),
         message: fullMsg,
         subject,
         body,
-        authorName: c.commit?.author?.name || c.author?.login || 'Contributor',
-        date: c.commit?.author?.date || null,
-        url: c.html_url || `https://github.com/${repository.owner}/${repository.name}/commit/${sha}`,
-      };
+        authorName: metadata ? stringValue(metadata.name) ?? author ?? 'Contributor' : author ?? 'Contributor',
+        date: metadata ? stringValue(metadata.date) : null,
+        url,
+      }];
     });
+
+    return commits.length > 0 ? commits : getFallbackCommits();
   } catch (err) {
     console.warn(`[GitHub API] Error fetching commits:`, err);
     return getFallbackCommits();

@@ -11,6 +11,7 @@ pub enum Language {
 }
 
 impl Language {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Language::System => "system",
@@ -19,6 +20,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Language::System => "System Default",
@@ -27,6 +29,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn resolve(&self) -> ResolvedLanguage {
         match self {
             Language::English => ResolvedLanguage::English,
@@ -43,6 +46,7 @@ pub enum ResolvedLanguage {
 }
 
 impl ResolvedLanguage {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             ResolvedLanguage::English => "en",
@@ -184,6 +188,7 @@ pub fn t(lang: ResolvedLanguage, key: &str) -> &'static str {
     }
 }
 
+#[must_use]
 pub fn detect_system_language() -> ResolvedLanguage {
     #[cfg(target_os = "windows")]
     {
@@ -210,8 +215,7 @@ mod tests {
         for key in en_map.keys() {
             assert!(
                 tr_map.contains_key(key),
-                "Missing Turkish translation for key: {}",
-                key
+                "Missing Turkish translation for key: {key}"
             );
         }
     }

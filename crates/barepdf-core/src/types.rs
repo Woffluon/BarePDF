@@ -1,10 +1,11 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageCount(u32);
 
 impl PageCount {
+    #[must_use]
     pub const fn new(count: u32) -> Option<Self> {
         if count > 0 {
             Some(Self(count))
@@ -29,6 +30,7 @@ impl fmt::Display for PageCount {
 pub struct PageIndex(u32);
 
 impl PageIndex {
+    #[must_use]
     pub fn new(index: u32, page_count: PageCount) -> Option<Self> {
         if index < page_count.get() {
             Some(Self(index))
@@ -55,11 +57,14 @@ impl PageIndex {
 
 impl fmt::Display for PageIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0 + 1)
+        match self.0.checked_add(1) {
+            Some(display_index) => write!(f, "{display_index}"),
+            None => write!(f, "{}", self.0),
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct ZoomFactor(f32);
 
 impl ZoomFactor {
@@ -67,8 +72,13 @@ impl ZoomFactor {
     pub const MAX: f32 = 10.0;
     pub const DEFAULT: f32 = 1.0;
 
+    #[must_use]
     pub fn new(factor: f32) -> Self {
-        Self(factor.clamp(Self::MIN, Self::MAX))
+        if factor.is_finite() {
+            Self(factor.clamp(Self::MIN, Self::MAX))
+        } else {
+            Self::default()
+        }
     }
 
     #[must_use]
@@ -90,6 +100,15 @@ impl ZoomFactor {
 impl Default for ZoomFactor {
     fn default() -> Self {
         Self(1.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ZoomFactor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::new(f32::deserialize(deserializer)?))
     }
 }
 
@@ -131,6 +150,7 @@ pub struct RenderDimensions {
 }
 
 impl RenderDimensions {
+    #[must_use]
     pub fn new(width: u32, height: u32) -> Option<Self> {
         if width > 0 && height > 0 {
             Some(Self { width, height })
@@ -246,6 +266,7 @@ pub struct TextPosition {
 }
 
 impl TextPosition {
+    #[must_use]
     pub fn new(page: PageIndex, char_index: u32) -> Self {
         Self { page, char_index }
     }
@@ -258,14 +279,17 @@ pub struct TextSelection {
 }
 
 impl TextSelection {
+    #[must_use]
     pub fn new(anchor: TextPosition, focus: TextPosition) -> Self {
         Self { anchor, focus }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.anchor == self.focus
     }
 
+    #[must_use]
     pub fn start_and_end(&self) -> (TextPosition, TextPosition) {
         if self.anchor <= self.focus {
             (self.anchor, self.focus)
@@ -274,6 +298,7 @@ impl TextSelection {
         }
     }
 
+    #[must_use]
     pub fn range_for_page(&self, page: PageIndex) -> Option<(u32, u32)> {
         let (start, end) = self.start_and_end();
         if page < start.page || page > end.page {
@@ -312,4 +337,15 @@ pub struct GlyphRect {
 pub struct PageTextGeometry {
     pub page_index: PageIndex,
     pub glyphs: Vec<GlyphRect>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_factor_normalizes_non_finite_values() {
+        assert_eq!(ZoomFactor::new(f32::NAN), ZoomFactor::default());
+        assert_eq!(ZoomFactor::new(f32::INFINITY), ZoomFactor::default());
+    }
 }

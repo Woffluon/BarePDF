@@ -1,4 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(
+    clippy::bool_to_int_with_if,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::map_unwrap_or,
+    clippy::redundant_closure_for_method_calls,
+    clippy::semicolon_if_nothing_returned,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::uninlined_format_args,
+    clippy::unchecked_time_subtraction,
+    unused_must_use
+)]
 
 use barepdf_core::{
     default_config_path, selection::SelectionEngine, ContinuousLayout, DocumentId, MemoryBudget,
@@ -24,8 +39,9 @@ use slint::{
     SharedString, Timer, TimerMode, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
+use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -39,6 +55,12 @@ const THUMB_ROW_HEIGHT: f32 = 188.0;
 const PAGE_GAP: f32 = 14.0;
 const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
 const PRESENTATION_MAX_RENDER_EDGE: u32 = 2560;
+const MAX_DOCUMENT_PAGES: u32 = 10_000;
+const MAX_OUTLINE_DEPTH: usize = 128;
+const MAX_OUTLINE_ITEMS: usize = 4_096;
+const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
+const MAX_TEXT_GEOMETRIES: usize = 32;
+const MAX_PASSWORD_BYTES: usize = 1_024;
 
 #[derive(Clone)]
 struct PendingDocument {
@@ -71,6 +93,87 @@ struct UiImageCache {
     entries: LruCache<u32, CachedImage>,
     bytes: usize,
     budget: usize,
+}
+
+struct CachedTextGeometry {
+    geometry: PageTextGeometry,
+    bytes: usize,
+}
+
+struct TextGeometryCache {
+    entries: HashMap<u32, CachedTextGeometry>,
+    insertion_order: VecDeque<u32>,
+    bytes: usize,
+}
+
+impl TextGeometryCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+
+    fn contains_key(&self, page_index: u32) -> bool {
+        self.entries.contains_key(&page_index)
+    }
+
+    fn get(&mut self, page_index: u32) -> Option<&PageTextGeometry> {
+        if self.entries.contains_key(&page_index) {
+            self.insertion_order.retain(|index| *index != page_index);
+            self.insertion_order.push_back(page_index);
+        }
+        self.entries.get(&page_index).map(|entry| &entry.geometry)
+    }
+
+    fn insert(&mut self, page_index: u32, geometry: PageTextGeometry) {
+        let bytes = size_of::<PageTextGeometry>().saturating_add(
+            geometry
+                .glyphs
+                .capacity()
+                .saturating_mul(size_of::<barepdf_core::GlyphRect>()),
+        );
+        if bytes > TEXT_GEOMETRY_BUDGET {
+            return;
+        }
+
+        if let Some(previous) = self.entries.remove(&page_index) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+            self.insertion_order.retain(|index| *index != page_index);
+        }
+        while self.entries.len() >= MAX_TEXT_GEOMETRIES
+            || self.bytes.saturating_add(bytes) > TEXT_GEOMETRY_BUDGET
+        {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(previous.bytes);
+            }
+        }
+
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.insertion_order.push_back(page_index);
+        self.entries
+            .insert(page_index, CachedTextGeometry { geometry, bytes });
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.insertion_order.clear();
+        self.bytes = 0;
+    }
+
+    fn cloned_in_page_order(&self) -> Vec<PageTextGeometry> {
+        let mut geometries = self
+            .entries
+            .values()
+            .map(|entry| entry.geometry.clone())
+            .collect::<Vec<_>>();
+        geometries.sort_unstable_by_key(|geometry| geometry.page_index);
+        geometries
+    }
 }
 
 impl UiImageCache {
@@ -130,7 +233,7 @@ struct AppState {
     open_started_at: Option<Instant>,
     window_mode: WindowMode,
     preferences: UserPreferences,
-    text_geometries: HashMap<u32, PageTextGeometry>,
+    text_geometries: TextGeometryCache,
     selection: Option<TextSelection>,
     is_selecting: bool,
     last_click_time: Instant,
@@ -179,7 +282,7 @@ impl AppState {
             open_started_at: None,
             window_mode: WindowMode::Normal,
             preferences,
-            text_geometries: HashMap::new(),
+            text_geometries: TextGeometryCache::new(),
             selection: None,
             is_selecting: false,
             last_click_time: Instant::now(),
@@ -223,7 +326,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .retain(|path| Path::new(path).is_file());
     preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
     if original_recent_count != preferences.recent_files.len() {
-        let _ = preferences.save_to_file(&preferences_path);
+        persist_preferences(&preferences, &preferences_path, None);
     }
 
     let scheduler = Rc::new(RenderScheduler::spawn(
@@ -269,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = state.borrow_mut();
     app.preferences.last_window_width = ((size.width as f32) / scale).round() as u32;
     app.preferences.last_window_height = ((size.height as f32) / scale).round() as u32;
-    let _ = app.preferences.save_to_file(&preferences_path);
+    persist_preferences(&app.preferences, &preferences_path, None);
     Ok(())
 }
 
@@ -313,15 +416,23 @@ fn wire_callbacks(
     let state_password = state.clone();
     let scheduler_password = scheduler.clone();
     window.on_request_unlock_password(move |password| {
+        if password.as_str().len() > MAX_PASSWORD_BYTES {
+            if let Some(window) = weak.upgrade() {
+                window.set_password_error(SharedString::from("Password is too long."));
+                window.set_password_required(true);
+            }
+            return;
+        }
         let path = state_password
             .borrow()
             .pending_document
             .as_ref()
             .map(|pending| pending.path.clone());
         if let (Some(path), Some(window)) = (path, weak.upgrade()) {
+            let password = password.to_string();
             begin_open(
                 path,
-                Some(password.to_string()),
+                Some(password),
                 &state_password,
                 &scheduler_password,
                 &window,
@@ -340,8 +451,13 @@ fn wire_callbacks(
         };
         let mut app = state_language.borrow_mut();
         app.preferences.language = language;
-        let _ = app.preferences.save_to_file(&preferences_path_language);
-        if let Some(window) = weak.upgrade() {
+        let window = weak.upgrade();
+        persist_preferences(
+            &app.preferences,
+            &preferences_path_language,
+            window.as_ref(),
+        );
+        if let Some(window) = window {
             window.set_current_language(index);
             window.set_view_mode_label(SharedString::from(view_mode_label(
                 app.viewing_mode,
@@ -358,8 +474,9 @@ fn wire_callbacks(
         let theme = theme_from_index(index);
         let mut app = state_theme.borrow_mut();
         app.preferences.theme = theme;
-        let _ = app.preferences.save_to_file(&preferences_path_theme);
-        if let Some(window) = weak.upgrade() {
+        let window = weak.upgrade();
+        persist_preferences(&app.preferences, &preferences_path_theme, window.as_ref());
+        if let Some(window) = window {
             apply_theme(&window, theme);
         }
     });
@@ -503,7 +620,7 @@ fn connect_zoom_callbacks(
             sync_effective_zoom(&mut app);
             app.zoom_factor = app.zoom_factor.zoom_in();
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
-            save_zoom_preference(&mut app, &preferences_path_in);
+            save_zoom_preference(&mut app, &preferences_path_in, &window);
             invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
         }
     });
@@ -518,7 +635,7 @@ fn connect_zoom_callbacks(
             sync_effective_zoom(&mut app);
             app.zoom_factor = app.zoom_factor.zoom_out();
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
-            save_zoom_preference(&mut app, &preferences_path_out);
+            save_zoom_preference(&mut app, &preferences_path_out, &window);
             invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
         }
     });
@@ -569,7 +686,7 @@ fn connect_zoom_mode<F>(
             if let Some(window) = weak.upgrade() {
                 let mut app = state.borrow_mut();
                 app.zoom_mode = mode;
-                save_zoom_preference(&mut app, &preferences_path);
+                save_zoom_preference(&mut app, &preferences_path, &window);
                 invalidate_layout_and_render(&mut app, &scheduler, &window, true);
             }
         }),
@@ -594,7 +711,7 @@ fn connect_view_callbacks(
                 _ => ViewingMode::ContinuousVertical,
             };
             app.preferences.viewing_mode = app.viewing_mode;
-            let _ = app.preferences.save_to_file(&preferences_path_view);
+            persist_preferences(&app.preferences, &preferences_path_view, Some(&window));
             window.set_view_mode(view_mode_index(app.viewing_mode));
             window.set_view_mode_label(SharedString::from(view_mode_label(
                 app.viewing_mode,
@@ -615,7 +732,7 @@ fn connect_view_callbacks(
             let mut app = state_sidebar.borrow_mut();
             app.preferences.sidebar_visible = visible;
             app.layout_key = None;
-            let _ = app.preferences.save_to_file(&preferences_path_sidebar);
+            persist_preferences(&app.preferences, &preferences_path_sidebar, Some(&window));
             if visible {
                 request_visible_thumbnails(&app, &scheduler_sidebar, &window);
             }
@@ -717,7 +834,7 @@ fn connect_selection_callbacks(
     window.on_request_copy(move || {
         let app = state_copy.borrow();
         if let Some(selection) = app.selection {
-            let geometries: Vec<_> = app.text_geometries.values().cloned().collect();
+            let geometries = app.text_geometries.cloned_in_page_order();
             let text = SelectionEngine::get_selected_text(&selection, &geometries);
             if !text.is_empty() {
                 let _ = clipboard.set_text(&text);
@@ -735,7 +852,7 @@ fn connect_selection_callbacks(
         let last_page = app.page_count - 1;
         let last_character = app
             .text_geometries
-            .get(&last_page)
+            .get(last_page)
             .map(|geometry| geometry.glyphs.len() as u32)
             .unwrap_or(u32::MAX);
         app.selection = Some(TextSelection::new(
@@ -760,7 +877,7 @@ fn connect_selection_callbacks(
         if page >= app.page_count {
             return;
         }
-        if !app.text_geometries.contains_key(&page) {
+        if !app.text_geometries.contains_key(page) {
             if let Some(document_id) = app.active_document {
                 scheduler_down.send_command(RenderCommand::FetchTextGeometry {
                     document_id,
@@ -777,10 +894,11 @@ fn connect_selection_callbacks(
             1
         };
         app.last_click_time = now;
-        if let Some(geometry) = app.text_geometries.get(&page) {
+        let click_count = app.click_count;
+        if let Some(geometry) = app.text_geometries.get(page) {
             let page_index = PageIndex::from_raw(page);
             let character = SelectionEngine::hit_test(geometry, pdf_x, pdf_y);
-            app.selection = Some(match app.click_count {
+            app.selection = Some(match click_count {
                 2 => SelectionEngine::select_word(geometry, page_index, character),
                 count if count >= 3 => {
                     SelectionEngine::select_line(geometry, page_index, character)
@@ -812,7 +930,7 @@ fn connect_selection_callbacks(
         let (pdf_x, pdf_y) = pointer_to_pdf(&app, page, x, y);
         let character = app
             .text_geometries
-            .get(&page)
+            .get(page)
             .map(|geometry| SelectionEngine::hit_test(geometry, pdf_x, pdf_y))
             .unwrap_or(0);
         if let Some(selection) = app.selection.as_mut() {
@@ -847,6 +965,7 @@ fn start_event_timer(
     let state = state.clone();
     let scheduler = scheduler.clone();
     let preferences_path = preferences_path.to_path_buf();
+    let mut worker_terminated = false;
     timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -866,8 +985,20 @@ fn start_event_timer(
             }
         }
         process_view_changes(&window, &state, &scheduler);
-        while let Some(event) = scheduler.try_recv_event() {
-            handle_render_event(event, &window, &state, &scheduler, &preferences_path);
+        if !worker_terminated {
+            loop {
+                match scheduler.try_recv_event() {
+                    Ok(Some(event)) => {
+                        handle_render_event(event, &window, &state, &scheduler, &preferences_path);
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        worker_terminated = true;
+                        show_banner(&window, "PDF worker stopped unexpectedly.", true);
+                        break;
+                    }
+                }
+            }
         }
     });
 }
@@ -933,7 +1064,7 @@ fn process_view_changes(
             app.generation = scheduler.bump_generation();
             render_visible_pages(&mut app, scheduler, window);
             request_visible_thumbnails(&app, scheduler, window);
-        } else if previous_page != page && !app.text_geometries.contains_key(&page) {
+        } else if previous_page != page && !app.text_geometries.contains_key(page) {
             if let Some(document_id) = app.active_document {
                 scheduler.send_command(RenderCommand::FetchTextGeometry {
                     document_id,
@@ -971,6 +1102,15 @@ fn handle_render_event(
             if pending.id != document_id {
                 return;
             }
+            if page_count == 0 || page_count > MAX_DOCUMENT_PAGES {
+                app.last_failed_path = app.pending_document.take().map(|pending| pending.path);
+                show_banner(
+                    window,
+                    format!("PDF page count must be between 1 and {MAX_DOCUMENT_PAGES}."),
+                    true,
+                );
+                return;
+            }
             let pending = app.pending_document.take().expect("pending checked");
             app.active_document = Some(document_id);
             app.current_path = Some(pending.path.clone());
@@ -999,7 +1139,7 @@ fn handle_render_event(
             app.thumbnail_images.clear();
             app.preferences
                 .add_recent_file(pending.path.to_string_lossy().into_owned());
-            let _ = app.preferences.save_to_file(preferences_path);
+            persist_preferences(&app.preferences, preferences_path, Some(window));
 
             window.set_has_document(true);
             window.set_password_required(false);
@@ -1193,11 +1333,14 @@ fn begin_open(
     state.borrow_mut().pending_document = Some(pending);
     window.set_status_text(SharedString::from("Opening document…"));
     window.set_password_error(SharedString::default());
-    scheduler.send_command(RenderCommand::OpenDocument {
+    if !scheduler.send_command(RenderCommand::OpenDocument {
         document_id,
         path,
         password,
-    });
+    }) {
+        state.borrow_mut().pending_document = None;
+        show_banner(window, "PDF work queue is unavailable. Try again.", true);
+    }
 }
 
 fn navigate_to_page(
@@ -1390,7 +1533,7 @@ fn render_visible_pages(app: &mut AppState, scheduler: &RenderScheduler, window:
         }));
     }
 
-    if app.first_page_ready && !app.text_geometries.contains_key(&app.current_page) {
+    if app.first_page_ready && !app.text_geometries.contains_key(app.current_page) {
         scheduler.send_command(RenderCommand::FetchTextGeometry {
             document_id,
             generation: app.generation,
@@ -1567,14 +1710,7 @@ fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler
 fn refresh_outline_model(app: &mut AppState, window: &AppWindow) {
     let mut items = Vec::new();
     let mut flat = Vec::new();
-    flatten_outline(
-        &app.outline,
-        &app.expanded_outline,
-        &mut Vec::new(),
-        0,
-        &mut items,
-        &mut flat,
-    );
+    flatten_outline(&app.outline, &app.expanded_outline, &mut items, &mut flat);
     app.flat_outline = flat;
     window.set_outline_items(ModelRc::new(VecModel::from(items)));
 }
@@ -1582,15 +1718,37 @@ fn refresh_outline_model(app: &mut AppState, window: &AppWindow) {
 fn flatten_outline(
     nodes: &[OutlineNode],
     expanded: &HashSet<Vec<usize>>,
-    path: &mut Vec<usize>,
-    depth: i32,
     items: &mut Vec<OutlineItem>,
     flat: &mut Vec<FlatOutlineEntry>,
 ) {
-    for (index, node) in nodes.iter().enumerate() {
+    struct Frame<'a> {
+        nodes: &'a [OutlineNode],
+        next: usize,
+        path: Vec<usize>,
+    }
+
+    let mut stack = vec![Frame {
+        nodes,
+        next: 0,
+        path: Vec::new(),
+    }];
+    while let Some(frame) = stack.last_mut() {
+        if items.len() >= MAX_OUTLINE_ITEMS {
+            eprintln!("Outline truncated after {MAX_OUTLINE_ITEMS} items.");
+            break;
+        }
+        if frame.next == frame.nodes.len() {
+            stack.pop();
+            continue;
+        }
+
+        let index = frame.next;
+        frame.next += 1;
+        let node = &frame.nodes[index];
+        let mut path = frame.path.clone();
         path.push(index);
         let has_children = !node.children.is_empty();
-        let is_expanded = has_children && expanded.contains(path);
+        let is_expanded = has_children && expanded.contains(&path);
         items.push(OutlineItem {
             title: SharedString::from(if node.title.is_empty() {
                 "Untitled"
@@ -1598,7 +1756,7 @@ fn flatten_outline(
                 &node.title
             }),
             page_index: node.page_index.map(|page| page as i32).unwrap_or(-1),
-            depth,
+            depth: i32::try_from(path.len().saturating_sub(1)).unwrap_or(i32::MAX),
             has_children,
             expanded: is_expanded,
         });
@@ -1607,10 +1765,15 @@ fn flatten_outline(
             page_index: node.page_index,
             has_children,
         });
-        if is_expanded {
-            flatten_outline(&node.children, expanded, path, depth + 1, items, flat);
+        if is_expanded && path.len() < MAX_OUTLINE_DEPTH {
+            stack.push(Frame {
+                nodes: &node.children,
+                next: 0,
+                path,
+            });
+        } else if is_expanded && has_children {
+            eprintln!("Outline truncated at depth {MAX_OUTLINE_DEPTH}.");
         }
-        path.pop();
     }
 }
 
@@ -1620,7 +1783,7 @@ fn refresh_recent_files(app: &mut AppState, window: &AppWindow, preferences_path
         .recent_files
         .retain(|path| Path::new(path).is_file());
     if before != app.preferences.recent_files.len() {
-        let _ = app.preferences.save_to_file(preferences_path);
+        persist_preferences(&app.preferences, preferences_path, Some(window));
     }
     let items = app
         .preferences
@@ -1660,7 +1823,7 @@ fn pointer_to_pdf(app: &AppState, page: u32, x: f32, y: f32) -> (f32, f32) {
 }
 
 fn compute_selection_boxes(
-    app: &AppState,
+    app: &mut AppState,
     page: u32,
     target_width: f32,
     target_height: f32,
@@ -1671,7 +1834,7 @@ fn compute_selection_boxes(
     let Some((start, end)) = selection.range_for_page(PageIndex::from_raw(page)) else {
         return Vec::new();
     };
-    let Some(geometry) = app.text_geometries.get(&page) else {
+    let Some(geometry) = app.text_geometries.get(page) else {
         return Vec::new();
     };
     let (page_width, page_height) = app
@@ -1710,9 +1873,9 @@ fn sync_effective_zoom(app: &mut AppState) {
     app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
 }
 
-fn save_zoom_preference(app: &mut AppState, preferences_path: &Path) {
+fn save_zoom_preference(app: &mut AppState, preferences_path: &Path, window: &AppWindow) {
     app.preferences.zoom_mode = app.zoom_mode;
-    let _ = app.preferences.save_to_file(preferences_path);
+    persist_preferences(&app.preferences, preferences_path, Some(window));
 }
 
 fn record_first_page_profile(app: &mut AppState) {
@@ -1741,6 +1904,22 @@ fn show_banner(window: &AppWindow, message: impl Into<SharedString>, can_retry: 
     window.set_banner_text(message.into());
     window.set_banner_can_retry(can_retry);
     window.set_banner_visible(true);
+}
+
+fn persist_preferences(
+    preferences: &UserPreferences,
+    preferences_path: &Path,
+    window: Option<&AppWindow>,
+) {
+    if let Err(error) = preferences.save_to_file(preferences_path) {
+        eprintln!(
+            "Could not save preferences to {}: {error}",
+            preferences_path.display()
+        );
+        if let Some(window) = window {
+            show_banner(window, "Preferences could not be saved.", false);
+        }
+    }
 }
 
 fn parse_drop_paths(text: &str) -> Option<Result<PathBuf, &'static str>> {
@@ -1930,17 +2109,28 @@ mod tests {
         expanded.insert(vec![0]);
         let mut items = Vec::new();
         let mut flat = Vec::new();
-        flatten_outline(
-            &outline,
-            &expanded,
-            &mut Vec::new(),
-            0,
-            &mut items,
-            &mut flat,
-        );
+        flatten_outline(&outline, &expanded, &mut items, &mut flat);
         assert_eq!(items.len(), 2);
         assert_eq!(items[1].depth, 1);
         assert_eq!(flat[1].page_index, Some(3));
+    }
+
+    #[test]
+    fn outline_flattening_has_a_fixed_item_limit() {
+        let outline = (0..=MAX_OUTLINE_ITEMS)
+            .map(|index| OutlineNode {
+                title: index.to_string(),
+                page_index: None,
+                children: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut items = Vec::new();
+        let mut flat = Vec::new();
+
+        flatten_outline(&outline, &HashSet::new(), &mut items, &mut flat);
+
+        assert_eq!(items.len(), MAX_OUTLINE_ITEMS);
+        assert_eq!(flat.len(), MAX_OUTLINE_ITEMS);
     }
 
     #[test]

@@ -24,11 +24,12 @@ pub struct OutlineNode {
     pub children: Vec<OutlineNode>,
 }
 
-pub trait PdfDocument: Send + Sync {
-    fn page_count(&self) -> PageCount;
+#[allow(clippy::missing_errors_doc)] // Each implementation maps backend-specific failures to PdfError.
+pub trait PdfDocument: Send {
+    fn page_count(&self) -> Result<PageCount, PdfError>;
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError>;
     fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
-        let count = self.page_count().get();
+        let count = self.page_count()?.get();
         let mut dims = Vec::with_capacity(count as usize);
         for i in 0..count {
             let dim = self.page_dimensions(PageIndex::from_raw(i))?;
@@ -49,6 +50,7 @@ pub trait PdfDocument: Send + Sync {
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError>;
 }
 
+#[allow(clippy::missing_errors_doc)] // Each implementation maps backend-specific failures to PdfError.
 pub trait PdfBackend: Send + Sync {
     fn open_path(
         &self,

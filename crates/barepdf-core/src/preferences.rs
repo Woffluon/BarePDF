@@ -6,6 +6,14 @@ use std::path::{Path, PathBuf};
 
 use barepdf_i18n::Language;
 
+#[derive(Debug, thiserror::Error)]
+pub enum PreferencesLoadError {
+    #[error("failed to read preferences: {0}")]
+    Read(#[from] std::io::Error),
+    #[error("failed to parse preferences: {0}")]
+    Parse(#[from] serde_json::Error),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeMode {
     #[default]
@@ -48,15 +56,24 @@ impl Default for UserPreferences {
 }
 
 impl UserPreferences {
+    #[must_use]
     pub fn load_from_file(path: &Path) -> Self {
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(prefs) = serde_json::from_str::<UserPreferences>(&content) {
-                return prefs;
-            }
-        }
-        Self::default()
+        Self::try_load_from_file(path).unwrap_or_default()
     }
 
+    /// Reads preferences while preserving I/O and JSON errors for callers that can report them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the preference file cannot be read or parsed.
+    pub fn try_load_from_file(path: &Path) -> Result<Self, PreferencesLoadError> {
+        let content = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the preference file cannot be created or written.
     pub fn save_to_file(&self, path: &Path) -> Result<(), std::io::Error> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -84,6 +101,7 @@ impl UserPreferences {
     }
 }
 
+#[must_use]
 pub fn default_config_path() -> PathBuf {
     if let Some(app_data) = std::env::var_os("APPDATA") {
         PathBuf::from(app_data).join("BarePDF").join("config.json")
@@ -130,5 +148,17 @@ mod tests {
         preferences.add_recent_file("one.pdf".into());
         preferences.add_recent_file("three.pdf".into());
         assert_eq!(preferences.recent_files, vec!["three.pdf", "one.pdf"]);
+    }
+
+    #[test]
+    fn malformed_preferences_are_reported() {
+        let path = std::env::temp_dir().join("barepdf-invalid-preferences.json");
+        fs::write(&path, "not json").expect("write invalid preferences");
+
+        assert!(matches!(
+            UserPreferences::try_load_from_file(&path),
+            Err(PreferencesLoadError::Parse(_))
+        ));
+        let _ = fs::remove_file(path);
     }
 }

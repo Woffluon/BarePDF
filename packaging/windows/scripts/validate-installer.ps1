@@ -4,17 +4,13 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
 
-$AppCargoContent = Get-Content (Join-Path $RepoRoot "apps\barepdf\Cargo.toml") -Raw
-if ($AppCargoContent -match 'version\s*=\s*"([^"]+)"') {
-    $Version = $Matches[1]
-} else {
-    $Version = "1.0.0"
-}
+$Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+$Version = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
+if (-not $Version) { throw "barepdf package version not found" }
 
 $InstallerPath = Join-Path $RepoRoot "target\release\installer\BarePDF-Setup-x64-v$Version.exe"
 if (-not (Test-Path $InstallerPath)) {
-    Write-Warning "Installer binary not found at $InstallerPath. Validation skipped."
-    exit 0
+    throw "Installer binary not found: $InstallerPath"
 }
 
 $TestInstallDir = Join-Path $env:TEMP "BarePDF-TestInstall"
@@ -50,7 +46,7 @@ $Uninstaller = Join-Path $TestInstallDir "unins000.exe"
 if (Test-Path $Uninstaller) {
     $UninstallProc = Start-Process -FilePath $Uninstaller -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES" -Wait -PassThru
     if ($UninstallProc.ExitCode -ne 0) {
-        Write-Warning "Uninstaller exited with non-zero code: $($UninstallProc.ExitCode)"
+        throw "Uninstaller exited with non-zero code: $($UninstallProc.ExitCode)"
     }
 }
 

@@ -11,9 +11,18 @@ pub struct PdfiumEngine {
 }
 
 impl PdfiumEngine {
+    /// # Errors
+    ///
+    /// Returns a platform error when the sibling `PDFium` library cannot be located or bound.
     pub fn new() -> Result<Self, PdfError> {
-        let bindings = Pdfium::bind_to_system_library()
-            .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(".")))
+        let library_path = std::env::current_exe()
+            .map_err(|error| PdfError::PlatformError(format!("Cannot locate application executable: {error}")))?
+            .parent()
+            .map(|directory| directory.join(Pdfium::pdfium_platform_library_name()))
+            .ok_or_else(|| PdfError::PlatformError("Application executable has no parent directory".into()))?
+            .canonicalize()
+            .map_err(|error| PdfError::PlatformError(format!("Cannot locate sibling PDFium library: {error}")))?;
+        let bindings = Pdfium::bind_to_library(library_path)
             .map_err(|e| PdfError::PlatformError(format!("Failed to bind PDFium library: {e}")))?;
 
         let pdfium = Pdfium::new(bindings);
@@ -24,13 +33,9 @@ impl PdfiumEngine {
 }
 
 pub struct PdfiumDocumentOwned {
-    _pdfium: Arc<Pdfium>,
     doc: PdfDocument<'static>,
+    _pdfium: Arc<Pdfium>,
 }
-
-// SAFETY: Document handle usage is thread-isolated within the background actor thread.
-unsafe impl Send for PdfiumDocumentOwned {}
-unsafe impl Sync for PdfiumDocumentOwned {}
 
 impl PdfBackend for PdfiumEngine {
     fn open_path(
@@ -38,20 +43,18 @@ impl PdfBackend for PdfiumEngine {
         path: &Path,
         password: Option<&str>,
     ) -> Result<Box<dyn CorePdfDocument>, PdfError> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| PdfError::FileNotFound(path.display().to_string()))?;
-
         let doc = self
             .pdfium
-            .load_pdf_from_file(path_str, password)
-            .map_err(|error| map_load_error(error, password.is_some()))?;
+            .load_pdf_from_file(path, password)
+            .map_err(|error| map_load_error(&error, password.is_some()))?;
 
+        // SAFETY: doc borrows Pdfium. This owner keeps the Arc<Pdfium> alive and declares doc
+        // first, so Rust drops doc before the binding owner.
         let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
 
         Ok(Box::new(PdfiumDocumentOwned {
-            _pdfium: self.pdfium.clone(),
             doc: doc_static,
+            _pdfium: self.pdfium.clone(),
         }))
     }
 
@@ -63,28 +66,31 @@ impl PdfBackend for PdfiumEngine {
         let doc = self
             .pdfium
             .load_pdf_from_byte_vec(bytes, password)
-            .map_err(|error| map_load_error(error, password.is_some()))?;
+            .map_err(|error| map_load_error(&error, password.is_some()))?;
 
+        // SAFETY: doc borrows Pdfium. This owner keeps the Arc<Pdfium> alive and declares doc
+        // first, so Rust drops doc before the binding owner.
         let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
 
         Ok(Box::new(PdfiumDocumentOwned {
-            _pdfium: self.pdfium.clone(),
             doc: doc_static,
+            _pdfium: self.pdfium.clone(),
         }))
     }
 }
 
 impl CorePdfDocument for PdfiumDocumentOwned {
-    fn page_count(&self) -> PageCount {
-        let count = self.doc.pages().len() as u32;
-        PageCount::new(count).unwrap_or_else(|| PageCount::new(1).expect("non-zero"))
+    fn page_count(&self) -> Result<PageCount, PdfError> {
+        let count = u32::try_from(self.doc.pages().len())
+            .map_err(|_| PdfError::InvalidPdf("PDF page count exceeds supported range".into()))?;
+        PageCount::new(count).ok_or_else(|| PdfError::InvalidPdf("PDF contains no pages".into()))
     }
 
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError> {
         let pages = self.doc.pages();
         let page =
             pages
-                .get(page_index.get() as u16 as i32)
+                .get(to_pdfium_index(page_index)?)
                 .map_err(|e| PdfError::RenderingFailed {
                     page_index: page_index.get(),
                     reason: e.to_string(),
@@ -100,20 +106,35 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         page_index: PageIndex,
         target_width: u32,
         target_height: u32,
-        _rotation: Rotation,
+        rotation: Rotation,
     ) -> Result<RawBitmap, PdfError> {
+        let target_width = i32::try_from(target_width).map_err(|_| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: "target width exceeds PDFium's supported range".into(),
+        })?;
+        let target_height = i32::try_from(target_height).map_err(|_| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: "target height exceeds PDFium's supported range".into(),
+        })?;
         let pages = self.doc.pages();
         let page =
             pages
-                .get(page_index.get() as u16 as i32)
+                .get(to_pdfium_index(page_index)?)
                 .map_err(|e| PdfError::RenderingFailed {
                     page_index: page_index.get(),
                     reason: e.to_string(),
                 })?;
 
+        let pdfium_rotation = match rotation {
+            Rotation::Degrees0 => PdfPageRenderRotation::None,
+            Rotation::Degrees90 => PdfPageRenderRotation::Degrees90,
+            Rotation::Degrees180 => PdfPageRenderRotation::Degrees180,
+            Rotation::Degrees270 => PdfPageRenderRotation::Degrees270,
+        };
         let render_config = PdfRenderConfig::new()
-            .set_target_width(target_width as i32)
-            .set_target_height(target_height as i32)
+            .set_target_width(target_width)
+            .set_target_height(target_height)
+            .rotate(pdfium_rotation, true)
             .limit_render_image_cache_size(true);
 
         let bitmap =
@@ -123,8 +144,14 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                     reason: e.to_string(),
                 })?;
 
-        let w = bitmap.width() as u32;
-        let h = bitmap.height() as u32;
+        let w = u32::try_from(bitmap.width()).map_err(|_| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: "PDFium returned a negative bitmap width".into(),
+        })?;
+        let h = u32::try_from(bitmap.height()).map_err(|_| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: "PDFium returned a negative bitmap height".into(),
+        })?;
         let pixels = bitmap.as_rgba_bytes();
 
         Ok(RawBitmap {
@@ -136,7 +163,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
 
     fn extract_text(&self, page_index: PageIndex) -> Result<String, PdfError> {
         let pages = self.doc.pages();
-        let page = pages.get(page_index.get() as u16 as i32).map_err(|e| {
+        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
             PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
@@ -153,7 +180,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
 
     fn extract_text_spans(&self, page_index: PageIndex) -> Result<Vec<TextSpan>, PdfError> {
         let pages = self.doc.pages();
-        let page = pages.get(page_index.get() as u16 as i32).map_err(|e| {
+        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
             PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
@@ -170,8 +197,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             if let Ok(rect) = char_info.loose_bounds() {
                 let char_text = char_info
                     .unicode_char()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| " ".to_string());
+                    .map_or_else(|| " ".to_string(), |character| character.to_string());
                 spans.push(TextSpan {
                     text: char_text,
                     x: rect.left().value,
@@ -190,7 +216,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         page_index: PageIndex,
     ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
         let pages = self.doc.pages();
-        let page = pages.get(page_index.get() as u16 as i32).map_err(|e| {
+        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
             PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
@@ -242,7 +268,12 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 }
 
-fn map_load_error(error: PdfiumError, password_supplied: bool) -> PdfError {
+fn to_pdfium_index(index: PageIndex) -> Result<i32, PdfError> {
+    i32::try_from(index.get())
+        .map_err(|_| PdfError::InvalidPdf("Page index exceeds PDFium's supported range".into()))
+}
+
+fn map_load_error(error: &PdfiumError, password_supplied: bool) -> PdfError {
     match error {
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
             if password_supplied {
