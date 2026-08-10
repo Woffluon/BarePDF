@@ -61,6 +61,10 @@ jobs:
         shell: powershell
         run: choco install innosetup --no-progress -y
 
+      - name: Fetch verified PDFium runtime
+        shell: powershell
+        run: powershell -File packaging/windows/scripts/fetch-pdfium.ps1
+
       - name: Extract Application Version
         shell: powershell
         run: |

@@ -24,19 +24,22 @@ packaging/windows/
 # 1. Validate version consistency across Cargo & Inno Setup
 powershell -File packaging/windows/scripts/validate-version.ps1
 
-# 2. Build release target & stage binaries
+# 2. Fetch the pinned, SHA-256 verified PDFium runtime
+powershell -File packaging/windows/scripts/fetch-pdfium.ps1
+
+# 3. Build release target & stage binaries
 powershell -File packaging/windows/scripts/stage-release.ps1
 
-# 3. Create Portable ZIP package
+# 4. Create Portable ZIP package
 powershell -File packaging/windows/scripts/build-portable.ps1
 
-# 4. Compile Windows Setup Installer (requires Inno Setup 6)
+# 5. Compile Windows Setup Installer (requires Inno Setup 6)
 powershell -File packaging/windows/scripts/build-installer.ps1
 
-# 5. Run non-interactive installation validation test
+# 6. Run non-interactive installation validation test
 powershell -File packaging/windows/scripts/validate-installer.ps1
 
-# 6. Generate SHA-256 checksum file
+# 7. Generate SHA-256 checksum file
 powershell -File packaging/windows/scripts/generate-checksums.ps1
 ```
 
