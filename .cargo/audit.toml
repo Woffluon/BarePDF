@@ -1,0 +1,11 @@
+# Keep `cargo audit --deny warnings` strict while documenting the only current
+# upstream-only exceptions. Revisit these whenever Slint is upgraded.
+[advisories]
+ignore = [
+    # RUSTSEC-2025-0141: bincode is transitive through Slint 1.17.1; no fixed version exists.
+    "RUSTSEC-2025-0141",
+    # RUSTSEC-2026-0192: ttf-parser is transitive through Slint 1.17.1; no fixed version exists.
+    "RUSTSEC-2026-0192",
+    # RUSTSEC-2026-0206: rustybuzz is transitive through Slint 1.17.1; no fixed version exists.
+    "RUSTSEC-2026-0206",
+]
