@@ -28,4 +28,6 @@ The release pipeline executes in the following sequence:
 
 ## GitHub Actions Release Workflow
 
-The `.github/workflows/release.yml` workflow triggers on pushes to `main` or manual dispatch. It executes the full packaging pipeline on `windows-latest`, uploads build artifacts, and publishes the release on GitHub.
+The `.github/workflows/release.yml` workflow runs only when a new `vMAJOR.MINOR.PATCH` tag is pushed. A successful CI run validates and packages the current commit, but does not create or replace a GitHub Release.
+
+Before publishing, update the application version, run `validate-version.ps1`, commit the change, and push a matching new tag. The workflow rejects tags that do not exactly match the application version and refuses to overwrite an existing release.

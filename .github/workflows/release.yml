@@ -73,6 +73,14 @@ jobs:
           if (-not $Ver) { throw "barepdf package version not found" }
           "APP_VERSION=$Ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Verify release tag matches application version
+        shell: powershell
+        run: |
+          $ExpectedTag = "v$env:APP_VERSION"
+          if ($env:GITHUB_REF_NAME -cne $ExpectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must match application version '$ExpectedTag'."
+          }
+
       - name: Reject an existing release tag
         shell: powershell
         env:
