@@ -129,19 +129,20 @@ slint::slint! {
     component TextButton inherits Rectangle {
         in property <string> text;
         in property <bool> active: false;
+        in property <bool> enabled: true;
         callback clicked();
         height: 32px;
         min-width: 52px;
         border-radius: 6px;
-        background: active ? ThemeTokens.selection : (touch.has-hover ? ThemeTokens.control-hover : #00000000);
+        background: active ? ThemeTokens.selection : (touch.has-hover && enabled ? ThemeTokens.control-hover : #00000000);
         border-width: active ? 1px : 0px;
         border-color: ThemeTokens.accent;
         accessible-role: button;
         accessible-label: text;
-        touch := TouchArea { clicked => { root.clicked(); } }
+        touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
         Text {
             text: root.text;
-            color: ThemeTokens.text;
+            color: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.55);
             font-size: 12px;
             font-weight: active ? 600 : 500;
             horizontal-alignment: center;
@@ -235,6 +236,11 @@ slint::slint! {
         in property <string> view-mode-label: "Continuous";
         in property <int> current-language: 0;
         in property <int> current-theme: 0;
+        in property <string> current-version: "";
+        in property <bool> update-checks-enabled: false;
+        in property <string> update-status: "";
+        in property <string> update-action-label: "";
+        in property <bool> update-action-enabled: false;
         in property <bool> banner-visible: false;
         in property <string> banner-text: "";
         in property <bool> banner-can-retry: false;
@@ -262,6 +268,10 @@ slint::slint! {
         in property <string> text-retry: "Retry";
         in property <string> text-dismiss: "Dismiss";
         in property <string> text-loading: "Loading";
+        in property <string> text-updates: "Updates";
+        in property <string> text-update-enabled: "Enabled";
+        in property <string> text-update-disabled: "Disabled";
+        in property <string> text-check-now: "Check now";
 
         callback request-open-file();
         callback request-next-page();
@@ -285,6 +295,9 @@ slint::slint! {
         callback request-toggle-view-mode();
         callback request-change-language(int);
         callback request-change-theme(int);
+        callback request-change-update-checks(bool);
+        callback request-check-update();
+        callback request-update-action();
         callback request-copy();
         callback request-select-all();
         callback request-open-recent(string);
@@ -625,7 +638,7 @@ slint::slint! {
                         background: #00000001;
                         TouchArea { clicked => { root.settings-open = false; } }
                         Rectangle {
-                            x: parent.width - 330px; y: 8px; width: 320px; height: 250px;
+                            x: parent.width - 350px; y: 8px; width: 340px; height: 390px;
                             background: ThemeTokens.panel; border-radius: 10px; border-width: 1px; border-color: ThemeTokens.border;
                             drop-shadow-blur: 20px; drop-shadow-color: #00000055;
                             TouchArea { clicked => { } }
@@ -646,6 +659,23 @@ slint::slint! {
                                     TextButton { text: "Light"; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
                                     TextButton { text: "Dark"; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
                                 }
+                                Rectangle { height: 1px; background: ThemeTokens.border; }
+                                Text { text: root.text-updates + " · BarePDF v" + root.current-version; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    TextButton { text: root.text-update-enabled; active: root.update-checks-enabled; clicked => { root.request-change-update-checks(true); } }
+                                    TextButton { text: root.text-update-disabled; active: !root.update-checks-enabled; clicked => { root.request-change-update-checks(false); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    TextButton { text: root.text-check-now; clicked => { root.request-check-update(); } }
+                                    if root.update-action-label != "" : TextButton {
+                                        text: root.update-action-label;
+                                        enabled: root.update-action-enabled;
+                                        clicked => { root.request-update-action(); }
+                                    }
+                                }
+                                Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 10px; wrap: word-wrap; }
                             }
                         }
                     }

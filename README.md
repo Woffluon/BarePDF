@@ -17,20 +17,21 @@ It provides the speed and low resource usage of SumatraPDF paired with a clean d
 ## Downloads & Installation
 
 ### Windows Setup Installer
-Download `BarePDF-Setup-x64-v1.0.0.exe` from GitHub Releases.
+[Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Setup-x64-v<version>.exe` asset.
 - Installs to `%LOCALAPPDATA%\Programs\BarePDF` (no administrator rights required).
 - Registers BarePDF in Windows "Open with" and Default Apps.
 - Offers option during setup to launch Windows Default Apps settings to select BarePDF as your default `.pdf` reader.
 
 ### Portable Package
-Download `BarePDF-Portable-x64-v1.0.0.zip` from GitHub Releases.
+[Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Portable-x64-v<version>.zip` asset.
 - Extract anywhere and run `BarePDF.exe` directly.
 - Requires no installation or registry modifications.
 
 ### Verifying Release Checksums
 ```powershell
-Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-v1.0.0.exe
-# Compare with SHA256SUMS.txt
+$Installer = Get-Item .\BarePDF-Setup-x64-v*.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
+# Compare with BarePDF-v<version>-SHA256SUMS.txt from the same GitHub Release
 ```
 
 ## Architecture Workspace
@@ -54,13 +55,17 @@ BarePDF adheres strictly to Windows Default Apps guidelines:
 ## Build & Release Automation
 
 ```powershell
-# 1. Run workspace checks and unit tests
+# Use this exact message for preparation, validation, and the eventual commit.
+$CommitMessage = "feat(scope): describe the releasable change"
+powershell -File scripts/prepare-version.ps1 -Message $CommitMessage
+
+# Run workspace checks and unit tests
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 
-# 2. Run PowerShell release scripts
-powershell -File packaging/windows/scripts/validate-version.ps1
+# Run PowerShell release scripts
+powershell -File packaging/windows/scripts/validate-version.ps1 -Message $CommitMessage
 powershell -File packaging/windows/scripts/stage-release.ps1
 powershell -File packaging/windows/scripts/build-portable.ps1
 powershell -File packaging/windows/scripts/build-installer.ps1

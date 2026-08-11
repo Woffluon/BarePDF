@@ -1,3 +1,34 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+let searchDirectory = dirname(fileURLToPath(import.meta.url));
+let cargoManifest: string | undefined;
+
+while (!cargoManifest) {
+  const candidate = resolve(searchDirectory, 'Cargo.toml');
+  if (existsSync(candidate)) {
+    const content = readFileSync(candidate, 'utf8');
+    if (/^\[workspace\.package\]\s*$/m.test(content)) cargoManifest = content;
+  }
+
+  const parent = dirname(searchDirectory);
+  if (parent === searchDirectory) break;
+  searchDirectory = parent;
+}
+
+if (!cargoManifest) {
+  throw new Error('Cannot locate workspace Cargo.toml from website module');
+}
+
+const productVersion = cargoManifest.match(
+  /\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
+)?.[1];
+
+if (!productVersion) {
+  throw new Error('Cannot read [workspace.package].version from Cargo.toml');
+}
+
 export const repository = {
   owner: 'Woffluon',
   name: 'BarePDF',
@@ -5,34 +36,16 @@ export const repository = {
   url: 'https://github.com/Woffluon/BarePDF',
   defaultBranch: 'main',
   license: 'MIT',
-  version: '1.0.0',
+  version: productVersion,
   description: 'Bare, Fast, Yours. Lightweight open-source PDF reader for Windows built with Rust and PDFium.',
 };
 
 export const defaultReleaseFallback = {
-  tag: 'v1.0.0',
-  name: 'BarePDF v1.0.0',
-  publishedAt: '2026-08-07T12:00:00Z',
-  url: 'https://github.com/Woffluon/BarePDF/releases/tag/v1.0.0',
-  notes: 'Initial release of BarePDF. Built for speed with PDFium rendering, Slint UI, continuous vertical reading, full screen, presentation mode, and Windows installer.',
-  assets: [
-    {
-      name: 'BarePDF-Setup-x64-v1.0.0.exe',
-      size: 19320832,
-      downloadUrl: 'https://github.com/Woffluon/BarePDF/releases/download/v1.0.0/BarePDF-Setup-x64-v1.0.0.exe',
-      type: 'installer' as const,
-    },
-    {
-      name: 'BarePDF-Portable-x64-v1.0.0.zip',
-      size: 18454912,
-      downloadUrl: 'https://github.com/Woffluon/BarePDF/releases/download/v1.0.0/BarePDF-Portable-x64-v1.0.0.zip',
-      type: 'portable' as const,
-    },
-    {
-      name: 'BarePDF-v1.0.0-SHA256SUMS.txt',
-      size: 456,
-      downloadUrl: 'https://github.com/Woffluon/BarePDF/releases/download/v1.0.0/BarePDF-v1.0.0-SHA256SUMS.txt',
-      type: 'checksum' as const,
-    },
-  ],
+  state: 'fallback' as const,
+  tag: `v${productVersion}`,
+  name: `BarePDF v${productVersion}`,
+  publishedAt: null,
+  url: 'https://github.com/Woffluon/BarePDF/releases/latest',
+  notes: 'GitHub release metadata was unavailable during this site build. Open GitHub Releases for current published downloads.',
+  assets: [],
 };

@@ -4,9 +4,11 @@ This document provides a manual test verification checklist for BarePDF releases
 
 ## Pre-Release Verification
 
-- [ ] Verify version consistency across Cargo manifests, `BarePDF.iss`, and Git tag:
+- [ ] Choose the exact Conventional Commit message, prepare the product version, and verify the working tree with that same message:
   ```powershell
-  powershell -File packaging/windows/scripts/validate-version.ps1
+  $CommitMessage = "feat(scope): describe the releasable change"
+  powershell -File scripts/prepare-version.ps1 -Message $CommitMessage
+  powershell -File packaging/windows/scripts/validate-version.ps1 -Message $CommitMessage
   ```
 - [ ] Run formatting, clippy, unit tests, and release build:
   ```bash
@@ -29,9 +31,9 @@ This document provides a manual test verification checklist for BarePDF releases
 ## Clean Windows Installation Verification
 
 ### Interactive Setup Test
-1. Download `BarePDF-Setup-x64-v1.0.0.exe` onto a clean Windows 10 or 11 system.
-2. Verify SHA-256 checksum against `BarePDF-v1.0.0-SHA256SUMS.txt`.
-3. Launch `BarePDF-Setup-x64-v1.0.0.exe` as a normal non-administrator user.
+1. [Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Setup-x64-v<version>.exe` asset onto a clean Windows 10 or 11 system.
+2. Verify its SHA-256 checksum against `BarePDF-v<version>-SHA256SUMS.txt` from the same release.
+3. Launch the downloaded installer as a normal non-administrator user.
 4. Confirm destination defaults to `%LOCALAPPDATA%\Programs\BarePDF`.
 5. On the **Default PDF Reader** page, select *"Yes, open Windows Default Apps settings after installation"*.
 6. Complete setup. Verify Windows **Default Apps** settings window opens automatically (`ms-settings:defaultapps?registeredAppUser=BarePDF`).
@@ -50,7 +52,7 @@ This document provides a manual test verification checklist for BarePDF releases
 
 ## Portable Package Verification
 
-1. Download `BarePDF-Portable-x64-v1.0.0.zip`.
+1. [Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Portable-x64-v<version>.zip` asset.
 2. Extract to desktop or USB drive (`C:\Users\Public\BarePDF-Portable`).
 3. Run `BarePDF.exe` directly without installation.
 4. Verify application runs fully offline without writing installer registry keys.

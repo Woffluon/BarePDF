@@ -5,19 +5,6 @@ export interface ReleaseAsset {
   type?: 'installer' | 'portable' | 'checksum' | 'other';
 }
 
-export function classifyAsset(filename: string): 'installer' | 'portable' | 'checksum' | 'other' {
-  if (/Setup.*\.exe$/i.test(filename) || /Installer.*\.exe$/i.test(filename) || /\.exe$/i.test(filename)) {
-    return 'installer';
-  }
-  if (/Portable.*\.zip$/i.test(filename) || /\.zip$/i.test(filename)) {
-    return 'portable';
-  }
-  if (/SHA256SUMS/i.test(filename) || /checksum/i.test(filename) || /\.txt$/i.test(filename)) {
-    return 'checksum';
-  }
-  return 'other';
-}
-
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;

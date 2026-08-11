@@ -1,168 +1,334 @@
 name: Release
 
 on:
-  push:
-    tags: [ "v*" ]
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Commit on main to release (defaults to current main)"
+        required: false
+        type: string
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  validate:
-    name: 1. Code Validation & Tests
-    runs-on: windows-latest
-    timeout-minutes: 20
+  gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Evaluate release gate
+        id: gate
+        env:
+          AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+        run: |
+          enabled=false
+          reason="Release automation is disabled. Set RELEASE_AUTOMATION_ENABLED=true after signing secrets are configured."
+          if [[ "$AUTOMATION_ENABLED" == "true" ]]; then
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              enabled=true
+              reason="Manual release requested."
+            elif [[ "$CI_CONCLUSION" == "success" && "$CI_BRANCH" == "main" && "$CI_EVENT" == "push" ]]; then
+              enabled=true
+              reason="Successful main CI run is eligible for release discovery."
+            else
+              reason="CI run is not a successful push on main; release skipped."
+            fi
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "### Release gate" >> "$GITHUB_STEP_SUMMARY"
+          echo "$reason" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install Rust Toolchain
+  preflight:
+    name: Signing Preflight
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: windows-latest
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve target commit
+        id: target
+        shell: powershell
+        env:
+          DISPATCH_SHA: ${{ inputs.target_sha }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $Requested = if ($env:GITHUB_EVENT_NAME -eq "workflow_run") { $env:CI_SHA } elseif ($env:DISPATCH_SHA) { $env:DISPATCH_SHA } else { "origin/main" }
+          $Target = (& git rev-parse "$Requested^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot resolve release target '$Requested'." }
+          & git merge-base --is-ancestor $Target origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release target must be reachable from main: $Target" }
+          "sha=$Target" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Verify signing configuration
+        shell: powershell
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
+          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
+        run: |
+          foreach ($Name in "WINDOWS_SIGNING_CERTIFICATE_BASE64", "WINDOWS_SIGNING_CERTIFICATE_PASSWORD", "WINDOWS_SIGNING_TIMESTAMP_URL", "WINDOWS_SIGNING_CERTIFICATE_SHA256") {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))) {
+              throw "Missing required release signing configuration: $Name"
+            }
+          }
+          if (-not [Uri]::IsWellFormedUriString($env:WINDOWS_SIGNING_TIMESTAMP_URL, [UriKind]::Absolute) -or -not $env:WINDOWS_SIGNING_TIMESTAMP_URL.StartsWith("https://")) {
+            throw "WINDOWS_SIGNING_TIMESTAMP_URL must be an absolute HTTPS URL."
+          }
+          $Bytes = [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
+          $Flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+          $Certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Bytes, $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD, $Flags)
+          try {
+            $Hasher = [Security.Cryptography.SHA256]::Create()
+            try { $Actual = ([BitConverter]::ToString($Hasher.ComputeHash($Certificate.RawData))).Replace("-", "") } finally { $Hasher.Dispose() }
+            $Expected = $env:WINDOWS_SIGNING_CERTIFICATE_SHA256.Replace(":", "").Replace(" ", "").ToUpperInvariant()
+            if ($Actual -cne $Expected) { throw "Signing certificate fingerprint does not match WINDOWS_SIGNING_CERTIFICATE_SHA256." }
+            if (-not $Certificate.HasPrivateKey) { throw "Signing certificate does not contain a private key." }
+          } finally {
+            $Certificate.Dispose()
+          }
+
+  discover:
+    name: Discover Unreleased Versions
+    needs: preflight
+    runs-on: windows-latest
+    outputs:
+      releases: ${{ steps.discover.outputs.releases }}
+      count: ${{ steps.discover.outputs.count }}
+    steps:
+      - name: Checkout target history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Find version-changing commits since latest tag
+        id: discover
+        shell: powershell
+        env:
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          powershell -File scripts/discover-release-backlog.ps1 -TargetSha $env:TARGET_SHA
+
+  publish:
+    name: Publish ${{ matrix.release.tag }}
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.releases) }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ matrix.release.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check immutable tag and release state
+        id: state
+        shell: powershell
+        env:
+          RELEASE_SHA: ${{ matrix.release.sha }}
+          RELEASE_TAG: ${{ matrix.release.tag }}
+        run: |
+          powershell -File scripts/test-existing-release.ps1 `
+            -ReleaseSha $env:RELEASE_SHA `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version "${{ matrix.release.version }}"
+
+      - name: Install Rust toolchain
+        if: steps.state.outputs.needed == 'true'
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
 
-      - name: Validate Version Consistency
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/validate-version.ps1
-
-      - name: Format Check
-        run: cargo fmt --all --check
-
-      - name: Clippy Lints
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-      - name: Unit Tests
-        run: cargo test --workspace --all-features --locked
-
-      - name: RustSec Audit
+      - name: Validate release commit
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: |
+          powershell -File scripts/test-versioning.ps1
+          powershell -File packaging/windows/scripts/validate-version.ps1 -CommitSha HEAD
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
           cargo install cargo-audit --version 0.22.0 --locked
           cargo audit --deny warnings
 
-  publish-release:
-    name: 2. Build, Package & Publish Release
-    needs: validate
-    runs-on: windows-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Setup Node.js
+        if: steps.state.outputs.needed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          toolchain: 1.95.0
+          node-version: 22
+
+      - name: Setup pnpm
+        if: steps.state.outputs.needed == 'true'
+        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+        with:
+          version: 10
+
+      - name: Validate website
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        run: |
+          pnpm --dir website install --frozen-lockfile
+          pnpm --dir website run test
+          pnpm --dir website run check
+          pnpm --dir website run build
 
       - name: Install Inno Setup
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
-        run: choco install innosetup --no-progress -y
+        run: choco install innosetup --version=6.7.1 --no-progress -y
 
       - name: Fetch verified PDFium runtime
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: powershell -File packaging/windows/scripts/fetch-pdfium.ps1
 
-      - name: Extract Application Version
-        shell: powershell
-        run: |
-          $Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $Ver = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
-          if (-not $Ver) { throw "barepdf package version not found" }
-          "APP_VERSION=$Ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Verify release tag matches application version
-        shell: powershell
-        run: |
-          $ExpectedTag = "v$env:APP_VERSION"
-          if ($env:GITHUB_REF_NAME -cne $ExpectedTag) {
-            throw "Release tag '$env:GITHUB_REF_NAME' must match application version '$ExpectedTag'."
-          }
-
-      - name: Reject an existing release tag
+      - name: Stage release artifacts
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "Release already exists: $env:GITHUB_REF_NAME" }
-
-      - name: Stage Release Executable & Assets
-        shell: powershell
+          BAREPDF_UPDATE_SIGNER_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
         run: powershell -File packaging/windows/scripts/stage-release.ps1
 
       - name: Sign staged native binaries
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
           WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
-          foreach ($name in "WINDOWS_SIGNING_CERTIFICATE_BASE64", "WINDOWS_SIGNING_CERTIFICATE_PASSWORD", "WINDOWS_SIGNING_TIMESTAMP_URL") {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing required release signing secret: $name" }
+          $CertificatePath = Join-Path $env:RUNNER_TEMP "barepdf-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($CertificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
+            foreach ($Target in "target/release/staged/BarePDF.exe", "target/release/staged/BarePDF.Thumbnail.dll", "target/release/staged/pdfium.dll") {
+              if (-not (Test-Path -LiteralPath $Target)) { throw "Missing signing target: $Target" }
+              & signtool.exe sign /f $CertificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Target
+              if ($LASTEXITCODE -ne 0) { throw "Signing failed: $Target" }
+              & signtool.exe verify /pa $Target
+              if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $Target" }
+            }
+          } finally {
+            Remove-Item -LiteralPath $CertificatePath -Force -ErrorAction SilentlyContinue
           }
-          $CertPath = "$env:TEMP\cert.pfx"
-          [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
-          $Targets = @("target/release/staged/BarePDF.exe", "target/release/staged/BarePDF.Thumbnail.dll", "target/release/staged/pdfium.dll")
-          foreach ($Target in $Targets) {
-            if (-not (Test-Path $Target)) { throw "Missing signing target: $Target" }
-            & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Target
-            if ($LASTEXITCODE -ne 0) { throw "Signing failed: $Target" }
-            & signtool.exe verify /pa $Target
-            if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $Target" }
-          }
-          Remove-Item $CertPath -Force
 
-      - name: Build Portable Package
+      - name: Build portable package and installer
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
-        run: powershell -File packaging/windows/scripts/build-portable.ps1
+        run: |
+          powershell -File packaging/windows/scripts/build-portable.ps1
+          powershell -File packaging/windows/scripts/build-installer.ps1
 
-      - name: Compile Installer
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/build-installer.ps1
-
-      - name: Sign installer
+      - name: Sign and verify installer identity
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
           WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
+          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
         run: |
-          $CertPath = "$env:TEMP\cert.pfx"
-          [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64) | Set-Content -Path $CertPath -Encoding Byte
-          $InstallerExe = Get-Item target/release/installer/BarePDF-Setup-*.exe
-          & signtool.exe sign /f $CertPath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $InstallerExe.FullName
-          if ($LASTEXITCODE -ne 0) { throw "Installer signing failed" }
-          & signtool.exe verify /pa $InstallerExe.FullName
-          if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed" }
-          Remove-Item $CertPath -Force
+          $CertificatePath = Join-Path $env:RUNNER_TEMP "barepdf-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($CertificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
+            $Installer = Get-Item "target/release/installer/BarePDF-Setup-x64-v${{ matrix.release.version }}.exe"
+            & signtool.exe sign /f $CertificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Installer.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Installer signing failed." }
+            & signtool.exe verify /pa $Installer.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed." }
+            $Signature = Get-AuthenticodeSignature -LiteralPath $Installer.FullName
+            if ($Signature.Status -ne "Valid" -or -not $Signature.SignerCertificate) { throw "Installer Authenticode signature is not valid." }
+            $Hasher = [Security.Cryptography.SHA256]::Create()
+            try { $Actual = ([BitConverter]::ToString($Hasher.ComputeHash($Signature.SignerCertificate.RawData))).Replace("-", "") } finally { $Hasher.Dispose() }
+            $Expected = $env:WINDOWS_SIGNING_CERTIFICATE_SHA256.Replace(":", "").Replace(" ", "").ToUpperInvariant()
+            if ($Actual -cne $Expected) { throw "Installer signer identity does not match the pinned certificate." }
+          } finally {
+            Remove-Item -LiteralPath $CertificatePath -Force -ErrorAction SilentlyContinue
+          }
 
-      - name: Validate Installer & Registry Configuration
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/validate-installer.ps1
-
-      - name: Generate SHA-256 Manifest
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/generate-checksums.ps1
-
-      - name: Extract Latest Commit Message
+      - name: Validate installer and generate release assets
+        if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: |
-          $Msg = git log -1 --format="%s"
-          "COMMIT_MSG=$Msg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          powershell -File packaging/windows/scripts/validate-installer.ps1
+          powershell -File packaging/windows/scripts/generate-checksums.ps1
+          powershell -File packaging/windows/scripts/test-release-manifest.ps1
+          "COMMIT_MSG=$(git log -1 --format='%s')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Publish GitHub Release
+      - name: Publish immutable GitHub release
+        if: steps.state.outputs.needed == 'true'
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: BarePDF v${{ env.APP_VERSION }}
+          tag_name: ${{ matrix.release.tag }}
+          name: BarePDF ${{ matrix.release.tag }}
           body: ${{ env.COMMIT_MSG }}
-          target_commitish: ${{ github.sha }}
-          files: |
-            target/release/artifacts/*
+          target_commitish: ${{ matrix.release.sha }}
+          files: target/release/artifacts/*
           generate_release_notes: false
           draft: false
           prerelease: false
-          make_latest: "true"
+          make_latest: "false"
+          token: ${{ github.token }}
+
+  finalize:
+    name: Finalize Latest Release
+    needs: [ discover, publish ]
+    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Mark newest release as latest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_JSON: ${{ needs.discover.outputs.releases }}
+        run: |
+          $Discovered = @($env:RELEASES_JSON | ConvertFrom-Json)
+          if ($Discovered.Count -eq 0) { throw "Release discovery output is empty." }
+          $Latest = $Discovered | Sort-Object { [version]$_.version } -Descending | Select-Object -First 1
+          $PublishedJson = gh release view $Latest.tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read discovered release $($Latest.tag)." }
+          $Published = $PublishedJson | ConvertFrom-Json
+          if ($Published.tagName -cne $Latest.tag -or $Published.isDraft -or $Published.isPrerelease) {
+            throw "Discovered release $($Latest.tag) is not a published stable release."
+          }
+          gh release edit $Latest.tag --repo $env:GITHUB_REPOSITORY --latest
+          if ($LASTEXITCODE -ne 0) { throw "Cannot mark discovered release $($Latest.tag) as latest." }
+
+      - name: Deploy refreshed website data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY" --ref main

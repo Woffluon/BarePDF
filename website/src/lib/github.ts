@@ -1,7 +1,16 @@
 import { repository, defaultReleaseFallback } from './repository';
-import { classifyAsset, type ReleaseAsset } from './releases';
+import type { ReleaseAsset } from './releases';
+import {
+  isCommitUrl,
+  isReleaseAssetUrl,
+  isReleasePageUrl,
+  releaseAssetNames,
+  releaseAssetType,
+  trustedGitHubUrl,
+  type ReleaseAssetType,
+} from './github-validation';
 
-export interface GitHubRelease {
+interface ReleaseMetadata {
   tag: string;
   name: string;
   publishedAt: string | null;
@@ -9,6 +18,10 @@ export interface GitHubRelease {
   notes: string;
   assets: ReleaseAsset[];
 }
+
+export type GitHubRelease =
+  | (ReleaseMetadata & { state: 'published'; publishedAt: string })
+  | (ReleaseMetadata & { state: 'fallback'; publishedAt: null });
 
 export interface GitHubCommit {
   sha: string;
@@ -22,9 +35,6 @@ export interface GitHubCommit {
 }
 
 const GITHUB_API_BASE = 'https://api.github.com';
-const GITHUB_HOST = 'github.com';
-const GITHUB_CONTENT_HOST_SUFFIX = '.githubusercontent.com';
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -34,43 +44,35 @@ function stringValue(value: unknown): string | null {
 }
 
 function finiteSize(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-export function trustedGitHubUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-
-  try {
-    const url = new URL(value);
-    const trustedHost = url.hostname === GITHUB_HOST || url.hostname.endsWith(GITHUB_CONTENT_HOST_SUFFIX);
-    return url.protocol === 'https:' && trustedHost ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
-function isReleaseAssetUrl(url: string, tag: string): boolean {
-  const expectedPath = `/${repository.owner}/${repository.name}/releases/download/${encodeURIComponent(tag)}/`;
-  return new URL(url).hostname === GITHUB_HOST && new URL(url).pathname.startsWith(expectedPath);
-}
-
-function isReleasePageUrl(url: string, tag: string): boolean {
-  const expectedPath = `/${repository.owner}/${repository.name}/releases/tag/${encodeURIComponent(tag)}`;
-  const parsedUrl = new URL(url);
-  return parsedUrl.hostname === GITHUB_HOST && parsedUrl.pathname === expectedPath;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
-  if (!Array.isArray(value)) return [];
+  const expectedNames = releaseAssetNames(tag);
+  if (!Array.isArray(value) || !expectedNames) return [];
 
-  return value.flatMap((asset) => {
+  const candidates = value.flatMap((asset) => {
     if (!isRecord(asset)) return [];
     const name = stringValue(asset.name);
     const size = finiteSize(asset.size);
     const downloadUrl = trustedGitHubUrl(asset.browser_download_url);
-    if (!name || size === null || !downloadUrl || !isReleaseAssetUrl(downloadUrl, tag)) return [];
+    const type = name ? releaseAssetType(name, tag) : null;
+    if (
+      !name
+      || size === null
+      || !downloadUrl
+      || !type
+      || !isReleaseAssetUrl(downloadUrl, repository.owner, repository.name, tag, name)
+    ) return [];
 
-    return [{ name, size, downloadUrl, type: classifyAsset(name) }];
+    return [{ name, size, downloadUrl, type }];
+  });
+
+  return (['installer', 'portable', 'checksum'] as const).flatMap((type: ReleaseAssetType) => {
+    const [versionedName, aliasName] = expectedNames[type];
+    const asset = candidates.find((candidate) => candidate.name === versionedName)
+      ?? candidates.find((candidate) => candidate.name === aliasName);
+    return asset ? [asset] : [];
   });
 }
 
@@ -107,22 +109,30 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
   try {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
-      console.warn(`[GitHub API] Failed to fetch latest release (${res.status} ${res.statusText}). Using static fallback.`);
+      console.warn(`[GitHub API] Failed to fetch latest release (${res.status} ${res.statusText}). Using build fallback.`);
       return defaultReleaseFallback;
     }
     const data: unknown = await res.json();
-    if (!isRecord(data)) return defaultReleaseFallback;
+    if (!isRecord(data) || data.draft !== false || data.prerelease !== false) return defaultReleaseFallback;
 
     const tag = stringValue(data.tag_name);
     const releaseUrl = trustedGitHubUrl(data.html_url);
-    if (!tag || !releaseUrl || !isReleasePageUrl(releaseUrl, tag)) return defaultReleaseFallback;
+    const publishedAt = stringValue(data.published_at);
+    if (
+      !tag
+      || !releaseUrl
+      || !publishedAt
+      || !Number.isFinite(Date.parse(publishedAt))
+      || !isReleasePageUrl(releaseUrl, repository.owner, repository.name, tag)
+    ) return defaultReleaseFallback;
     const assets = parseReleaseAssets(data.assets, tag);
-    if (assets.length === 0) return defaultReleaseFallback;
+    if (assets.length !== 3) return defaultReleaseFallback;
 
     return {
+      state: 'published',
       tag,
       name: stringValue(data.name) ?? tag,
-      publishedAt: stringValue(data.published_at),
+      publishedAt,
       url: releaseUrl,
       notes: stringValue(data.body) ?? 'No release notes provided.',
       assets,
@@ -134,11 +144,11 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
 }
 
 export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
-  const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/commits?per_page=${limit}`;
+  const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/commits?sha=${encodeURIComponent(repository.defaultBranch)}&per_page=${limit}`;
   try {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
-      console.warn(`[GitHub API] Failed to fetch commits (${res.status}). Returning static commits.`);
+      console.warn(`[GitHub API] Failed to fetch commits (${res.status}). Using build fallback.`);
       return getFallbackCommits();
     }
     const data = await res.json();
@@ -151,7 +161,13 @@ export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
       const fullMsg = stringValue(commit.commit.message);
       const sha = stringValue(commit.sha);
       const url = trustedGitHubUrl(commit.html_url);
-      if (!fullMsg || !sha || !/^[a-f0-9]{7,64}$/i.test(sha) || !url) return [];
+      if (
+        !fullMsg
+        || !sha
+        || !/^[a-f0-9]{7,64}$/i.test(sha)
+        || !url
+        || !isCommitUrl(url, repository.owner, repository.name, sha)
+      ) return [];
       const lines = fullMsg.split('\n');
       const subject = lines[0] || 'No commit message';
       const body = lines.slice(1).join('\n').trim() || null;
@@ -178,16 +194,17 @@ export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
 }
 
 function getFallbackCommits(): GitHubCommit[] {
-  return [
-    {
-      sha: 'b3a4102089a8a5ec5351c43afe8be68d0a599f80',
-      shortSha: 'b3a4102',
-      message: 'feat: ship premium UI and stabilize PDF rendering',
-      subject: 'feat: ship premium UI and stabilize PDF rendering',
-      body: null,
-      authorName: 'BarePDF Team',
-      date: '2026-08-10T01:35:47+03:00',
-      url: `https://github.com/${repository.owner}/${repository.name}`,
-    },
-  ];
+  const sha = process.env.GITHUB_SHA ?? process.env.BUILD_COMMIT_SHA;
+  if (!sha || !/^[a-f0-9]{7,64}$/i.test(sha)) return [];
+
+  return [{
+    sha,
+    shortSha: sha.substring(0, 7),
+    message: 'Current site build',
+    subject: 'Current site build',
+    body: null,
+    authorName: process.env.GITHUB_ACTOR ?? 'BarePDF Build',
+    date: null,
+    url: `${repository.url}/commit/${sha}`,
+  }];
 }

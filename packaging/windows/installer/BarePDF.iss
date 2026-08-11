@@ -2,7 +2,9 @@
 ; Windows per-user installation with PDF file association and Shell Thumbnail Provider registration
 
 #define MyAppName "BarePDF"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #error MyAppVersion must be supplied by build-installer.ps1
+#endif
 #define MyAppPublisher "BarePDF Contributors"
 #define MyAppURL "https://github.com/woffluon/barepdf"
 #define MyAppExeName "BarePDF.exe"
@@ -13,6 +15,7 @@
 AppId={{B3A82379-88F4-4D4D-A815-998A4476B66C}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}

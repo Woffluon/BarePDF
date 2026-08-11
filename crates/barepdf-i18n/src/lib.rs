@@ -90,6 +90,34 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("settings.reading_dir.ltr", "Left to Right (LTR)");
     m.insert("settings.reading_dir.rtl", "Right to Left (RTL)");
     m.insert("settings.close", "Close");
+    m.insert("updates", "Updates");
+    m.insert("updates.enabled", "Enabled");
+    m.insert("updates.disabled", "Disabled");
+    m.insert("updates.check_now", "Check now");
+    m.insert("updates.consent.title", "BarePDF updates");
+    m.insert(
+        "updates.consent.body",
+        "Allow BarePDF to check GitHub for updates? If enabled, it checks at most once every 24 hours. You can change this later in Settings.",
+    );
+    m.insert("updates.status.ready", "Ready to check for updates.");
+    m.insert("updates.status.checking", "Checking for updates...");
+    m.insert("updates.status.current", "BarePDF is up to date.");
+    m.insert(
+        "updates.status.available",
+        "A new BarePDF version is available.",
+    );
+    m.insert(
+        "updates.status.downloading",
+        "Downloading and verifying the update...",
+    );
+    m.insert(
+        "updates.status.verified",
+        "Update verified and ready to install.",
+    );
+    m.insert("updates.status.error", "The update could not be completed.");
+    m.insert("updates.action.download", "Download update");
+    m.insert("updates.action.install", "Install update");
+    m.insert("updates.action.release", "View release");
     m.insert("password.title", "Password Required");
     m.insert(
         "password.desc",
@@ -149,6 +177,34 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("settings.reading_dir.ltr", "Soldan Sağa (LTR)");
     m.insert("settings.reading_dir.rtl", "Sağdan Sola (RTL)");
     m.insert("settings.close", "Kapat");
+    m.insert("updates", "Güncellemeler");
+    m.insert("updates.enabled", "Açık");
+    m.insert("updates.disabled", "Kapalı");
+    m.insert("updates.check_now", "Şimdi denetle");
+    m.insert("updates.consent.title", "BarePDF güncellemeleri");
+    m.insert(
+        "updates.consent.body",
+        "BarePDF'in GitHub üzerinden güncellemeleri denetlemesine izin verilsin mi? Etkinleştirilirse en fazla 24 saatte bir denetler. Bunu daha sonra Ayarlar'dan değiştirebilirsiniz.",
+    );
+    m.insert("updates.status.ready", "Güncelleme denetimine hazır.");
+    m.insert("updates.status.checking", "Güncellemeler denetleniyor...");
+    m.insert("updates.status.current", "BarePDF güncel.");
+    m.insert(
+        "updates.status.available",
+        "Yeni bir BarePDF sürümü mevcut.",
+    );
+    m.insert(
+        "updates.status.downloading",
+        "Güncelleme indiriliyor ve doğrulanıyor...",
+    );
+    m.insert(
+        "updates.status.verified",
+        "Güncelleme doğrulandı ve kuruluma hazır.",
+    );
+    m.insert("updates.status.error", "Güncelleme tamamlanamadı.");
+    m.insert("updates.action.download", "Güncellemeyi indir");
+    m.insert("updates.action.install", "Güncellemeyi kur");
+    m.insert("updates.action.release", "Sürümü görüntüle");
     m.insert("password.title", "Parola Gerekli");
     m.insert(
         "password.desc",

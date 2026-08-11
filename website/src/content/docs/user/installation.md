@@ -11,7 +11,7 @@ BarePDF provides two distribution channels: an interactive **Windows Setup Insta
 
 ## Option 1: Windows Setup Installer (Recommended)
 
-Download `BarePDF-Setup-x64-v1.0.0.exe` from official GitHub Releases.
+[Open the latest official GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Setup-x64-v<version>.exe` asset.
 
 ### Setup Behavior
 - **No Administrator Rights Required**: Installs directly to `%LOCALAPPDATA%\Programs\BarePDF`.
@@ -26,7 +26,7 @@ Download `BarePDF-Setup-x64-v1.0.0.exe` from official GitHub Releases.
 
 ## Option 2: Portable ZIP Package
 
-Download `BarePDF-Portable-x64-v1.0.0.zip` from official GitHub Releases.
+[Open the latest official GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Portable-x64-v<version>.zip` asset.
 
 1. Extract the ZIP archive anywhere on your disk or portable USB drive (e.g. `C:\Tools\BarePDF-Portable`).
 2. Double-click `BarePDF.exe` to run immediately.
@@ -39,10 +39,11 @@ Download `BarePDF-Portable-x64-v1.0.0.zip` from official GitHub Releases.
 You can compare downloaded release integrity with the published checksum manifest using PowerShell:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-v1.0.0.exe
+$Installer = Get-Item .\BarePDF-Setup-x64-v*.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
 ```
 
-Compare the calculated hash with `BarePDF-v1.0.0-SHA256SUMS.txt` published alongside the release.
+Compare the calculated hash with `BarePDF-v<version>-SHA256SUMS.txt` published alongside the release.
 
 ---
 

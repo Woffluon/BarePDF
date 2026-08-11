@@ -1,6 +1,6 @@
 use crate::types::{MemoryBudget, ReadingDirection, ViewingMode, ZoomMode};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,7 @@ pub enum ThemeMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UserPreferences {
     pub language: Language,
     pub theme: ThemeMode,
@@ -35,6 +36,8 @@ pub struct UserPreferences {
     pub last_window_width: u32,
     pub last_window_height: u32,
     pub sidebar_visible: bool,
+    pub update_checks_enabled: Option<bool>,
+    pub last_update_check_unix: Option<u64>,
 }
 
 impl Default for UserPreferences {
@@ -51,6 +54,8 @@ impl Default for UserPreferences {
             last_window_width: 1100,
             last_window_height: 800,
             sidebar_visible: true,
+            update_checks_enabled: None,
+            last_update_check_unix: None,
         }
     }
 }
@@ -80,15 +85,13 @@ impl UserPreferences {
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        let tmp_path = path.with_extension("tmp");
-
-        {
-            let mut file = File::create(&tmp_path)?;
-            file.write_all(json.as_bytes())?;
-            file.sync_all()?;
-        }
-
-        fs::rename(tmp_path, path)?;
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut file = tempfile::Builder::new()
+            .prefix(".barepdf-config-")
+            .tempfile_in(parent)?;
+        file.write_all(json.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path).map_err(|error| error.error)?;
         Ok(())
     }
 
@@ -138,6 +141,26 @@ mod tests {
     }
 
     #[test]
+    fn saving_preferences_replaces_existing_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("barepdf-preferences-replace-{unique}.json"));
+        let mut preferences = UserPreferences::default();
+        preferences.save_to_file(&path).expect("initial save");
+
+        preferences.theme = ThemeMode::Dark;
+        preferences.save_to_file(&path).expect("replacement save");
+
+        assert_eq!(
+            UserPreferences::load_from_file(&path).theme,
+            ThemeMode::Dark
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn recent_files_are_unique_and_bounded() {
         let mut preferences = UserPreferences {
             max_recent_files: 2,
@@ -160,5 +183,28 @@ mod tests {
             Err(PreferencesLoadError::Parse(_))
         ));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn older_preferences_default_update_consent() {
+        let preferences: UserPreferences = serde_json::from_str(
+            r#"{
+                "language":"System",
+                "theme":"System",
+                "viewing_mode":"ContinuousVertical",
+                "reading_direction":"LeftToRight",
+                "zoom_mode":"FitWidth",
+                "memory_budget_bytes":67108864,
+                "max_recent_files":10,
+                "recent_files":[],
+                "last_window_width":1100,
+                "last_window_height":800,
+                "sidebar_visible":true
+            }"#,
+        )
+        .expect("old preferences remain compatible");
+
+        assert_eq!(preferences.update_checks_enabled, None);
+        assert_eq!(preferences.last_update_check_unix, None);
     }
 }

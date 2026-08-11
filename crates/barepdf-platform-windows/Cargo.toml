@@ -13,4 +13,5 @@ barepdf-core = { path = "../barepdf-core" }
 barepdf-platform = { path = "../barepdf-platform" }
 rfd = "0.15"
 arboard = { version = "3.4", default-features = false }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+sha2 = "0.10"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

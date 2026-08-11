@@ -1,13 +1,30 @@
 use arboard::Clipboard;
 use barepdf_core::PdfError;
 use barepdf_platform::{ClipboardAccess, FileDialogs, PrinterAccess};
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageLevel};
+use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Security::Cryptography::{
+    CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext, CryptMsgClose,
+    CryptMsgGetParam, CryptQueryObject, CERT_CONTEXT, CERT_FIND_SUBJECT_CERT, CERT_INFO,
+    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+    CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, HCERTSTORE,
+};
+use windows_sys::Win32::Security::WinTrust::{
+    WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
+    WINTRUST_FILE_INFO, WINTRUST_SIGNATURE_SETTINGS, WSS_VERIFY_SPECIFIC, WTD_CHOICE_FILE,
+    WTD_DISABLE_MD2_MD4, WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, WTD_REVOKE_WHOLECHAIN,
+    WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UICONTEXT_INSTALL, WTD_UI_NONE,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+};
 use windows_sys::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteW, HDROP,
 };
@@ -25,6 +42,373 @@ pub fn show_fatal_error(title: &str, description: &str) {
         .set_description(description)
         .set_buttons(MessageButtons::Ok)
         .show();
+}
+
+#[must_use]
+pub fn ask_yes_no(title: &str, description: &str) -> bool {
+    MessageDialog::new()
+        .set_level(MessageLevel::Info)
+        .set_title(title)
+        .set_description(description)
+        .set_buttons(MessageButtons::YesNo)
+        .show()
+        == MessageDialogResult::Yes
+}
+
+#[must_use]
+pub fn is_installed_build() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("unins000.exe")))
+        .is_some_and(|path| path.is_file())
+}
+
+/// Verifies the Windows trust chain and the SHA-256 fingerprint of the signing certificate.
+///
+/// # Errors
+///
+/// Returns an error when Windows cannot validate the signature or the signer differs.
+pub fn verify_authenticode_signer(path: &Path, expected_sha256: &str) -> Result<(), PdfError> {
+    let expected = normalize_signer_fingerprint(expected_sha256)
+        .ok_or_else(|| PdfError::PlatformError("Invalid expected signer fingerprint".into()))?;
+    verify_windows_trust(path)?;
+    let actual = embedded_signer_fingerprint(path)?;
+    if actual != expected {
+        return Err(PdfError::PlatformError(
+            "The update was signed by an unexpected publisher".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reads the fixed four-part version embedded in a Windows executable.
+///
+/// # Errors
+///
+/// Returns an error when the file has no valid fixed PE version resource.
+pub fn executable_file_version(path: &Path) -> Result<[u16; 4], PdfError> {
+    let path = wide_null(path.as_os_str());
+    let mut ignored = 0_u32;
+    // SAFETY: The path is a live, NUL-terminated UTF-16 string and the output pointer is valid.
+    let byte_len = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), &mut ignored) };
+    if byte_len == 0 {
+        return Err(PdfError::PlatformError(
+            "The update has no Windows file version metadata".into(),
+        ));
+    }
+    let word_size = std::mem::size_of::<usize>();
+    let word_len = (byte_len as usize)
+        .checked_add(word_size - 1)
+        .map(|size| size / word_size)
+        .ok_or_else(|| PdfError::PlatformError("Version metadata is too large".into()))?;
+    let mut buffer = vec![0_usize; word_len];
+    // SAFETY: Buffer is writable for byte_len bytes and path remains valid for the call.
+    let read =
+        unsafe { GetFileVersionInfoW(path.as_ptr(), 0, byte_len, buffer.as_mut_ptr().cast()) };
+    if read == 0 {
+        return Err(PdfError::PlatformError(
+            "Could not read the update's Windows version metadata".into(),
+        ));
+    }
+
+    let root = ['\\' as u16, 0];
+    let mut value = std::ptr::null_mut();
+    let mut value_len = 0_u32;
+    // SAFETY: Buffer contains version data returned by GetFileVersionInfoW; outputs are valid.
+    let queried = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr().cast(),
+            root.as_ptr(),
+            &mut value,
+            &mut value_len,
+        )
+    };
+    if queried == 0 || value.is_null() || value_len < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32
+    {
+        return Err(PdfError::PlatformError(
+            "The update has invalid Windows version metadata".into(),
+        ));
+    }
+    // SAFETY: VerQueryValueW returned a non-null VS_FIXEDFILEINFO-sized root value.
+    let info = unsafe { &*value.cast::<VS_FIXEDFILEINFO>() };
+    if info.dwSignature != 0xFEEF_04BD {
+        return Err(PdfError::PlatformError(
+            "The update has invalid Windows version metadata".into(),
+        ));
+    }
+    Ok(fixed_file_version(
+        info.dwFileVersionMS,
+        info.dwFileVersionLS,
+    ))
+}
+
+fn fixed_file_version(ms: u32, ls: u32) -> [u16; 4] {
+    [(ms >> 16) as u16, ms as u16, (ls >> 16) as u16, ls as u16]
+}
+
+#[must_use]
+pub fn normalize_signer_fingerprint(value: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(64);
+    for character in value.chars() {
+        if character.is_ascii_hexdigit() {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !character.is_ascii_whitespace() && character != ':' && character != '-' {
+            return None;
+        }
+    }
+    (normalized.len() == 64).then_some(normalized)
+}
+
+fn verify_windows_trust(path: &Path) -> Result<(), PdfError> {
+    let path = wide_null(path.as_os_str());
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: path.as_ptr(),
+        hFile: std::ptr::null_mut(),
+        pgKnownSubject: std::ptr::null_mut(),
+    };
+    let mut signature_settings = primary_signature_settings();
+    let mut trust_data = WINTRUST_DATA {
+        cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
+        pPolicyCallbackData: std::ptr::null_mut(),
+        pSIPClientData: std::ptr::null_mut(),
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 {
+            pFile: &mut file_info,
+        },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        hWVTStateData: std::ptr::null_mut(),
+        pwszURLReference: std::ptr::null_mut(),
+        dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | WTD_DISABLE_MD2_MD4,
+        dwUIContext: WTD_UICONTEXT_INSTALL,
+        pSignatureSettings: &mut signature_settings,
+    };
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    // SAFETY: The structures point to live, initialized buffers for the duration of the call.
+    let status = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            &mut trust_data as *mut WINTRUST_DATA as *mut std::ffi::c_void,
+        )
+    };
+    trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+    // SAFETY: This closes the state returned by the preceding verification call.
+    unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            &mut trust_data as *mut WINTRUST_DATA as *mut std::ffi::c_void,
+        );
+    }
+    if status != 0 {
+        return Err(PdfError::PlatformError(format!(
+            "The update does not have a trusted Windows signature (0x{:08x})",
+            status as u32
+        )));
+    }
+    Ok(())
+}
+
+fn primary_signature_settings() -> WINTRUST_SIGNATURE_SETTINGS {
+    WINTRUST_SIGNATURE_SETTINGS {
+        cbStruct: std::mem::size_of::<WINTRUST_SIGNATURE_SETTINGS>() as u32,
+        dwIndex: 0,
+        dwFlags: WSS_VERIFY_SPECIFIC,
+        cSecondarySigs: 0,
+        dwVerifiedSigIndex: 0,
+        pCryptoPolicy: std::ptr::null_mut(),
+    }
+}
+
+struct CryptQueryHandles {
+    store: HCERTSTORE,
+    message: *mut std::ffi::c_void,
+}
+
+impl Drop for CryptQueryHandles {
+    fn drop(&mut self) {
+        // SAFETY: Both handles are owned by this value after CryptQueryObject succeeds.
+        unsafe {
+            if !self.message.is_null() {
+                CryptMsgClose(self.message);
+            }
+            if !self.store.is_null() {
+                CertCloseStore(self.store, 0);
+            }
+        }
+    }
+}
+
+struct OwnedCertificate(*mut CERT_CONTEXT);
+
+impl Drop for OwnedCertificate {
+    fn drop(&mut self) {
+        // SAFETY: The certificate context is uniquely owned after CertFindCertificateInStore.
+        unsafe {
+            if !self.0.is_null() {
+                CertFreeCertificateContext(self.0);
+            }
+        }
+    }
+}
+
+fn embedded_signer_fingerprint(path: &Path) -> Result<String, PdfError> {
+    let path = wide_null(path.as_os_str());
+    let mut encoding = 0;
+    let mut content_type = 0;
+    let mut format_type = 0;
+    let mut store = std::ptr::null_mut();
+    let mut message = std::ptr::null_mut();
+    // SAFETY: Output pointers are valid and the UTF-16 path is NUL-terminated.
+    let queried = unsafe {
+        CryptQueryObject(
+            CERT_QUERY_OBJECT_FILE,
+            path.as_ptr().cast(),
+            CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+            CERT_QUERY_FORMAT_FLAG_BINARY,
+            0,
+            &mut encoding,
+            &mut content_type,
+            &mut format_type,
+            &mut store,
+            &mut message,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 {
+        return Err(PdfError::PlatformError(
+            "Could not read the update's embedded signature".into(),
+        ));
+    }
+    let _handles = CryptQueryHandles { store, message };
+    if store.is_null() || message.is_null() {
+        return Err(PdfError::PlatformError(
+            "The embedded signature did not provide signer handles".into(),
+        ));
+    }
+
+    let mut signer_size = 0_u32;
+    // SAFETY: The first call queries the required output size without writing data.
+    let sized = unsafe {
+        CryptMsgGetParam(
+            message,
+            CMSG_SIGNER_INFO_PARAM,
+            0,
+            std::ptr::null_mut(),
+            &mut signer_size,
+        )
+    };
+    if sized == 0 || signer_size < std::mem::size_of::<CMSG_SIGNER_INFO>() as u32 {
+        return Err(PdfError::PlatformError(
+            "Could not read update signer information".into(),
+        ));
+    }
+    let word_size = std::mem::size_of::<usize>();
+    let signer_words = (signer_size as usize)
+        .checked_add(word_size - 1)
+        .map(|size| size / word_size)
+        .ok_or_else(|| PdfError::PlatformError("Signer information is too large".into()))?;
+    let mut signer_buffer = vec![0_usize; signer_words];
+    // SAFETY: The buffer has the exact size requested by CryptMsgGetParam.
+    let read = unsafe {
+        CryptMsgGetParam(
+            message,
+            CMSG_SIGNER_INFO_PARAM,
+            0,
+            signer_buffer.as_mut_ptr().cast(),
+            &mut signer_size,
+        )
+    };
+    if read == 0 {
+        return Err(PdfError::PlatformError(
+            "Could not read update signer information".into(),
+        ));
+    }
+    // SAFETY: CryptMsgGetParam initialized the buffer as a CMSG_SIGNER_INFO structure.
+    let signer = unsafe { &*signer_buffer.as_ptr().cast::<CMSG_SIGNER_INFO>() };
+    // SAFETY: CERT_INFO is a Windows C POD structure; zero is valid for unused search fields.
+    let mut cert_info = unsafe { std::mem::zeroed::<CERT_INFO>() };
+    cert_info.Issuer = signer.Issuer;
+    cert_info.SerialNumber = signer.SerialNumber;
+    // SAFETY: Store, encoding, and search structure come from the same signed object.
+    let certificate = unsafe {
+        CertFindCertificateInStore(
+            store,
+            encoding,
+            0,
+            CERT_FIND_SUBJECT_CERT,
+            (&raw const cert_info).cast(),
+            std::ptr::null(),
+        )
+    };
+    if certificate.is_null() {
+        return Err(PdfError::PlatformError(
+            "Could not locate the update signing certificate".into(),
+        ));
+    }
+    let certificate = OwnedCertificate(certificate);
+    // SAFETY: The non-null certificate context remains owned for this scope.
+    if unsafe { (*certificate.0).pbCertEncoded.is_null() } {
+        return Err(PdfError::PlatformError(
+            "The update signing certificate has no encoded data".into(),
+        ));
+    }
+    // SAFETY: The certificate context owns the DER buffer for this scope.
+    let encoded = unsafe {
+        std::slice::from_raw_parts(
+            (*certificate.0).pbCertEncoded,
+            (*certificate.0).cbCertEncoded as usize,
+        )
+    };
+    if encoded.is_empty() {
+        return Err(PdfError::PlatformError(
+            "The update signing certificate is empty".into(),
+        ));
+    }
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
+/// Starts a previously verified installer without silent-install arguments.
+///
+/// # Errors
+///
+/// Returns an error when Windows cannot start the installer.
+pub fn launch_installer(path: &Path) -> Result<(), PdfError> {
+    Command::new(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| PdfError::PlatformError(format!("Could not start installer: {error}")))
+}
+
+/// Opens a trusted URL in the user's default browser.
+///
+/// # Errors
+///
+/// Returns an error when Windows cannot open the URL.
+pub fn open_url(url: &str) -> Result<(), PdfError> {
+    let url = wide_null(OsStr::new(url));
+    let verb = wide_null(OsStr::new("open"));
+    // SAFETY: Both strings are NUL-terminated and remain alive for the call.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (result as usize) <= 32 {
+        return Err(PdfError::PlatformError(format!(
+            "ShellExecuteW failed with code {}",
+            result as usize
+        )));
+    }
+    Ok(())
 }
 
 struct DropTarget {
@@ -249,4 +633,42 @@ impl PrinterAccess for WindowsPrinter {
 
 fn wide_null(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fixed_file_version, normalize_signer_fingerprint, primary_signature_settings};
+    use windows_sys::Win32::Security::WinTrust::WSS_VERIFY_SPECIFIC;
+
+    #[test]
+    fn signer_fingerprint_normalization_is_strict() {
+        let compact = "0123456789abcdef".repeat(4);
+        let separated = compact
+            .as_bytes()
+            .chunks(2)
+            .map(|chunk| std::str::from_utf8(chunk).expect("hex pair"))
+            .collect::<Vec<_>>()
+            .join(":");
+        assert_eq!(normalize_signer_fingerprint(&separated), Some(compact));
+        assert_eq!(normalize_signer_fingerprint("abcd"), None);
+        assert_eq!(
+            normalize_signer_fingerprint(&format!("{}g", "a".repeat(63))),
+            None
+        );
+    }
+
+    #[test]
+    fn fixed_windows_version_words_are_decoded_in_order() {
+        assert_eq!(
+            fixed_file_version(0x000C_0022, 0x0038_0000),
+            [12, 34, 56, 0]
+        );
+    }
+
+    #[test]
+    fn trust_verification_is_bound_to_primary_signature() {
+        let settings = primary_signature_settings();
+        assert_eq!(settings.dwIndex, 0);
+        assert_eq!(settings.dwFlags, WSS_VERIFY_SPECIFIC);
+    }
 }

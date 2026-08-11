@@ -7,22 +7,25 @@ interface Props {
 }
 
 const { release } = Astro.props;
+const hasReleaseMetadata = release.state === 'published';
 ---
 
 <article class="release-card">
   <div class="release-header">
     <div class="release-title-group">
       <h2 class="release-tag">{release.tag}</h2>
-      <span class="badge badge-success">Latest Non-Draft Release</span>
+      <span class="badge badge-success">
+        {hasReleaseMetadata ? 'Latest Non-Draft Release' : 'Build Metadata Fallback'}
+      </span>
     </div>
-    <time class="release-date">{formatDate(release.publishedAt)}</time>
+    <time class="release-date">{hasReleaseMetadata ? formatDate(release.publishedAt) : 'Release metadata unavailable'}</time>
   </div>
 
   <div class="release-notes">{release.notes || 'Official release of BarePDF.'}</div>
 
   <div class="release-footer">
     <a href={release.url} target="_blank" rel="noopener noreferrer" class="release-link">
-      View Release Notes on GitHub ↗
+      {hasReleaseMetadata ? 'View Release Notes on GitHub ↗' : 'View Published Releases on GitHub ↗'}
     </a>
   </div>
 </article>

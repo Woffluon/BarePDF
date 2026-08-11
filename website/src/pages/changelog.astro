@@ -7,6 +7,7 @@ import { getLatestRelease, getRecentCommits } from '../lib/github';
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 const release = await getLatestRelease();
 const commits = await getRecentCommits(30);
+const hasReleaseMetadata = release.state === 'published';
 ---
 
 <BaseLayout
@@ -26,7 +27,7 @@ const commits = await getRecentCommits(30);
   <section class="changelog-body">
     <div class="container">
       <div class="section-block">
-        <h2 class="block-heading">Latest Published Release</h2>
+        <h2 class="block-heading">{hasReleaseMetadata ? 'Latest Published Release' : 'Current Build Version'}</h2>
         <ReleaseCard release={release} />
       </div>
 

@@ -15,6 +15,8 @@
     unused_must_use
 )]
 
+mod update;
+
 use barepdf_core::{
     default_config_path, selection::SelectionEngine, ContinuousLayout, DocumentId, MemoryBudget,
     PageIndex, PageTextGeometry, PdfError, RequestId, Rotation, TextPosition, TextSelection,
@@ -24,7 +26,8 @@ use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
-    install_file_drop, show_fatal_error, WindowsClipboard, WindowsFileDialogs,
+    ask_yes_no, install_file_drop, is_installed_build, open_url, show_fatal_error,
+    WindowsClipboard, WindowsFileDialogs,
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderEvent, RenderJob, RenderKind, RenderScheduler,
@@ -61,6 +64,20 @@ const MAX_OUTLINE_ITEMS: usize = 4_096;
 const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
 const MAX_TEXT_GEOMETRIES: usize = 32;
 const MAX_PASSWORD_BYTES: usize = 1_024;
+const UPDATE_DUE_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+use update::{UpdateCommand, UpdateEvent, UpdateInfo};
+
+#[derive(Clone, Copy)]
+enum UpdateUiState {
+    Ready,
+    Checking,
+    Current,
+    Available,
+    Downloading,
+    Verified,
+    Error,
+}
 
 #[derive(Clone)]
 struct PendingDocument {
@@ -251,6 +268,10 @@ struct AppState {
     flat_outline: Vec<FlatOutlineEntry>,
     page_images: UiImageCache,
     thumbnail_images: UiImageCache,
+    available_update: Option<UpdateInfo>,
+    verified_update: Option<PathBuf>,
+    update_busy: bool,
+    update_ui_state: UpdateUiState,
 }
 
 impl AppState {
@@ -300,6 +321,10 @@ impl AppState {
             flat_outline: Vec::new(),
             page_images: UiImageCache::new(PAGE_IMAGE_BUDGET),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
+            available_update: None,
+            verified_update: None,
+            update_busy: false,
+            update_ui_state: UpdateUiState::Ready,
         }
     }
 }
@@ -320,6 +345,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let preferences_path = default_config_path();
     let mut preferences = UserPreferences::load_from_file(&preferences_path);
+    if preferences.update_checks_enabled.is_none() {
+        let language = preferences.language.resolve();
+        preferences.update_checks_enabled = Some(ask_yes_no(
+            barepdf_i18n::t(language, "updates.consent.title"),
+            barepdf_i18n::t(language, "updates.consent.body"),
+        ));
+        persist_preferences(&preferences, &preferences_path, None);
+    }
     let original_recent_count = preferences.recent_files.len();
     preferences
         .recent_files
@@ -335,6 +368,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let dialogs = Arc::new(WindowsFileDialogs);
     let clipboard = Arc::new(WindowsClipboard::new());
+    let (update_sender, update_receiver) = update::start_worker();
     let window = AppWindow::new()?;
     window.window().set_size(LogicalSize::new(
         preferences.last_window_width.max(760) as f32,
@@ -354,7 +388,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dialogs,
         clipboard,
         &preferences_path,
+        update_sender.clone(),
     );
+
+    if state.borrow().preferences.update_checks_enabled == Some(true)
+        && update_check_is_due(&state.borrow().preferences, unix_timestamp())
+    {
+        queue_update_check(&update_sender, &state, &window, &preferences_path);
+    }
 
     if let Some(argument) = env::args_os().nth(1) {
         let path = PathBuf::from(argument);
@@ -364,7 +405,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let timer = Timer::default();
-    start_event_timer(&timer, &window, &state, &scheduler, &preferences_path, None);
+    start_event_timer(
+        &timer,
+        &window,
+        &state,
+        &scheduler,
+        &preferences_path,
+        None,
+        (update_sender, update_receiver),
+    );
     window.run()?;
 
     let scale = window.window().scale_factor().max(0.1);
@@ -388,6 +437,9 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
         state.preferences.language.resolve(),
         "status.ready",
     )));
+    window.set_current_version(SharedString::from(update::CURRENT_VERSION));
+    window.set_update_checks_enabled(state.preferences.update_checks_enabled == Some(true));
+    render_update_ui(window, state);
 }
 
 fn wire_callbacks(
@@ -397,6 +449,7 @@ fn wire_callbacks(
     dialogs: Arc<WindowsFileDialogs>,
     clipboard: Arc<WindowsClipboard>,
     preferences_path: &Path,
+    update_sender: std::sync::mpsc::Sender<UpdateCommand>,
 ) {
     let weak = window.as_weak();
     let state_open = state.clone();
@@ -464,6 +517,7 @@ fn wire_callbacks(
                 language.resolve(),
             )));
             update_ui_strings(&window, language.resolve());
+            render_update_ui(&window, &app);
         }
     });
 
@@ -478,6 +532,96 @@ fn wire_callbacks(
         persist_preferences(&app.preferences, &preferences_path_theme, window.as_ref());
         if let Some(window) = window {
             apply_theme(&window, theme);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_update_consent = state.clone();
+    let preferences_path_updates = preferences_path.to_path_buf();
+    let update_sender_consent = update_sender.clone();
+    window.on_request_change_update_checks(move |enabled| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        {
+            let mut app = state_update_consent.borrow_mut();
+            app.preferences.update_checks_enabled = Some(enabled);
+            persist_preferences(&app.preferences, &preferences_path_updates, Some(&window));
+        }
+        window.set_update_checks_enabled(enabled);
+        if enabled {
+            queue_update_check(
+                &update_sender_consent,
+                &state_update_consent,
+                &window,
+                &preferences_path_updates,
+            );
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_update_check = state.clone();
+    let preferences_path_check = preferences_path.to_path_buf();
+    let update_sender_check = update_sender.clone();
+    window.on_request_check_update(move || {
+        if let Some(window) = weak.upgrade() {
+            queue_update_check(
+                &update_sender_check,
+                &state_update_check,
+                &window,
+                &preferences_path_check,
+            );
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_update_action = state.clone();
+    window.on_request_update_action(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_update_action.borrow_mut();
+        if app.update_busy {
+            return;
+        }
+        if let (Some(path), Some(update)) =
+            (app.verified_update.clone(), app.available_update.clone())
+        {
+            app.update_busy = true;
+            window.set_update_action_enabled(false);
+            if update_sender
+                .send(UpdateCommand::Install { path, update })
+                .is_err()
+            {
+                app.update_busy = false;
+                app.update_ui_state = UpdateUiState::Error;
+                render_update_ui(&window, &app);
+            }
+            return;
+        }
+        let Some(update) = app.available_update.clone() else {
+            return;
+        };
+        if !is_installed_build() {
+            if let Err(error) = open_url(&update.release_url) {
+                eprintln!("Could not open release page: {error}");
+                app.update_ui_state = UpdateUiState::Error;
+                render_update_ui(&window, &app);
+            }
+            return;
+        }
+        if !update::signer_is_configured() {
+            app.update_ui_state = UpdateUiState::Error;
+            render_update_ui(&window, &app);
+            return;
+        }
+        app.update_busy = true;
+        app.update_ui_state = UpdateUiState::Downloading;
+        render_update_ui(&window, &app);
+        if update_sender.send(UpdateCommand::Download(update)).is_err() {
+            app.update_busy = false;
+            app.update_ui_state = UpdateUiState::Error;
+            render_update_ui(&window, &app);
         }
     });
 
@@ -960,12 +1104,18 @@ fn start_event_timer(
     scheduler: &Rc<RenderScheduler>,
     preferences_path: &Path,
     mut native_drop_receiver: Option<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
+    updates: (
+        std::sync::mpsc::Sender<UpdateCommand>,
+        std::sync::mpsc::Receiver<UpdateEvent>,
+    ),
 ) {
+    let (update_sender, update_receiver) = updates;
     let weak = window.as_weak();
     let state = state.clone();
     let scheduler = scheduler.clone();
     let preferences_path = preferences_path.to_path_buf();
     let mut worker_terminated = false;
+    let mut next_update_due_poll = Instant::now() + UPDATE_DUE_POLL_INTERVAL;
     timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -982,6 +1132,19 @@ fn start_event_timer(
                     [_] => show_banner(&window, "Only PDF files are supported.", false),
                     _ => show_banner(&window, "Drop exactly one PDF file.", false),
                 }
+            }
+        }
+        while let Ok(event) = update_receiver.try_recv() {
+            handle_update_event(event, &window, &state);
+        }
+        if Instant::now() >= next_update_due_poll {
+            next_update_due_poll = Instant::now() + UPDATE_DUE_POLL_INTERVAL;
+            let should_check = {
+                let app = state.borrow();
+                automatic_update_check_should_run(&app, unix_timestamp())
+            };
+            if should_check {
+                queue_update_check(&update_sender, &state, &window, &preferences_path);
             }
         }
         process_view_changes(&window, &state, &scheduler);
@@ -1001,6 +1164,155 @@ fn start_event_timer(
             }
         }
     });
+}
+
+fn queue_update_check(
+    sender: &std::sync::mpsc::Sender<UpdateCommand>,
+    state: &Rc<RefCell<AppState>>,
+    window: &AppWindow,
+    preferences_path: &Path,
+) {
+    let mut app = state.borrow_mut();
+    if app.update_busy {
+        return;
+    }
+    app.update_busy = true;
+    app.update_ui_state = UpdateUiState::Checking;
+    render_update_ui(window, &app);
+    if sender.send(UpdateCommand::Check).is_ok() {
+        app.preferences.last_update_check_unix = Some(unix_timestamp());
+        persist_preferences(&app.preferences, preferences_path, Some(window));
+    } else {
+        app.update_busy = false;
+        app.update_ui_state = UpdateUiState::Error;
+        render_update_ui(window, &app);
+    }
+}
+
+fn handle_update_event(event: UpdateEvent, window: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let mut app = state.borrow_mut();
+    app.update_busy = false;
+    match event {
+        UpdateEvent::UpToDate => {
+            app.available_update = None;
+            app.verified_update = None;
+            app.update_ui_state = UpdateUiState::Current;
+        }
+        UpdateEvent::Available(update) => {
+            app.available_update = Some(update);
+            app.verified_update = None;
+            app.update_ui_state = UpdateUiState::Available;
+        }
+        UpdateEvent::Downloaded { path, update } => {
+            app.available_update = Some(update);
+            app.verified_update = Some(path);
+            app.update_ui_state = UpdateUiState::Verified;
+        }
+        UpdateEvent::InstallerStarted => {
+            let _ = slint::quit_event_loop();
+        }
+        UpdateEvent::Error(error) => {
+            eprintln!("Updater error: {error}");
+            app.update_ui_state = UpdateUiState::Error;
+        }
+    }
+    render_update_ui(window, &app);
+}
+
+fn render_update_ui(window: &AppWindow, app: &AppState) {
+    let language = app.preferences.language.resolve();
+    let (status, action, enabled) = match app.update_ui_state {
+        UpdateUiState::Ready => (
+            barepdf_i18n::t(language, "updates.status.ready").to_string(),
+            "",
+            false,
+        ),
+        UpdateUiState::Checking => (
+            barepdf_i18n::t(language, "updates.status.checking").to_string(),
+            "",
+            false,
+        ),
+        UpdateUiState::Current => (
+            barepdf_i18n::t(language, "updates.status.current").to_string(),
+            "",
+            false,
+        ),
+        UpdateUiState::Downloading => (
+            barepdf_i18n::t(language, "updates.status.downloading").to_string(),
+            "",
+            false,
+        ),
+        UpdateUiState::Verified => (
+            barepdf_i18n::t(language, "updates.status.verified").to_string(),
+            barepdf_i18n::t(language, "updates.action.install"),
+            true,
+        ),
+        UpdateUiState::Error => (
+            barepdf_i18n::t(language, "updates.status.error").to_string(),
+            "",
+            false,
+        ),
+        UpdateUiState::Available => {
+            let Some(update) = app.available_update.as_ref() else {
+                return;
+            };
+            let note = update
+                .release_notes
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(160)
+                .collect::<String>();
+            let status = if note.is_empty() {
+                format!(
+                    "{} v{}",
+                    barepdf_i18n::t(language, "updates.status.available"),
+                    update.version
+                )
+            } else {
+                format!(
+                    "{} v{} — {}",
+                    barepdf_i18n::t(language, "updates.status.available"),
+                    update.version,
+                    note
+                )
+            };
+            (
+                status,
+                barepdf_i18n::t(
+                    language,
+                    if is_installed_build() {
+                        "updates.action.download"
+                    } else {
+                        "updates.action.release"
+                    },
+                ),
+                !is_installed_build() || update::signer_is_configured(),
+            )
+        }
+    };
+    window.set_update_status(SharedString::from(status));
+    window.set_update_action_label(SharedString::from(action));
+    window.set_update_action_enabled(enabled);
+}
+
+fn update_check_is_due(preferences: &UserPreferences, now: u64) -> bool {
+    preferences
+        .last_update_check_unix
+        .is_none_or(|last| last > now || now - last >= update::AUTO_CHECK_INTERVAL_SECONDS)
+}
+
+fn automatic_update_check_should_run(app: &AppState, now: u64) -> bool {
+    !app.update_busy
+        && app.preferences.update_checks_enabled == Some(true)
+        && update_check_is_due(&app.preferences, now)
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn install_native_file_drop(window: &AppWindow) -> Option<std::sync::mpsc::Receiver<Vec<PathBuf>>> {
@@ -2039,6 +2351,10 @@ fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) {
     set_text!(set_text_retry, "action.retry");
     set_text!(set_text_dismiss, "action.dismiss");
     set_text!(set_text_loading, "status.loading");
+    set_text!(set_text_updates, "updates");
+    set_text!(set_text_update_enabled, "updates.enabled");
+    set_text!(set_text_update_disabled, "updates.disabled");
+    set_text!(set_text_check_now, "updates.check_now");
 }
 
 fn unique_id() -> u64 {
@@ -2092,6 +2408,31 @@ mod tests {
         assert_eq!(theme_from_index(0), ThemeMode::System);
         assert_eq!(theme_from_index(1), ThemeMode::Light);
         assert_eq!(theme_from_index(2), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn automatic_update_checks_are_limited_to_once_per_day() {
+        let mut preferences = UserPreferences::default();
+        assert!(update_check_is_due(&preferences, 100_000));
+        preferences.last_update_check_unix = Some(100_000);
+        assert!(!update_check_is_due(&preferences, 100_001));
+        assert!(update_check_is_due(&preferences, 99_999));
+        assert!(update_check_is_due(
+            &preferences,
+            100_000 + update::AUTO_CHECK_INTERVAL_SECONDS
+        ));
+
+        let mut app = AppState::new(preferences);
+        app.preferences.update_checks_enabled = Some(true);
+        assert!(automatic_update_check_should_run(
+            &app,
+            100_000 + update::AUTO_CHECK_INTERVAL_SECONDS
+        ));
+        app.update_busy = true;
+        assert!(!automatic_update_check_should_run(
+            &app,
+            100_000 + update::AUTO_CHECK_INTERVAL_SECONDS
+        ));
     }
 
     #[test]

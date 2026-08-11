@@ -1,37 +1,76 @@
-# PowerShell Version Validation Script for BarePDF
+param(
+    [string]$CommitSha = "HEAD",
+    [string]$Message
+)
+
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+. (Join-Path $RepoRoot "scripts\versioning.ps1")
 
-$Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-$CargoVersion = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
-if (-not $CargoVersion) { throw "barepdf package version not found" }
+$CargoContent = [System.IO.File]::ReadAllText((Join-Path $RepoRoot "Cargo.toml"))
+$CargoVersion = Get-ProductVersionFromToml $CargoContent
+$Metadata = cargo metadata --manifest-path (Join-Path $RepoRoot "Cargo.toml") --locked --no-deps --format-version 1 | ConvertFrom-Json
+$WorkspaceIds = @($Metadata.workspace_members)
+$WorkspacePackages = @($Metadata.packages | Where-Object { $_.id -in $WorkspaceIds })
+$Mismatches = @($WorkspacePackages | Where-Object { $_.version -ne $CargoVersion })
+if ($Mismatches.Count -gt 0) {
+    $Details = ($Mismatches | ForEach-Object { "$($_.name)=$($_.version)" }) -join ", "
+    throw "Workspace packages must inherit product version $CargoVersion. Mismatches: $Details"
+}
 
-# Extract version from BarePDF.iss
 $IssPath = Join-Path $RepoRoot "packaging\windows\installer\BarePDF.iss"
-$IssContent = Get-Content $IssPath -Raw
-if ($IssContent -match '#define MyAppVersion "([^"]+)"') {
-    $IssVersion = $Matches[1]
+$IssContent = [System.IO.File]::ReadAllText($IssPath)
+if ($IssContent -match '#define\s+MyAppVersion\s+"') {
+    throw "BarePDF.iss must not hardcode MyAppVersion"
+}
+if ($IssContent -notmatch '(?m)^#ifndef\s+MyAppVersion\s*$') {
+    throw "BarePDF.iss must require MyAppVersion from build-installer.ps1"
+}
+if ($IssContent -notmatch '(?m)^VersionInfoVersion=\{#MyAppVersion\}\s*$') {
+    throw "BarePDF.iss must bind installer file metadata to MyAppVersion"
+}
+
+$ResolvedCommit = (& git -C $RepoRoot rev-parse "$CommitSha^{commit}" 2>$null)
+if ($LASTEXITCODE -ne 0) { throw "Cannot resolve commit '$CommitSha'" }
+$ResolvedCommit = $ResolvedCommit.Trim()
+$CommitCargoLines = & git -C $RepoRoot show "${ResolvedCommit}:Cargo.toml"
+if ($LASTEXITCODE -ne 0) { throw "Cannot read Cargo.toml at '$ResolvedCommit'" }
+$CommitVersion = Get-ProductVersionFromToml ($CommitCargoLines -join "`n")
+
+if ($Message) {
+    $Bump = Get-VersionBump $Message
+    $ExpectedVersion = Get-NextProductVersion -Version $CommitVersion -Bump $Bump
+    if ($CargoVersion -ne $ExpectedVersion) {
+        throw "Working tree requires product version $ExpectedVersion ($Bump), but contains $CargoVersion."
+    }
+    $ValidatedVersion = $CargoVersion
 } else {
-    Write-Error "Failed to extract version from BarePDF.iss"
+    if ($CargoVersion -ne $CommitVersion) {
+        throw "Working tree version $CargoVersion differs from $CommitSha version $CommitVersion. Pass -Message with the proposed full commit message before committing."
+    }
+    $Parent = (& git -C $RepoRoot rev-parse "$ResolvedCommit^" 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $ParentCargoLines = & git -C $RepoRoot show "${Parent}:Cargo.toml"
+        if ($LASTEXITCODE -ne 0) { throw "Cannot read Cargo.toml at parent '$Parent'" }
+        $ParentVersion = Get-ProductVersionFromToml ($ParentCargoLines -join "`n")
+        $CommitMessage = (& git -C $RepoRoot show -s --format=%B $ResolvedCommit) -join "`n"
+        $Bump = Get-VersionBump $CommitMessage
+        $ExpectedVersion = Get-NextProductVersion -Version $ParentVersion -Bump $Bump
+        if ($CommitVersion -ne $ExpectedVersion) {
+            throw "Commit $ResolvedCommit requires product version $ExpectedVersion ($Bump), but contains $CommitVersion."
+        }
+    }
+    $ValidatedVersion = $CommitVersion
+    Get-ValidatedVersionHistory -RepoRoot $RepoRoot -TargetSha $ResolvedCommit | Out-Null
 }
 
-Write-Host "Cargo Version: $CargoVersion"
-Write-Host "Inno Setup Version: $IssVersion"
-
-if ($CargoVersion -ne $IssVersion) {
-    Write-Error "Version mismatch! Cargo.toml ($CargoVersion) does not match BarePDF.iss ($IssVersion)"
-}
-
-# Validate Git tag if specified
-$GitTag = $env:GITHUB_REF_NAME
-if ($GitTag -and $GitTag -like "v*") {
-    $TagVersion = $GitTag.TrimStart("v")
-    Write-Host "Git Tag Version: $TagVersion"
-    if ($TagVersion -ne $CargoVersion) {
-        Write-Error "Version mismatch! Git tag ($TagVersion) does not match Cargo version ($CargoVersion)"
+if ($env:GITHUB_REF_TYPE -eq "tag") {
+    $ExpectedTag = "v$ValidatedVersion"
+    if ($env:GITHUB_REF_NAME -cne $ExpectedTag) {
+        throw "Git tag '$env:GITHUB_REF_NAME' must match product version '$ExpectedTag'."
     }
 }
 
-Write-Host "Version validation PASSED successfully!" -ForegroundColor Green
+Write-Host "Product version validation passed: $ValidatedVersion" -ForegroundColor Green

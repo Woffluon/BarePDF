@@ -24,11 +24,38 @@ $InstallerName = [System.IO.Path]::GetFileName($InstallerPath)
 $PortableHash = (Get-FileHash -LiteralPath $PortablePath -Algorithm SHA256).Hash.ToLower()
 $PortableName = [System.IO.Path]::GetFileName($PortablePath)
 $ChecksumLines = @("$InstallerHash  $InstallerName", "$PortableHash  $PortableName")
-Copy-Item $InstallerPath -Destination $ArtifactsDir
-Copy-Item $PortablePath -Destination $ArtifactsDir
+Copy-Item $InstallerPath -Destination $ArtifactsDir -Force
+Copy-Item $PortablePath -Destination $ArtifactsDir -Force
+Copy-Item $InstallerPath -Destination (Join-Path $ArtifactsDir "BarePDF-Setup-x64.exe") -Force
+Copy-Item $PortablePath -Destination (Join-Path $ArtifactsDir "BarePDF-Portable-x64.zip") -Force
 
 $ChecksumFile = Join-Path $ArtifactsDir "BarePDF-v$Version-SHA256SUMS.txt"
 $ChecksumLines | Set-Content -Path $ChecksumFile
+$StableChecksumFile = Join-Path $ArtifactsDir "BarePDF-SHA256SUMS.txt"
+@(
+    "$InstallerHash  BarePDF-Setup-x64.exe",
+    "$PortableHash  BarePDF-Portable-x64.zip"
+) | Set-Content -Path $StableChecksumFile
+
+$Repository = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { "Woffluon/BarePDF" }
+$InstallerSize = (Get-Item -LiteralPath $InstallerPath).Length
+$ReleaseNotes = ((& git -C $RepoRoot log -1 --format=%B) -join "`n").Trim()
+if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) { $ReleaseNotes = "BarePDF v$Version" }
+$Manifest = [ordered]@{
+    schemaVersion = 1
+    version = $Version
+    publishedAt = [DateTimeOffset]::UtcNow.ToString("o")
+    releaseUrl = "https://github.com/$Repository/releases/tag/v$Version"
+    releaseNotes = $ReleaseNotes
+    installer = [ordered]@{
+        url = "https://github.com/$Repository/releases/download/v$Version/$InstallerName"
+        sha256 = $InstallerHash
+        size = $InstallerSize
+    }
+}
+$ManifestJson = $Manifest | ConvertTo-Json -Depth 3
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText((Join-Path $ArtifactsDir "latest.json"), "$ManifestJson`n", $Utf8NoBom)
 
 Write-Host "Generated SHA-256 Checksums:" -ForegroundColor Cyan
 Get-Content $ChecksumFile

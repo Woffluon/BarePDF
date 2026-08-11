@@ -10,6 +10,7 @@ const release = await getLatestRelease();
 const installerAsset = release.assets.find((a) => a.type === 'installer');
 const portableAsset = release.assets.find((a) => a.type === 'portable');
 const checksumAsset = release.assets.find((a) => a.type === 'checksum');
+const hasReleaseMetadata = release.state === 'published';
 ---
 
 <BaseLayout
@@ -19,7 +20,9 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum');
 >
   <section class="download-page-header">
     <div class="container header-container">
-      <span class="badge badge-success">Latest Release {release.tag}</span>
+      <span class="badge badge-success">
+        {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+      </span>
       <h1 class="page-title">Download BarePDF</h1>
       <p class="page-subtitle">
         Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private.
@@ -29,7 +32,7 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum');
 
   <section class="download-options-section">
     <div class="container">
-      <div class="cards-grid">
+      {hasReleaseMetadata ? <div class="cards-grid">
         {installerAsset && (
           <DownloadCard
             asset={installerAsset}
@@ -59,14 +62,22 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum');
             iconType="checksum"
           />
         )}
-      </div>
+      </div> : <div class="release-metadata-notice">
+        <h3 class="guide-title">Release Metadata Unavailable</h3>
+        <p class="guide-desc">
+          This site build could not verify current release assets. Use GitHub Releases to view published downloads.
+        </p>
+        <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+          View Latest Release on GitHub ↗
+        </a>
+      </div>}
 
       {checksumAsset && <div class="verification-guide-box">
         <h3 class="guide-title">How to Verify Download Hashes</h3>
         <p class="guide-desc">
           You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
         </p>
-        <pre><code>Get-FileHash -Algorithm SHA256 .\BarePDF-Setup-x64-{release.tag}.exe</code></pre>
+        <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64.exe'}</code></pre>
         <p class="guide-note">
           Compare the output hash against the SHA256SUMS manifest file listed above.
         </p>
@@ -125,6 +136,14 @@ const checksumAsset = release.assets.find((a) => a.type === 'checksum');
   }
 
   .verification-guide-box {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 2rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .release-metadata-notice {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-xl);

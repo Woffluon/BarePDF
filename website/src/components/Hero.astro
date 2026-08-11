@@ -9,12 +9,15 @@ const { release } = Astro.props;
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 const installerAsset = release.assets.find((a) => a.type === 'installer');
+const hasReleaseMetadata = release.state === 'published';
 ---
 
 <section class="hero-section">
   <div class="container hero-container">
     <div class="hero-badge">
-      <span class="badge badge-success">Latest Release {release.tag}</span>
+      <span class="badge badge-success">
+        {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+      </span>
       <span class="hero-tagline">Windows 10 / 11 64-bit</span>
     </div>
 
@@ -37,8 +40,8 @@ const installerAsset = release.assets.find((a) => a.type === 'installer');
           <span>Download Setup Installer ({release.tag})</span>
         </a>
       ) : (
-        <a href={`${baseUrl}/download`} class="btn btn-primary btn-hero">
-          <span>Download BarePDF</span>
+        <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-hero">
+          <span>View Latest Release on GitHub</span>
         </a>
       )}
 
