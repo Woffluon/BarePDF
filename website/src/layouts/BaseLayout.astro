@@ -37,6 +37,19 @@ const resolvedOgImage = ogImage || `${baseUrl}/images/app-interface.png`;
     <link rel="alternate icon" href={`${baseUrl}/favicon.ico`} />
     <link rel="manifest" href={`${baseUrl}/site.webmanifest`} />
     <meta name="theme-color" content="#f69423" />
+    <script is:inline>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem('barepdf-theme');
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const theme = savedTheme === 'dark' || (!savedTheme && prefersDark) ? 'dark' : 'light';
+          document.documentElement.dataset.theme = theme;
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#18181b' : '#f69423');
+        } catch {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />

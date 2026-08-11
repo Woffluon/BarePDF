@@ -1,2 +1,112 @@
----
----
+<div class="theme-switcher" data-theme-switcher>
+  <span class="theme-label" data-i18n data-en="Theme" data-tr="Tema">Theme</span>
+  <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">
+    <span data-theme-value>Light</span>
+  </button>
+</div>
+
+<style>
+  .theme-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .theme-label {
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .theme-toggle {
+    min-width: 3.7rem;
+    height: 2.1rem;
+    padding: 0 0.65rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-subtle);
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+  }
+
+  .theme-toggle:hover {
+    border-color: var(--color-accent-border);
+    color: var(--color-accent-hover);
+  }
+
+  .theme-toggle:active {
+    transform: scale(0.96);
+  }
+
+  @media (max-width: 768px) {
+    .theme-label {
+      display: none;
+    }
+  }
+</style>
+
+<script is:inline>
+  (() => {
+    const storageKey = 'barepdf-theme';
+    const root = document.documentElement;
+    const toggle = document.querySelector('[data-theme-toggle]');
+    const value = toggle?.querySelector('[data-theme-value]');
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    if (!toggle || !value) return;
+
+    function savedTheme() {
+      try {
+        return localStorage.getItem(storageKey);
+      } catch {
+        return null;
+      }
+    }
+
+    function updateControl(theme) {
+      const isDark = theme === 'dark';
+      value.textContent = isDark ? 'Dark' : 'Light';
+      toggle.setAttribute('aria-pressed', String(isDark));
+      toggle.setAttribute('aria-label', isDark ? 'Switch to light theme' : 'Switch to dark theme');
+      themeColor?.setAttribute('content', isDark ? '#18181b' : '#f69423');
+    }
+
+    function applyTheme(theme, persist) {
+      root.dataset.theme = theme;
+      updateControl(theme);
+      if (!persist) return;
+      try {
+        localStorage.setItem(storageKey, theme);
+      } catch {
+        // Theme still works when storage is unavailable.
+      }
+    }
+
+    function init() {
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      updateControl(root.dataset.theme === 'dark' ? 'dark' : 'light');
+      toggle.addEventListener('click', () => {
+        applyTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true);
+      });
+      media.addEventListener('change', (event) => {
+        if (!savedTheme()) applyTheme(event.matches ? 'dark' : 'light', false);
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init, { once: true });
+    } else {
+      init();
+    }
+  })();
+</script>
