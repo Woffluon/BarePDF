@@ -112,6 +112,17 @@ impl SelectionEngine {
     /// Formats selected text across pages into clipboard string in page order.
     #[must_use]
     pub fn get_selected_text(selection: &TextSelection, geometries: &[PageTextGeometry]) -> String {
+        let mut ordered_geometries: Vec<_> = geometries.iter().collect();
+        ordered_geometries.sort_unstable_by_key(|geom| geom.page_index);
+        Self::get_selected_text_in_page_order(selection, &ordered_geometries)
+    }
+
+    /// Formats selected text from page-ordered borrowed geometries without cloning them.
+    #[must_use]
+    pub fn get_selected_text_in_page_order(
+        selection: &TextSelection,
+        geometries: &[&PageTextGeometry],
+    ) -> String {
         if selection.is_empty() {
             return String::new();
         }
@@ -119,10 +130,7 @@ impl SelectionEngine {
         let mut result = String::new();
         let (start_pos, end_pos) = selection.start_and_end();
 
-        let mut ordered_geometries: Vec<_> = geometries.iter().collect();
-        ordered_geometries.sort_unstable_by_key(|geom| geom.page_index);
-
-        for geom in ordered_geometries {
+        for geom in geometries {
             if geom.page_index < start_pos.page || geom.page_index > end_pos.page {
                 continue;
             }

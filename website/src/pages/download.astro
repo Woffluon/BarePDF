@@ -93,6 +93,12 @@ const hasReleaseMetadata = release.state === 'published';
         </a>
       </div>
 
+      <div class="slint-attribution">
+        <a href="https://slint.dev/" target="_blank" rel="noopener noreferrer" aria-label="Made with Slint">
+          <img src={`${baseUrl}/made-with-slint.svg`} alt="Made with Slint" width="212" height="97" />
+        </a>
+      </div>
+
       <div class="all-releases-banner">
         <div>
           <h4 class="banner-heading">Need Older Releases or Raw Assets?</h4>
@@ -163,6 +169,15 @@ const hasReleaseMetadata = release.state === 'published';
 
   .signing-policy-note {
     margin-bottom: 2.5rem;
+  }
+
+  .slint-attribution {
+    margin-bottom: 2.5rem;
+  }
+
+  .slint-attribution img {
+    display: block;
+    max-width: 100%;
   }
 
   .guide-title {

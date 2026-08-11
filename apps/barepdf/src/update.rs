@@ -28,27 +28,94 @@ const USER_AGENT: &str = concat!("BarePDF/", env!("CARGO_PKG_VERSION"));
 const UPDATE_PUBLIC_KEY_HEX: &str = include_str!("../../../assets/update-public-key.hex");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UpdateInfo {
-    pub version: String,
-    pub release_url: String,
-    pub release_notes: String,
-    pub installer_url: String,
-    pub installer_sha256: String,
-    pub installer_size: u64,
+pub(super) struct VerifiedUpdate {
+    version: String,
+    release_url: String,
+    release_notes: String,
+    installer_url: String,
+    installer_sha256: String,
+    installer_size: u64,
+}
+
+impl VerifiedUpdate {
+    fn from_manifest(manifest: UpdateManifest, installer_sha256: String) -> Self {
+        Self {
+            version: manifest.version,
+            release_url: manifest.release_url,
+            release_notes: manifest.release_notes,
+            installer_url: manifest.installer.url,
+            installer_sha256,
+            installer_size: manifest.installer.size,
+        }
+    }
+
+    pub(super) fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub(super) fn release_url(&self) -> &str {
+        &self.release_url
+    }
+
+    pub(super) fn release_notes(&self) -> &str {
+        &self.release_notes
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum UpdateError {
+    #[error("{0}")]
+    Rejected(&'static str),
+    #[error("{operation}: {source}")]
+    Transport {
+        operation: &'static str,
+        #[source]
+        source: ureq::Error,
+    },
+    #[error("{operation}: {source}")]
+    Io {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{operation}: {source}")]
+    Manifest {
+        operation: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{operation}: {source}")]
+    Version {
+        operation: &'static str,
+        #[source]
+        source: semver::Error,
+    },
+    #[error("{operation}: {source}")]
+    Platform {
+        operation: &'static str,
+        #[source]
+        source: barepdf_core::PdfError,
+    },
 }
 
 #[derive(Debug)]
-pub enum UpdateCommand {
+pub(super) enum UpdateCommand {
     Check,
-    Download(UpdateInfo),
-    Install { path: PathBuf, update: UpdateInfo },
+    Download(VerifiedUpdate),
+    Install {
+        path: PathBuf,
+        update: VerifiedUpdate,
+    },
 }
 
 #[derive(Debug)]
-pub enum UpdateEvent {
+pub(super) enum UpdateEvent {
     UpToDate,
-    Available(UpdateInfo),
-    Downloaded { path: PathBuf, update: UpdateInfo },
+    Available(VerifiedUpdate),
+    Downloaded {
+        path: PathBuf,
+        update: VerifiedUpdate,
+    },
     InstallerStarted,
     Error(String),
 }
@@ -71,7 +138,7 @@ struct InstallerManifest {
     size: u64,
 }
 
-pub fn start_worker() -> (Sender<UpdateCommand>, Receiver<UpdateEvent>) {
+pub(super) fn start_worker() -> (Sender<UpdateCommand>, Receiver<UpdateEvent>) {
     let (command_sender, command_receiver) = mpsc::channel();
     let (event_sender, event_receiver) = mpsc::channel();
     std::thread::spawn(move || run_worker(command_receiver, &event_sender));
@@ -95,18 +162,21 @@ fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
             UpdateCommand::Check => match check_for_update(&agent) {
                 Ok(Some(update)) => UpdateEvent::Available(update),
                 Ok(None) => UpdateEvent::UpToDate,
-                Err(error) => UpdateEvent::Error(error),
+                Err(error) => UpdateEvent::Error(error.to_string()),
             },
             UpdateCommand::Download(update) => match download_update(&agent, &update) {
                 Ok(path) => UpdateEvent::Downloaded { path, update },
-                Err(error) => UpdateEvent::Error(error),
+                Err(error) => UpdateEvent::Error(error.to_string()),
             },
             UpdateCommand::Install { path, update } => {
-                match verify_download(&path, &update)
-                    .and_then(|()| launch_installer(&path).map_err(|error| error.to_string()))
-                {
+                match verify_download(&path, &update).and_then(|()| {
+                    launch_installer(&path).map_err(|source| UpdateError::Platform {
+                        operation: "Could not launch verified update",
+                        source,
+                    })
+                }) {
                     Ok(()) => UpdateEvent::InstallerStarted,
-                    Err(error) => UpdateEvent::Error(error),
+                    Err(error) => UpdateEvent::Error(error.to_string()),
                 }
             }
         };
@@ -116,7 +186,7 @@ fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
     }
 }
 
-fn check_for_update(agent: &Agent) -> Result<Option<UpdateInfo>, String> {
+fn check_for_update(agent: &Agent) -> Result<Option<VerifiedUpdate>, UpdateError> {
     let mut response = get_with_redirects(
         agent,
         METADATA_URL,
@@ -128,7 +198,10 @@ fn check_for_update(agent: &Agent) -> Result<Option<UpdateInfo>, String> {
         .with_config()
         .limit(MAX_METADATA_BYTES)
         .read_to_vec()
-        .map_err(|error| format!("Update metadata could not be read: {error}"))?;
+        .map_err(|source| UpdateError::Transport {
+            operation: "Update metadata could not be read",
+            source,
+        })?;
     let mut signature_response = get_with_redirects(
         agent,
         METADATA_SIGNATURE_URL,
@@ -140,14 +213,17 @@ fn check_for_update(agent: &Agent) -> Result<Option<UpdateInfo>, String> {
         .with_config()
         .limit(MAX_SIGNATURE_BYTES + 1)
         .read_to_vec()
-        .map_err(|error| format!("Update signature could not be read: {error}"))?;
+        .map_err(|source| UpdateError::Transport {
+            operation: "Update signature could not be read",
+            source,
+        })?;
     verify_manifest_signature(&manifest, &signature)?;
     let json = std::str::from_utf8(&manifest)
-        .map_err(|_| "Update metadata is not valid UTF-8".to_string())?;
+        .map_err(|_| UpdateError::Rejected("Update metadata is not valid UTF-8"))?;
     parse_manifest(json, CURRENT_VERSION)
 }
 
-fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
+fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), UpdateError> {
     verify_manifest_signature_with_key(manifest, signature, UPDATE_PUBLIC_KEY_HEX)
 }
 
@@ -155,21 +231,21 @@ fn verify_manifest_signature_with_key(
     manifest: &[u8],
     signature: &[u8],
     public_key: &str,
-) -> Result<(), String> {
+) -> Result<(), UpdateError> {
     let public_key = decode_public_key(public_key)?;
     let verifying_key = VerifyingKey::from_bytes(&public_key)
-        .map_err(|_| "Update verification key is invalid".to_string())?;
+        .map_err(|_| UpdateError::Rejected("Update verification key is invalid"))?;
     let signature = Signature::from_slice(signature)
-        .map_err(|_| "Update metadata signature is invalid".to_string())?;
+        .map_err(|_| UpdateError::Rejected("Update metadata signature is invalid"))?;
     verifying_key
         .verify_strict(manifest, &signature)
-        .map_err(|_| "Update metadata signature verification failed".to_string())
+        .map_err(|_| UpdateError::Rejected("Update metadata signature verification failed"))
 }
 
-fn decode_public_key(value: &str) -> Result<[u8; 32], String> {
+fn decode_public_key(value: &str) -> Result<[u8; 32], UpdateError> {
     let value = value.trim().as_bytes();
     if value.len() != 64 {
-        return Err("Update verification key is invalid".into());
+        return Err(UpdateError::Rejected("Update verification key is invalid"));
     }
     let mut key = [0_u8; 32];
     for (index, byte) in key.iter_mut().enumerate() {
@@ -180,28 +256,40 @@ fn decode_public_key(value: &str) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-fn decode_hex(value: u8) -> Result<u8, String> {
+fn decode_hex(value: u8) -> Result<u8, UpdateError> {
     match value {
         b'0'..=b'9' => Ok(value - b'0'),
         b'a'..=b'f' => Ok(value - b'a' + 10),
         b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err("Update verification key is invalid".into()),
+        _ => Err(UpdateError::Rejected("Update verification key is invalid")),
     }
 }
 
-fn parse_manifest(json: &str, current_version: &str) -> Result<Option<UpdateInfo>, String> {
+fn parse_manifest(
+    json: &str,
+    current_version: &str,
+) -> Result<Option<VerifiedUpdate>, UpdateError> {
     let manifest: UpdateManifest =
-        serde_json::from_str(json).map_err(|error| format!("Invalid update metadata: {error}"))?;
+        serde_json::from_str(json).map_err(|source| UpdateError::Manifest {
+            operation: "Invalid update metadata",
+            source,
+        })?;
     if manifest.schema_version != 1 {
-        return Err("Unsupported update metadata version".into());
+        return Err(UpdateError::Rejected("Unsupported update metadata version"));
     }
 
-    let current = Version::parse(current_version)
-        .map_err(|error| format!("Invalid application version: {error}"))?;
-    let available = Version::parse(&manifest.version)
-        .map_err(|error| format!("Invalid release version: {error}"))?;
+    let current = Version::parse(current_version).map_err(|source| UpdateError::Version {
+        operation: "Invalid application version",
+        source,
+    })?;
+    let available = Version::parse(&manifest.version).map_err(|source| UpdateError::Version {
+        operation: "Invalid release version",
+        source,
+    })?;
     if !available.pre.is_empty() || !available.build.is_empty() {
-        return Err("Preview releases are not accepted on the stable channel".into());
+        return Err(UpdateError::Rejected(
+            "Preview releases are not accepted on the stable channel",
+        ));
     }
     expected_file_version(&available)?;
     if available <= current {
@@ -212,42 +300,41 @@ fn parse_manifest(json: &str, current_version: &str) -> Result<Option<UpdateInfo
     validate_installer_url(&manifest.installer.url, &manifest.version)?;
     let hash = manifest.installer.sha256.to_ascii_lowercase();
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Invalid installer SHA-256".into());
+        return Err(UpdateError::Rejected("Invalid installer SHA-256"));
     }
     if manifest.installer.size == 0 || manifest.installer.size > MAX_INSTALLER_BYTES {
-        return Err("Installer size is outside the allowed range".into());
+        return Err(UpdateError::Rejected(
+            "Installer size is outside the allowed range",
+        ));
     }
 
-    Ok(Some(UpdateInfo {
-        version: manifest.version,
-        release_url: manifest.release_url,
-        release_notes: manifest.release_notes,
-        installer_url: manifest.installer.url,
-        installer_sha256: hash,
-        installer_size: manifest.installer.size,
-    }))
+    Ok(Some(VerifiedUpdate::from_manifest(manifest, hash)))
 }
 
-fn validate_release_url(url: &str, version: &str) -> Result<(), String> {
+fn validate_release_url(url: &str, version: &str) -> Result<(), UpdateError> {
     let expected = format!("/Woffluon/BarePDF/releases/tag/v{version}");
     validate_github_url(url, &expected)
 }
 
-fn validate_installer_url(url: &str, version: &str) -> Result<(), String> {
+fn validate_installer_url(url: &str, version: &str) -> Result<(), UpdateError> {
     let expected =
         format!("/Woffluon/BarePDF/releases/download/v{version}/BarePDF-Setup-x64-v{version}.exe");
     validate_github_url(url, &expected)
 }
 
-fn validate_github_url(url: &str, expected_path: &str) -> Result<(), String> {
-    let uri: ureq::http::Uri = url.parse().map_err(|_| "Invalid HTTPS URL".to_string())?;
+fn validate_github_url(url: &str, expected_path: &str) -> Result<(), UpdateError> {
+    let uri: ureq::http::Uri = url
+        .parse()
+        .map_err(|_| UpdateError::Rejected("Invalid HTTPS URL"))?;
     if uri.scheme_str() != Some("https")
         || uri.host() != Some("github.com")
         || uri.port_u16().is_some()
         || uri.query().is_some()
         || uri.path() != expected_path
     {
-        return Err("Update URL is not an approved BarePDF release URL".into());
+        return Err(UpdateError::Rejected(
+            "Update URL is not an approved BarePDF release URL",
+        ));
     }
     Ok(())
 }
@@ -263,7 +350,7 @@ fn get_with_redirects(
     initial_url: &str,
     target: RequestTarget<'_>,
     timeout: Duration,
-) -> Result<ureq::http::Response<ureq::Body>, String> {
+) -> Result<ureq::http::Response<ureq::Body>, UpdateError> {
     let mut url = initial_url.to_string();
     let started = Instant::now();
     for redirect_count in 0..=MAX_REDIRECTS {
@@ -271,7 +358,7 @@ fn get_with_redirects(
         let remaining = timeout
             .checked_sub(started.elapsed())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| "Update request timed out".to_string())?;
+            .ok_or(UpdateError::Rejected("Update request timed out"))?;
         let response = agent
             .get(uri)
             .header("User-Agent", USER_AGENT)
@@ -279,22 +366,29 @@ fn get_with_redirects(
             .timeout_global(Some(remaining))
             .build()
             .call()
-            .map_err(|error| format!("Update request failed: {error}"))?;
+            .map_err(|source| UpdateError::Transport {
+                operation: "Update request failed",
+                source,
+            })?;
         if !response.status().is_redirection() {
             return Ok(response);
         }
         if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-            return Err("Update request returned an unsupported redirect".into());
+            return Err(UpdateError::Rejected(
+                "Update request returned an unsupported redirect",
+            ));
         }
         if redirect_count == MAX_REDIRECTS {
-            return Err("Update request exceeded the redirect limit".into());
+            return Err(UpdateError::Rejected(
+                "Update request exceeded the redirect limit",
+            ));
         }
         let location = response
             .headers()
             .get(ureq::http::header::LOCATION)
-            .ok_or_else(|| "Update redirect is missing Location".to_string())?
+            .ok_or(UpdateError::Rejected("Update redirect is missing Location"))?
             .to_str()
-            .map_err(|_| "Update redirect Location is invalid".to_string())?;
+            .map_err(|_| UpdateError::Rejected("Update redirect Location is invalid"))?;
         validate_request_url(location, target)?;
         url.clear();
         url.push_str(location);
@@ -302,12 +396,17 @@ fn get_with_redirects(
     unreachable!("bounded redirect loop always returns")
 }
 
-fn validate_request_url(url: &str, target: RequestTarget<'_>) -> Result<ureq::http::Uri, String> {
+fn validate_request_url(
+    url: &str,
+    target: RequestTarget<'_>,
+) -> Result<ureq::http::Uri, UpdateError> {
     let uri: ureq::http::Uri = url
         .parse()
-        .map_err(|_| "Update URL is invalid".to_string())?;
+        .map_err(|_| UpdateError::Rejected("Update URL is invalid"))?;
     if uri.scheme_str() != Some("https") || uri.port_u16().is_some() {
-        return Err("Update request requires an approved HTTPS URL".into());
+        return Err(UpdateError::Rejected(
+            "Update request requires an approved HTTPS URL",
+        ));
     }
     let approved = match uri.host() {
         Some("github.com") if uri.query().is_none() => match target {
@@ -322,7 +421,7 @@ fn validate_request_url(url: &str, target: RequestTarget<'_>) -> Result<ureq::ht
     if approved {
         Ok(uri)
     } else {
-        Err("Update request URL is not approved".into())
+        Err(UpdateError::Rejected("Update request URL is not approved"))
     }
 }
 
@@ -344,26 +443,32 @@ fn metadata_path_is_approved(path: &str) -> bool {
         && Version::parse(version).is_ok_and(|version| version.pre.is_empty())
 }
 
-fn download_update(agent: &Agent, update: &UpdateInfo) -> Result<PathBuf, String> {
+fn download_update(agent: &Agent, update: &VerifiedUpdate) -> Result<PathBuf, UpdateError> {
     validate_installer_url(&update.installer_url, &update.version)?;
     let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?;
+        .ok_or(UpdateError::Rejected("LOCALAPPDATA is unavailable"))?;
     let directory = PathBuf::from(local_app_data)
         .join("BarePDF")
         .join("Updates");
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("Could not create update directory: {error}"))?;
+    fs::create_dir_all(&directory).map_err(|source| UpdateError::Io {
+        operation: "Could not create update directory",
+        source,
+    })?;
     let final_path = directory.join(format!("BarePDF-Setup-x64-v{}.exe", update.version));
     let (partial_path, partial_file) = create_unique_partial(&directory, &update.version)?;
 
     let result = download_to_partial(agent, update, partial_file).and_then(|()| {
         verify_download(&partial_path, update)?;
         if final_path.is_file() {
-            fs::remove_file(&final_path)
-                .map_err(|error| format!("Could not replace previous update: {error}"))?;
+            fs::remove_file(&final_path).map_err(|source| UpdateError::Io {
+                operation: "Could not replace previous update",
+                source,
+            })?;
         }
-        fs::rename(&partial_path, &final_path)
-            .map_err(|error| format!("Could not finalize update: {error}"))?;
+        fs::rename(&partial_path, &final_path).map_err(|source| UpdateError::Io {
+            operation: "Could not finalize update",
+            source,
+        })?;
         Ok(final_path.clone())
     });
     if result.is_err() {
@@ -372,10 +477,10 @@ fn download_update(agent: &Agent, update: &UpdateInfo) -> Result<PathBuf, String
     result
 }
 
-fn create_unique_partial(directory: &Path, version: &str) -> Result<(PathBuf, File), String> {
+fn create_unique_partial(directory: &Path, version: &str) -> Result<(PathBuf, File), UpdateError> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| "System clock is before the Unix epoch".to_string())?
+        .map_err(|_| UpdateError::Rejected("System clock is before the Unix epoch"))?
         .as_nanos();
     for attempt in 0..16_u8 {
         let path = directory.join(format!(
@@ -385,13 +490,24 @@ fn create_unique_partial(directory: &Path, version: &str) -> Result<(PathBuf, Fi
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(format!("Could not create update file: {error}")),
+            Err(source) => {
+                return Err(UpdateError::Io {
+                    operation: "Could not create update file",
+                    source,
+                });
+            }
         }
     }
-    Err("Could not allocate a unique update file".into())
+    Err(UpdateError::Rejected(
+        "Could not allocate a unique update file",
+    ))
 }
 
-fn download_to_partial(agent: &Agent, update: &UpdateInfo, mut file: File) -> Result<(), String> {
+fn download_to_partial(
+    agent: &Agent,
+    update: &VerifiedUpdate,
+    mut file: File,
+) -> Result<(), UpdateError> {
     let mut response = get_with_redirects(
         agent,
         &update.installer_url,
@@ -407,70 +523,102 @@ fn download_to_partial(agent: &Agent, update: &UpdateInfo, mut file: File) -> Re
     let mut downloaded = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|error| format!("Could not download update: {error}"))?;
+        let read = reader.read(&mut buffer).map_err(|source| UpdateError::Io {
+            operation: "Could not download update",
+            source,
+        })?;
         if read == 0 {
             break;
         }
         downloaded = downloaded
             .checked_add(read as u64)
-            .ok_or_else(|| "Installer size overflow".to_string())?;
+            .ok_or(UpdateError::Rejected("Installer size overflow"))?;
         if downloaded > update.installer_size {
-            return Err("Downloaded installer exceeds the declared size".into());
+            return Err(UpdateError::Rejected(
+                "Downloaded installer exceeds the declared size",
+            ));
         }
         hasher.update(&buffer[..read]);
         file.write_all(&buffer[..read])
-            .map_err(|error| format!("Could not write update file: {error}"))?;
+            .map_err(|source| UpdateError::Io {
+                operation: "Could not write update file",
+                source,
+            })?;
     }
-    file.sync_all()
-        .map_err(|error| format!("Could not flush update file: {error}"))?;
+    file.sync_all().map_err(|source| UpdateError::Io {
+        operation: "Could not flush update file",
+        source,
+    })?;
     if downloaded != update.installer_size {
-        return Err("Downloaded installer size does not match metadata".into());
+        return Err(UpdateError::Rejected(
+            "Downloaded installer size does not match metadata",
+        ));
     }
     let actual = format!("{:x}", hasher.finalize());
     if actual != update.installer_sha256 {
-        return Err("Downloaded installer SHA-256 does not match metadata".into());
+        return Err(UpdateError::Rejected(
+            "Downloaded installer SHA-256 does not match metadata",
+        ));
     }
     Ok(())
 }
 
-fn verify_download(path: &Path, update: &UpdateInfo) -> Result<(), String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("Could not inspect downloaded update: {error}"))?;
+fn verify_download(path: &Path, update: &VerifiedUpdate) -> Result<(), UpdateError> {
+    let metadata = fs::metadata(path).map_err(|source| UpdateError::Io {
+        operation: "Could not inspect downloaded update",
+        source,
+    })?;
     if metadata.len() != update.installer_size {
-        return Err("Downloaded installer size changed after verification".into());
+        return Err(UpdateError::Rejected(
+            "Downloaded installer size changed after verification",
+        ));
     }
-    let mut file =
-        File::open(path).map_err(|error| format!("Could not reopen downloaded update: {error}"))?;
+    let mut file = File::open(path).map_err(|source| UpdateError::Io {
+        operation: "Could not reopen downloaded update",
+        source,
+    })?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|error| format!("Could not rehash downloaded update: {error}"))?;
+    std::io::copy(&mut file, &mut hasher).map_err(|source| UpdateError::Io {
+        operation: "Could not rehash downloaded update",
+        source,
+    })?;
     let actual = format!("{:x}", hasher.finalize());
     if actual != update.installer_sha256 {
-        return Err("Downloaded installer changed after verification".into());
+        return Err(UpdateError::Rejected(
+            "Downloaded installer changed after verification",
+        ));
     }
-    let actual_version = executable_file_version(path).map_err(|error| error.to_string())?;
+    let actual_version = executable_file_version(path).map_err(|source| UpdateError::Platform {
+        operation: "Could not read downloaded update version",
+        source,
+    })?;
     let expected_version = Version::parse(&update.version)
-        .map_err(|error| format!("Invalid release version: {error}"))
+        .map_err(|source| UpdateError::Version {
+            operation: "Invalid release version",
+            source,
+        })
         .and_then(|version| expected_file_version(&version))?;
     if actual_version != expected_version {
-        return Err("Downloaded installer version does not match update metadata".into());
+        return Err(UpdateError::Rejected(
+            "Downloaded installer version does not match update metadata",
+        ));
     }
     Ok(())
 }
 
-fn expected_file_version(version: &Version) -> Result<[u16; 4], String> {
+fn expected_file_version(version: &Version) -> Result<[u16; 4], UpdateError> {
     if !version.pre.is_empty() || !version.build.is_empty() {
-        return Err("Windows installer version must be a stable semantic version".into());
+        return Err(UpdateError::Rejected(
+            "Windows installer version must be a stable semantic version",
+        ));
     }
     Ok([
         u16::try_from(version.major)
-            .map_err(|_| "Release major version exceeds Windows limits".to_string())?,
+            .map_err(|_| UpdateError::Rejected("Release major version exceeds Windows limits"))?,
         u16::try_from(version.minor)
-            .map_err(|_| "Release minor version exceeds Windows limits".to_string())?,
+            .map_err(|_| UpdateError::Rejected("Release minor version exceeds Windows limits"))?,
         u16::try_from(version.patch)
-            .map_err(|_| "Release patch version exceeds Windows limits".to_string())?,
+            .map_err(|_| UpdateError::Rejected("Release patch version exceeds Windows limits"))?,
         0,
     ])
 }
@@ -502,7 +650,11 @@ mod tests {
         let parsed = parse_manifest(&manifest("1.2.0", "1.2.0", &hash, 1024), "1.1.0")
             .expect("valid manifest")
             .expect("new update");
-        assert_eq!(parsed.version, "1.2.0");
+        assert_eq!(parsed.version(), "1.2.0");
+        assert_eq!(
+            parsed.release_url(),
+            "https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0"
+        );
 
         assert!(
             parse_manifest(&manifest("1.1.0", "1.1.0", &hash, 1024), "1.1.0")
@@ -514,6 +666,16 @@ mod tests {
             "1.1.0"
         )
         .is_err());
+    }
+
+    #[test]
+    fn updater_errors_preserve_their_source() {
+        let error = UpdateError::Io {
+            operation: "Could not write update file",
+            source: std::io::Error::other("disk full"),
+        };
+
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

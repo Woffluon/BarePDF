@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 use barepdf_core::PdfError;
-use barepdf_platform::{ClipboardAccess, FileDialogs, PrinterAccess};
+use barepdf_platform::{ClipboardAccess, FileDialogs};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -219,6 +219,14 @@ unsafe extern "system" fn drop_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if message == WM_NCDESTROY {
+        let previous_window_proc = take_previous_window_proc(hwnd);
+        // SAFETY: The previous procedure belongs to this live WM_NCDESTROY dispatch.
+        return unsafe {
+            forward_previous_or_default(previous_window_proc, hwnd, message, wparam, lparam)
+        };
+    }
+
     if message == WM_DROPFILES {
         let _ = std::panic::catch_unwind(|| handle_drop_message(hwnd, message, wparam));
         return 0;
@@ -230,13 +238,6 @@ unsafe extern "system" fn drop_window_proc(
 }
 
 fn handle_drop_message(hwnd: HWND, message: u32, wparam: WPARAM) -> Result<(), ()> {
-    if message == WM_NCDESTROY {
-        if let Some(targets) = DROP_TARGETS.get() {
-            let mut targets = targets.lock().map_err(|_| ())?;
-            targets.remove(&(hwnd as usize));
-        }
-        return Err(());
-    }
     if message != WM_DROPFILES {
         return Err(());
     }
@@ -285,9 +286,31 @@ unsafe fn forward_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
                 .get(&(hwnd as usize))
                 .map(|target| target.previous_window_proc)
         });
+    // SAFETY: The stored procedure remains valid while its HWND registry entry is present.
+    unsafe { forward_previous_or_default(previous_window_proc, hwnd, message, wparam, lparam) }
+}
+
+fn take_previous_window_proc(hwnd: HWND) -> Option<isize> {
+    DROP_TARGETS
+        .get()
+        .and_then(|targets| targets.lock().ok())
+        .and_then(|mut targets| {
+            targets
+                .remove(&(hwnd as usize))
+                .map(|target| target.previous_window_proc)
+        })
+}
+
+unsafe fn forward_previous_or_default(
+    previous_window_proc: Option<isize>,
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match previous_window_proc {
         Some(previous) => {
-            // SAFETY: The procedure is retained only while its HWND registry entry is alive.
+            // SAFETY: Caller supplies a procedure captured from the exact HWND being forwarded.
             let previous: WNDPROC = unsafe { std::mem::transmute(previous) };
             unsafe { CallWindowProcW(previous, hwnd, message, wparam, lparam) }
         }
@@ -347,41 +370,14 @@ impl ClipboardAccess for WindowsClipboard {
     }
 }
 
-pub struct WindowsPrinter;
-
-impl PrinterAccess for WindowsPrinter {
-    fn print_file(&self, path: &Path) -> Result<(), PdfError> {
-        let path = wide_null(path.as_os_str());
-        let verb = wide_null(OsStr::new("print"));
-        // SAFETY: Both strings are NUL-terminated and remain alive for the call.
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                path.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        if (result as usize) <= 32 {
-            return Err(PdfError::PrintingFailed(format!(
-                "ShellExecuteW failed with code {}",
-                result as usize
-            )));
-        }
-
-        Ok(())
-    }
-}
-
 fn wide_null(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fixed_file_version;
+    use super::{fixed_file_version, take_previous_window_proc, DropTarget, DROP_TARGETS};
+    use std::sync::mpsc;
 
     #[test]
     fn fixed_windows_version_words_are_decoded_in_order() {
@@ -389,5 +385,22 @@ mod tests {
             fixed_file_version(0x000C_0022, 0x0038_0000),
             [12, 34, 56, 0]
         );
+    }
+
+    #[test]
+    fn taking_previous_window_proc_removes_its_registry_entry() {
+        const TEST_HWND: usize = usize::MAX;
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let targets = DROP_TARGETS.get_or_init(Default::default);
+        targets.lock().unwrap().insert(
+            TEST_HWND,
+            DropTarget {
+                sender,
+                previous_window_proc: 123,
+            },
+        );
+
+        assert_eq!(take_previous_window_proc(TEST_HWND as _), Some(123));
+        assert_eq!(take_previous_window_proc(TEST_HWND as _), None);
     }
 }

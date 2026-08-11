@@ -1,5 +1,11 @@
 # Third-party notices
 
+## Slint attribution badge
+
+`website/public/made-with-slint.svg` is the unmodified MadeWithSlint logo from
+[Slint's brand assets](https://slint.dev/brand-guidelines), licensed under
+[CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
+
 ## Microsoft Fluent UI System Icons
 
 The icons under `assets/icons/` are from Microsoft Fluent UI System Icons,

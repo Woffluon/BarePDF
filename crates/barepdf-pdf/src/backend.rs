@@ -1,11 +1,56 @@
 use barepdf_core::{PageCount, PageIndex, PageTextGeometry, PdfError, Rotation};
+use std::fmt;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawBitmap {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>, // RGBA 8-bit per channel
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>, // RGBA 8-bit per channel
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidBitmap;
+
+impl fmt::Display for InvalidBitmap {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid RGBA bitmap dimensions or pixel length")
+    }
+}
+
+impl std::error::Error for InvalidBitmap {}
+
+impl RawBitmap {
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, InvalidBitmap> {
+        let expected = usize::try_from(width)
+            .ok()
+            .and_then(|width| usize::try_from(height).ok()?.checked_mul(width))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(InvalidBitmap)?;
+
+        (width != 0 && height != 0 && pixels.len() == expected)
+            .then_some(Self {
+                width,
+                height,
+                pixels,
+            })
+            .ok_or(InvalidBitmap)
+    }
+
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    #[must_use]
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,4 +107,26 @@ pub trait PdfBackend: Send + Sync {
         bytes: Vec<u8>,
         password: Option<&str>,
     ) -> Result<Box<dyn PdfDocument>, PdfError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RawBitmap;
+
+    #[test]
+    fn raw_bitmap_constructor_rejects_invalid_rgba_layouts() {
+        assert!(RawBitmap::new(0, 1, Vec::new()).is_err());
+        assert!(RawBitmap::new(1, 0, Vec::new()).is_err());
+        assert!(RawBitmap::new(2, 2, vec![0; 15]).is_err());
+        assert!(RawBitmap::new(u32::MAX, u32::MAX, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn raw_bitmap_constructor_exposes_valid_rgba_layout() {
+        let bitmap = RawBitmap::new(2, 1, vec![0; 8]).expect("valid RGBA bitmap");
+
+        assert_eq!(bitmap.width(), 2);
+        assert_eq!(bitmap.height(), 1);
+        assert_eq!(bitmap.pixels(), &[0; 8]);
+    }
 }

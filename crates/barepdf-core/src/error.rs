@@ -1,6 +1,7 @@
+use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[derive(Error, Debug)]
 pub enum PdfError {
     #[error("File not found: {0}")]
     FileNotFound(String),
@@ -8,8 +9,26 @@ pub enum PdfError {
     #[error("Access denied: {0}")]
     AccessDenied(String),
 
+    #[error("Invalid or malformed PDF: {source}")]
+    InvalidPdf {
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
+
     #[error("Invalid or malformed PDF: {0}")]
-    InvalidPdf(String),
+    InvalidPdfReason(String),
+
+    #[error("PDF file access failed: {source}")]
+    FileAccess {
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
+
+    #[error("PDF backend failed: {source}")]
+    Backend {
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
 
     #[error("Corrupted document header or structure: {0}")]
     CorruptedPdf(String),
@@ -20,8 +39,11 @@ pub enum PdfError {
     #[error("Incorrect password specified")]
     IncorrectPassword,
 
-    #[error("Unsupported security or encryption algorithm: {0}")]
-    UnsupportedEncryption(String),
+    #[error("Unsupported security or encryption algorithm: {source}")]
+    UnsupportedEncryption {
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
 
     #[error("Failed to render page {page_index}: {reason}")]
     RenderingFailed { page_index: u32, reason: String },

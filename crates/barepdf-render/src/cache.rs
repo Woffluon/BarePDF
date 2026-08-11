@@ -38,7 +38,7 @@ impl BitmapCache {
     }
 
     pub fn insert(&mut self, key: CacheKey, bitmap: RawBitmap) -> Arc<RawBitmap> {
-        let bitmap_bytes = bitmap.pixels.len();
+        let bitmap_bytes = bitmap.pixels().len();
         let arc_bitmap = Arc::new(bitmap);
         if bitmap_bytes > self.budget_bytes {
             return arc_bitmap;
@@ -46,7 +46,7 @@ impl BitmapCache {
         self.evict_for(bitmap_bytes);
 
         if let Some((_, old)) = self.cache.push(key, arc_bitmap.clone()) {
-            self.current_bytes = self.current_bytes.saturating_sub(old.pixels.len());
+            self.current_bytes = self.current_bytes.saturating_sub(old.pixels().len());
         }
         self.current_bytes += bitmap_bytes;
         arc_bitmap
@@ -57,7 +57,7 @@ impl BitmapCache {
             && !self.cache.is_empty()
         {
             if let Some((_, popped)) = self.cache.pop_lru() {
-                self.current_bytes = self.current_bytes.saturating_sub(popped.pixels.len());
+                self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
             }
         }
     }

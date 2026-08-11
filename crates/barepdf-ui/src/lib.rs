@@ -1,5 +1,3 @@
-use slint::ComponentHandle;
-
 slint::slint! {
     import { LineEdit, ListView, Palette, ScrollView } from "std-widgets.slint";
 
@@ -691,26 +689,5 @@ slint::slint! {
                 }
             }
         }
-    }
-}
-
-pub struct UiApp {
-    window: AppWindow,
-}
-
-impl UiApp {
-    /// # Errors
-    ///
-    /// Returns a `slint::PlatformError` when the UI cannot be created.
-    pub fn new() -> Result<Self, slint::PlatformError> {
-        let window = AppWindow::new()?;
-        Ok(Self { window })
-    }
-
-    /// # Errors
-    ///
-    /// Returns a `slint::PlatformError` when the event loop cannot run.
-    pub fn run(&self) -> Result<(), slint::PlatformError> {
-        self.window.run()
     }
 }

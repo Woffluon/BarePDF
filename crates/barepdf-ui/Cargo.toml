@@ -9,7 +9,4 @@ repository.workspace = true
 description = "Slint desktop interface views, themes, and view-models for BarePDF"
 
 [dependencies]
-barepdf-core = { path = "../barepdf-core" }
-barepdf-render = { path = "../barepdf-render" }
-barepdf-platform = { path = "../barepdf-platform" }
 slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2"] }

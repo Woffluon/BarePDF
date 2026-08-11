@@ -9,18 +9,18 @@
     clippy::redundant_closure_for_method_calls,
     clippy::semicolon_if_nothing_returned,
     clippy::struct_excessive_bools,
-    clippy::too_many_lines,
     clippy::uninlined_format_args,
     clippy::unchecked_time_subtraction,
     unused_must_use
 )]
 
+mod state;
 mod update;
 
 use barepdf_core::{
     default_config_path, selection::SelectionEngine, ContinuousLayout, DocumentId, MemoryBudget,
-    PageIndex, PageTextGeometry, PdfError, RequestId, Rotation, TextPosition, TextSelection,
-    ThemeMode, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
+    PageIndex, PdfError, PreferencesLoadError, RequestId, TextPosition, TextSelection, ThemeMode,
+    UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
@@ -35,17 +35,14 @@ use barepdf_render::{
 use barepdf_ui::{
     AppWindow, OutlineItem, PageItem, RecentFileItem, SelectionBox, ThemeTokens, ThumbnailItem,
 };
-use lru::LruCache;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{
     ComponentHandle, Image, LogicalSize, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer,
     SharedString, Timer, TimerMode, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 use std::env;
-use std::mem::size_of;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -62,272 +59,14 @@ const MAX_DOCUMENT_PAGES: u32 = 10_000;
 const MAX_OUTLINE_DEPTH: usize = 128;
 const MAX_OUTLINE_ITEMS: usize = 4_096;
 const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
-const MAX_TEXT_GEOMETRIES: usize = 32;
 const MAX_PASSWORD_BYTES: usize = 1_024;
 const UPDATE_DUE_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const EVENTS_PER_TICK: usize = 4;
 
-use update::{UpdateCommand, UpdateEvent, UpdateInfo};
-
-#[derive(Clone, Copy)]
-enum UpdateUiState {
-    Ready,
-    Checking,
-    Current,
-    Available,
-    Downloading,
-    Verified,
-    Error,
-}
-
-#[derive(Clone)]
-struct PendingDocument {
-    id: DocumentId,
-    path: PathBuf,
-    started_at: Instant,
-}
-
-#[derive(Clone, PartialEq)]
-struct LayoutKey {
-    width: u32,
-    height: u32,
-    zoom_mode: ZoomMode,
-    dimensions_revision: u64,
-}
-
-#[derive(Clone)]
-struct FlatOutlineEntry {
-    path: Vec<usize>,
-    page_index: Option<u32>,
-    has_children: bool,
-}
-
-struct CachedImage {
-    image: Image,
-    bytes: usize,
-}
-
-struct UiImageCache {
-    entries: LruCache<u32, CachedImage>,
-    bytes: usize,
-    budget: usize,
-}
-
-struct CachedTextGeometry {
-    geometry: PageTextGeometry,
-    bytes: usize,
-}
-
-struct TextGeometryCache {
-    entries: HashMap<u32, CachedTextGeometry>,
-    insertion_order: VecDeque<u32>,
-    bytes: usize,
-}
-
-impl TextGeometryCache {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            insertion_order: VecDeque::new(),
-            bytes: 0,
-        }
-    }
-
-    fn contains_key(&self, page_index: u32) -> bool {
-        self.entries.contains_key(&page_index)
-    }
-
-    fn get(&mut self, page_index: u32) -> Option<&PageTextGeometry> {
-        if self.entries.contains_key(&page_index) {
-            self.insertion_order.retain(|index| *index != page_index);
-            self.insertion_order.push_back(page_index);
-        }
-        self.entries.get(&page_index).map(|entry| &entry.geometry)
-    }
-
-    fn insert(&mut self, page_index: u32, geometry: PageTextGeometry) {
-        let bytes = size_of::<PageTextGeometry>().saturating_add(
-            geometry
-                .glyphs
-                .capacity()
-                .saturating_mul(size_of::<barepdf_core::GlyphRect>()),
-        );
-        if bytes > TEXT_GEOMETRY_BUDGET {
-            return;
-        }
-
-        if let Some(previous) = self.entries.remove(&page_index) {
-            self.bytes = self.bytes.saturating_sub(previous.bytes);
-            self.insertion_order.retain(|index| *index != page_index);
-        }
-        while self.entries.len() >= MAX_TEXT_GEOMETRIES
-            || self.bytes.saturating_add(bytes) > TEXT_GEOMETRY_BUDGET
-        {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                break;
-            };
-            if let Some(previous) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(previous.bytes);
-            }
-        }
-
-        self.bytes = self.bytes.saturating_add(bytes);
-        self.insertion_order.push_back(page_index);
-        self.entries
-            .insert(page_index, CachedTextGeometry { geometry, bytes });
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.insertion_order.clear();
-        self.bytes = 0;
-    }
-
-    fn cloned_in_page_order(&self) -> Vec<PageTextGeometry> {
-        let mut geometries = self
-            .entries
-            .values()
-            .map(|entry| entry.geometry.clone())
-            .collect::<Vec<_>>();
-        geometries.sort_unstable_by_key(|geometry| geometry.page_index);
-        geometries
-    }
-}
-
-impl UiImageCache {
-    fn new(budget: usize) -> Self {
-        Self {
-            entries: LruCache::new(NonZeroUsize::new(512).expect("non-zero")),
-            bytes: 0,
-            budget,
-        }
-    }
-
-    fn get(&mut self, page: u32) -> Option<Image> {
-        self.entries.get(&page).map(|cached| cached.image.clone())
-    }
-
-    fn insert(&mut self, page: u32, image: Image, bytes: usize) {
-        if let Some(old) = self.entries.put(page, CachedImage { image, bytes }) {
-            self.bytes = self.bytes.saturating_sub(old.bytes);
-        }
-        self.bytes = self.bytes.saturating_add(bytes);
-        while self.bytes > self.budget {
-            let Some((_, evicted)) = self.entries.pop_lru() else {
-                break;
-            };
-            self.bytes = self.bytes.saturating_sub(evicted.bytes);
-        }
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.bytes = 0;
-    }
-}
-
-struct AppState {
-    active_document: Option<DocumentId>,
-    pending_document: Option<PendingDocument>,
-    current_path: Option<PathBuf>,
-    last_failed_path: Option<PathBuf>,
-    page_count: u32,
-    current_page: u32,
-    viewing_mode: ViewingMode,
-    zoom_mode: ZoomMode,
-    zoom_factor: ZoomFactor,
-    rotation: Rotation,
-    first_page_dimensions: (f32, f32),
-    page_dimensions: Vec<(f32, f32)>,
-    dimensions_revision: u64,
-    next_dimensions_start: u32,
-    dimensions_request_pending: bool,
-    layout: ContinuousLayout,
-    layout_key: Option<LayoutKey>,
-    visible_page_indices: Vec<u32>,
-    generation: u64,
-    first_page_ready: bool,
-    profile_recorded: bool,
-    open_started_at: Option<Instant>,
-    window_mode: WindowMode,
-    preferences: UserPreferences,
-    text_geometries: TextGeometryCache,
-    selection: Option<TextSelection>,
-    is_selecting: bool,
-    last_click_time: Instant,
-    click_count: u32,
-    last_scroll_y: f32,
-    last_thumbnail_scroll_y: f32,
-    last_user_scroll_at: Option<Instant>,
-    viewport_width: u32,
-    viewport_height: u32,
-    scale_factor: f32,
-    resize_changed_at: Option<Instant>,
-    outline: Vec<OutlineNode>,
-    outline_requested: bool,
-    expanded_outline: HashSet<Vec<usize>>,
-    flat_outline: Vec<FlatOutlineEntry>,
-    page_images: UiImageCache,
-    thumbnail_images: UiImageCache,
-    available_update: Option<UpdateInfo>,
-    verified_update: Option<PathBuf>,
-    update_busy: bool,
-    update_ui_state: UpdateUiState,
-}
-
-impl AppState {
-    fn new(mut preferences: UserPreferences) -> Self {
-        preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
-        preferences.memory_budget_bytes = RAW_BITMAP_BUDGET;
-        Self {
-            active_document: None,
-            pending_document: None,
-            current_path: None,
-            last_failed_path: None,
-            page_count: 0,
-            current_page: 0,
-            viewing_mode: preferences.viewing_mode,
-            zoom_mode: preferences.zoom_mode,
-            zoom_factor: ZoomFactor::default(),
-            rotation: Rotation::Degrees0,
-            first_page_dimensions: (612.0, 792.0),
-            page_dimensions: Vec::new(),
-            dimensions_revision: 0,
-            next_dimensions_start: 1,
-            dimensions_request_pending: false,
-            layout: ContinuousLayout::default(),
-            layout_key: None,
-            visible_page_indices: Vec::new(),
-            generation: 1,
-            first_page_ready: false,
-            profile_recorded: false,
-            open_started_at: None,
-            window_mode: WindowMode::Normal,
-            preferences,
-            text_geometries: TextGeometryCache::new(),
-            selection: None,
-            is_selecting: false,
-            last_click_time: Instant::now(),
-            click_count: 0,
-            last_scroll_y: 0.0,
-            last_thumbnail_scroll_y: 0.0,
-            last_user_scroll_at: None,
-            viewport_width: 900,
-            viewport_height: 700,
-            scale_factor: 1.0,
-            resize_changed_at: None,
-            outline: Vec::new(),
-            outline_requested: false,
-            expanded_outline: HashSet::new(),
-            flat_outline: Vec::new(),
-            page_images: UiImageCache::new(PAGE_IMAGE_BUDGET),
-            thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
-            available_update: None,
-            verified_update: None,
-            update_busy: false,
-            update_ui_state: UpdateUiState::Ready,
-        }
-    }
-}
+use state::{
+    fit_bitmap_to_budget, AppState, FlatOutlineEntry, LayoutKey, PendingDocument, UpdateUiState,
+};
+use update::{UpdateCommand, UpdateEvent};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -344,7 +83,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let preferences_path = default_config_path();
-    let mut preferences = UserPreferences::load_from_file(&preferences_path);
+    let mut preferences = match UserPreferences::try_load_from_file(&preferences_path) {
+        Ok(preferences) => preferences,
+        Err(PreferencesLoadError::Read(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            UserPreferences::default()
+        }
+        Err(error) => {
+            show_fatal_error(
+                "BarePDF",
+                &format!("Preferences could not be loaded.\n\n{error}"),
+            );
+            return Err(Box::new(error));
+        }
+    };
     if preferences.update_checks_enabled.is_none() {
         let language = preferences.language.resolve();
         preferences.update_checks_enabled = Some(ask_yes_no(
@@ -353,14 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         persist_preferences(&preferences, &preferences_path, None);
     }
-    let original_recent_count = preferences.recent_files.len();
-    preferences
-        .recent_files
-        .retain(|path| Path::new(path).is_file());
     preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
-    if original_recent_count != preferences.recent_files.len() {
-        persist_preferences(&preferences, &preferences_path, None);
-    }
 
     let scheduler = Rc::new(RenderScheduler::spawn(
         pdf_engine,
@@ -379,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     initialize_window(&window, &state.borrow());
     apply_theme(&window, state.borrow().preferences.theme);
     update_ui_strings(&window, state.borrow().preferences.language.resolve());
-    refresh_recent_files(&mut state.borrow_mut(), &window, &preferences_path);
+    refresh_recent_files(&mut state.borrow_mut(), &window);
 
     wire_callbacks(
         &window,
@@ -414,7 +158,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
         (update_sender, update_receiver),
     );
-    window.run()?;
+    let run_result = window.run();
+    scheduler.shutdown();
+    run_result?;
 
     let scale = window.window().scale_factor().max(0.1);
     let size = window.window().size();
@@ -603,7 +349,7 @@ fn wire_callbacks(
             return;
         };
         if !is_installed_build() {
-            if let Err(error) = open_url(&update.release_url) {
+            if let Err(error) = open_url(update.release_url()) {
                 eprintln!("Could not open release page: {error}");
                 app.update_ui_state = UpdateUiState::Error;
                 render_update_ui(&window, &app);
@@ -747,19 +493,18 @@ fn connect_zoom_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
-    preferences_path: &Path,
+    _preferences_path: &Path,
 ) {
     let weak = window.as_weak();
     let state_in = state.clone();
     let scheduler_in = scheduler.clone();
-    let preferences_path_in = preferences_path.to_path_buf();
     window.on_request_zoom_in(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_in.borrow_mut();
             sync_effective_zoom(&mut app);
             app.zoom_factor = app.zoom_factor.zoom_in();
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
-            save_zoom_preference(&mut app, &preferences_path_in, &window);
+            save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
         }
     });
@@ -767,14 +512,13 @@ fn connect_zoom_callbacks(
     let weak = window.as_weak();
     let state_out = state.clone();
     let scheduler_out = scheduler.clone();
-    let preferences_path_out = preferences_path.to_path_buf();
     window.on_request_zoom_out(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_out.borrow_mut();
             sync_effective_zoom(&mut app);
             app.zoom_factor = app.zoom_factor.zoom_out();
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
-            save_zoom_preference(&mut app, &preferences_path_out, &window);
+            save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
         }
     });
@@ -783,7 +527,7 @@ fn connect_zoom_callbacks(
         window,
         state,
         scheduler,
-        preferences_path,
+        _preferences_path,
         ZoomMode::FitWidth,
         |w, cb| w.on_request_fit_width(cb),
     );
@@ -791,7 +535,7 @@ fn connect_zoom_callbacks(
         window,
         state,
         scheduler,
-        preferences_path,
+        _preferences_path,
         ZoomMode::FitPage,
         |w, cb| w.on_request_fit_page(cb),
     );
@@ -799,7 +543,7 @@ fn connect_zoom_callbacks(
         window,
         state,
         scheduler,
-        preferences_path,
+        _preferences_path,
         ZoomMode::ActualSize,
         |w, cb| w.on_request_actual_size(cb),
     );
@@ -809,7 +553,7 @@ fn connect_zoom_mode<F>(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
-    preferences_path: &Path,
+    _preferences_path: &Path,
     mode: ZoomMode,
     register: F,
 ) where
@@ -818,14 +562,13 @@ fn connect_zoom_mode<F>(
     let weak = window.as_weak();
     let state = state.clone();
     let scheduler = scheduler.clone();
-    let preferences_path = preferences_path.to_path_buf();
     register(
         window,
         Box::new(move || {
             if let Some(window) = weak.upgrade() {
                 let mut app = state.borrow_mut();
                 app.zoom_mode = mode;
-                save_zoom_preference(&mut app, &preferences_path, &window);
+                save_zoom_preference(&mut app);
                 invalidate_layout_and_render(&mut app, &scheduler, &window, true);
             }
         }),
@@ -836,12 +579,11 @@ fn connect_view_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
-    preferences_path: &Path,
+    _preferences_path: &Path,
 ) {
     let weak = window.as_weak();
     let state_view = state.clone();
     let scheduler_view = scheduler.clone();
-    let preferences_path_view = preferences_path.to_path_buf();
     window.on_request_toggle_view_mode(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_view.borrow_mut();
@@ -850,7 +592,6 @@ fn connect_view_callbacks(
                 _ => ViewingMode::ContinuousVertical,
             };
             app.preferences.viewing_mode = app.viewing_mode;
-            persist_preferences(&app.preferences, &preferences_path_view, Some(&window));
             window.set_view_mode(view_mode_index(app.viewing_mode));
             window.set_view_mode_label(SharedString::from(view_mode_label(
                 app.viewing_mode,
@@ -863,7 +604,6 @@ fn connect_view_callbacks(
     let weak = window.as_weak();
     let state_sidebar = state.clone();
     let scheduler_sidebar = scheduler.clone();
-    let preferences_path_sidebar = preferences_path.to_path_buf();
     window.on_request_toggle_sidebar(move || {
         if let Some(window) = weak.upgrade() {
             let visible = !window.get_sidebar_visible();
@@ -871,7 +611,6 @@ fn connect_view_callbacks(
             let mut app = state_sidebar.borrow_mut();
             app.preferences.sidebar_visible = visible;
             app.layout_key = None;
-            persist_preferences(&app.preferences, &preferences_path_sidebar, Some(&window));
             if visible {
                 request_visible_thumbnails(&app, &scheduler_sidebar, &window);
             }
@@ -973,10 +712,12 @@ fn connect_selection_callbacks(
     window.on_request_copy(move || {
         let app = state_copy.borrow();
         if let Some(selection) = app.selection {
-            let geometries = app.text_geometries.cloned_in_page_order();
-            let text = SelectionEngine::get_selected_text(&selection, &geometries);
+            let geometries = app.text_geometries.in_page_order();
+            let text = SelectionEngine::get_selected_text_in_page_order(&selection, &geometries);
             if !text.is_empty() {
-                let _ = clipboard.set_text(&text);
+                if let Err(error) = clipboard.set_text(&text) {
+                    eprintln!("Could not copy selected text: {error}");
+                }
             }
         }
     });
@@ -1119,7 +860,10 @@ fn start_event_timer(
             native_drop_receiver = install_native_file_drop(&window);
         }
         if let Some(receiver) = native_drop_receiver.as_ref() {
-            while let Ok(paths) = receiver.try_recv() {
+            for _ in 0..EVENTS_PER_TICK {
+                let Ok(paths) = receiver.try_recv() else {
+                    break;
+                };
                 match paths.as_slice() {
                     [path] if is_pdf_path(path) => {
                         begin_open(path.clone(), None, &state, &scheduler, &window)
@@ -1129,7 +873,10 @@ fn start_event_timer(
                 }
             }
         }
-        while let Ok(event) = update_receiver.try_recv() {
+        for _ in 0..EVENTS_PER_TICK {
+            let Ok(event) = update_receiver.try_recv() else {
+                break;
+            };
             handle_update_event(event, &window, &state, &update_sender);
         }
         if Instant::now() >= next_update_due_poll {
@@ -1144,7 +891,7 @@ fn start_event_timer(
         }
         process_view_changes(&window, &state, &scheduler);
         if !worker_terminated {
-            loop {
+            for _ in 0..EVENTS_PER_TICK {
                 match scheduler.try_recv_event() {
                     Ok(Some(event)) => {
                         handle_render_event(event, &window, &state, &scheduler, &preferences_path);
@@ -1266,7 +1013,7 @@ fn render_update_ui(window: &AppWindow, app: &AppState) {
                 return;
             };
             let note = update
-                .release_notes
+                .release_notes()
                 .lines()
                 .next()
                 .unwrap_or_default()
@@ -1277,13 +1024,13 @@ fn render_update_ui(window: &AppWindow, app: &AppState) {
                 format!(
                     "{} v{}",
                     barepdf_i18n::t(language, "updates.status.available"),
-                    update.version
+                    update.version()
                 )
             } else {
                 format!(
                     "{} v{} — {}",
                     barepdf_i18n::t(language, "updates.status.available"),
-                    update.version,
+                    update.version(),
                     note
                 )
             };
@@ -1408,7 +1155,7 @@ fn handle_render_event(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
-    preferences_path: &Path,
+    _preferences_path: &Path,
 ) {
     match event {
         RenderEvent::DocumentOpened {
@@ -1460,7 +1207,6 @@ fn handle_render_event(
             app.thumbnail_images.clear();
             app.preferences
                 .add_recent_file(pending.path.to_string_lossy().into_owned());
-            persist_preferences(&app.preferences, preferences_path, Some(window));
 
             window.set_has_document(true);
             window.set_password_required(false);
@@ -1478,7 +1224,7 @@ fn handle_render_event(
                 "{} ({} pages)",
                 file_name, page_count
             )));
-            refresh_recent_files(&mut app, window, preferences_path);
+            refresh_recent_files(&mut app, window);
             refresh_thumbnail_model(&mut app, window);
             navigate_to_page_inner(0, &mut app, scheduler, window);
         }
@@ -1495,15 +1241,15 @@ fn handle_render_event(
                 return;
             }
             let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                &bitmap.pixels,
-                bitmap.width,
-                bitmap.height,
+                bitmap.pixels(),
+                bitmap.width(),
+                bitmap.height(),
             );
             let image = Image::from_rgba8(buffer);
             match kind {
                 RenderKind::Page => {
                     app.page_images
-                        .insert(page_index.get(), image.clone(), bitmap.pixels.len());
+                        .insert(page_index.get(), image.clone(), bitmap.pixels().len());
                     if page_index.get() == app.current_page {
                         window.set_page_bitmap(image);
                     }
@@ -1517,7 +1263,7 @@ fn handle_render_event(
                 }
                 RenderKind::Thumbnail => {
                     app.thumbnail_images
-                        .insert(page_index.get(), image, bitmap.pixels.len());
+                        .insert(page_index.get(), image, bitmap.pixels().len());
                     refresh_thumbnail_row(&mut app, window, page_index.get());
                 }
             }
@@ -1837,13 +1583,18 @@ fn render_visible_pages(app: &mut AppState, scheduler: &RenderScheduler, window:
                 ((layout_page.height as f32) * render_scale).round() as u32,
             )
         };
+        let (render_width, render_height) = fit_bitmap_to_budget(
+            render_width.clamp(1, 4096),
+            render_height.clamp(1, 4096),
+            PAGE_IMAGE_BUDGET,
+        );
         scheduler.send_command(RenderCommand::RenderPage(RenderJob {
             request_id: RequestId::new(unique_id()),
             generation: app.generation,
             document_id,
             page_index: PageIndex::from_raw(page),
-            target_width: render_width.clamp(1, 4096),
-            target_height: render_height.clamp(1, 4096),
+            target_width: render_width,
+            target_height: render_height,
             rotation: app.rotation,
             priority: if page == app.current_page {
                 Priority::Visible
@@ -2098,14 +1849,7 @@ fn flatten_outline(
     }
 }
 
-fn refresh_recent_files(app: &mut AppState, window: &AppWindow, preferences_path: &Path) {
-    let before = app.preferences.recent_files.len();
-    app.preferences
-        .recent_files
-        .retain(|path| Path::new(path).is_file());
-    if before != app.preferences.recent_files.len() {
-        persist_preferences(&app.preferences, preferences_path, Some(window));
-    }
+fn refresh_recent_files(app: &mut AppState, window: &AppWindow) {
     let items = app
         .preferences
         .recent_files
@@ -2194,9 +1938,8 @@ fn sync_effective_zoom(app: &mut AppState) {
     app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
 }
 
-fn save_zoom_preference(app: &mut AppState, preferences_path: &Path, window: &AppWindow) {
+fn save_zoom_preference(app: &mut AppState) {
     app.preferences.zoom_mode = app.zoom_mode;
-    persist_preferences(&app.preferences, preferences_path, Some(window));
 }
 
 fn record_first_page_profile(app: &mut AppState) {
@@ -2503,5 +2246,18 @@ mod tests {
         assert!(width <= PRESENTATION_MAX_RENDER_EDGE);
         assert!(height <= PRESENTATION_MAX_RENDER_EDGE);
         assert!((width as f32 / height as f32 - 612.0 / 792.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn page_render_size_fits_image_cache_budget() {
+        let (width, height) = fit_bitmap_to_budget(4096, 4096, PAGE_IMAGE_BUDGET);
+
+        assert!(
+            usize::try_from(width)
+                .unwrap()
+                .saturating_mul(usize::try_from(height).unwrap())
+                .saturating_mul(std::mem::size_of::<Rgba8Pixel>())
+                <= PAGE_IMAGE_BUDGET
+        );
     }
 }
