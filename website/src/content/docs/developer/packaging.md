@@ -24,7 +24,7 @@ The release pipeline executes in the following sequence:
 5. **Validating Installer & Registry Config**:
    `validate-installer.ps1` verifies the generated setup executable and registry key entries.
 6. **Generating Checksums**:
-   `generate-checksums.ps1` hashes the versioned installer and portable package, then copies them into `target/release/artifacts/` together with stable `BarePDF-Setup-x64.exe` and `BarePDF-Portable-x64.zip` aliases. It writes versioned and stable checksum manifests plus `latest.json` in the same directory.
+   `generate-checksums.ps1` hashes the versioned installer and portable package, then copies one canonical versioned copy of each into `target/release/artifacts/`. It writes one versioned checksum manifest plus `latest.json` in the same directory.
 
 ## GitHub Actions Release Workflow
 
@@ -32,4 +32,4 @@ The `.github/workflows/release.yml` workflow starts automatically after a succes
 
 Discovery validates every first-parent commit since the latest stable tag, selects the newest unreleased product version, and tags the exact `main` snapshot whose CI run triggered publication. Superseded intermediate versions are intentionally skipped instead of shipping obsolete binaries. An existing matching release is accepted idempotently; conflicting or incomplete releases fail. After publication, that stable version becomes GitHub's latest release and the Pages workflow is explicitly dispatched.
 
-Public documentation uses the stable `releases/latest/download/BarePDF-Setup-x64.exe`, `BarePDF-Portable-x64.zip`, and `BarePDF-SHA256SUMS.txt` aliases published with every release. Version bumps therefore require no repetitive download-link edits.
+Public documentation links to the website download page. Its build reads the latest GitHub Release and exposes exactly one canonical versioned installer, portable package, and checksum manifest.

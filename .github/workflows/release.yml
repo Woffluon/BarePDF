@@ -248,6 +248,11 @@ jobs:
           body: |
             ${{ env.COMMIT_MSG }}
 
+            ### Downloads
+            - **Windows installer:** `BarePDF-Setup-x64-v${{ matrix.release.version }}.exe`
+            - **Portable package:** `BarePDF-Portable-x64-v${{ matrix.release.version }}.zip`
+            - **Checksums:** `BarePDF-v${{ matrix.release.version }}-SHA256SUMS.txt`
+
             Update authenticity policy: https://github.com/Woffluon/BarePDF#update-authenticity-policy
           target_commitish: ${{ matrix.release.sha }}
           files: target/release/artifacts/*

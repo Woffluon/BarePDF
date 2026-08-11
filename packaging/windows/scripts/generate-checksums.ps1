@@ -27,16 +27,9 @@ $PortableName = [System.IO.Path]::GetFileName($PortablePath)
 $ChecksumLines = @("$InstallerHash  $InstallerName", "$PortableHash  $PortableName")
 Copy-Item $InstallerPath -Destination $ArtifactsDir -Force
 Copy-Item $PortablePath -Destination $ArtifactsDir -Force
-Copy-Item $InstallerPath -Destination (Join-Path $ArtifactsDir "BarePDF-Setup-x64.exe") -Force
-Copy-Item $PortablePath -Destination (Join-Path $ArtifactsDir "BarePDF-Portable-x64.zip") -Force
 
 $ChecksumFile = Join-Path $ArtifactsDir "BarePDF-v$Version-SHA256SUMS.txt"
 $ChecksumLines | Set-Content -Path $ChecksumFile
-$StableChecksumFile = Join-Path $ArtifactsDir "BarePDF-SHA256SUMS.txt"
-@(
-    "$InstallerHash  BarePDF-Setup-x64.exe",
-    "$PortableHash  BarePDF-Portable-x64.zip"
-) | Set-Content -Path $StableChecksumFile
 
 $Repository = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { "Woffluon/BarePDF" }
 $InstallerSize = (Get-Item -LiteralPath $InstallerPath).Length

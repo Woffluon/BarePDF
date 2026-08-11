@@ -12,12 +12,15 @@ const owner = 'Woffluon';
 const repository = 'BarePDF';
 const tag = 'v1.1.0';
 
-test('accepts only exact release asset names for the tag or stable aliases', () => {
+test('accepts one exact versioned name for each public release asset', () => {
   const names = releaseAssetNames(tag);
   assert.ok(names);
-  assert.equal(releaseAssetType(names.installer[0], tag), 'installer');
-  assert.equal(releaseAssetType(names.portable[1], tag), 'portable');
-  assert.equal(releaseAssetType(names.checksum[0], tag), 'checksum');
+  assert.equal(releaseAssetType(names.installer, tag), 'installer');
+  assert.equal(releaseAssetType(names.portable, tag), 'portable');
+  assert.equal(releaseAssetType(names.checksum, tag), 'checksum');
+  assert.equal(releaseAssetType('BarePDF-Setup-x64.exe', tag), null);
+  assert.equal(releaseAssetType('BarePDF-Portable-x64.zip', tag), null);
+  assert.equal(releaseAssetType('BarePDF-SHA256SUMS.txt', tag), null);
   assert.equal(releaseAssetType('BarePDF-Setup-x64-v1.0.0.exe', tag), null);
   assert.equal(releaseAssetType('unrelated.exe', tag), null);
   assert.equal(releaseAssetType('unrelated.zip', tag), null);

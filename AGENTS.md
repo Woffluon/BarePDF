@@ -85,6 +85,7 @@ powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact
 - GitHub Actions must use least-privilege permissions and pin third-party actions by full commit SHA.
 - Release publication must be idempotent: an existing tag is accepted only when it resolves to the same commit; conflicting tags/releases fail.
 - Never overwrite assets on an older stable release. Every product version gets a new immutable tag and release.
+- Publish exactly one versioned installer, one versioned portable archive, one versioned checksum manifest, `latest.json`, and `latest.json.sig` per release. Do not publish duplicate alias copies.
 - Hash checks do not replace signature verification. Update installers require a valid manifest signature from the public key pinned in the application, exact SHA-256/size/version matching, and an approved immutable release URL.
 
 ## 8. Updater and Privacy Rules
@@ -102,7 +103,7 @@ powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact
 
 - The website must show the latest stable GitHub Release and default-branch commits from current build-time GitHub data.
 - Build-time API failure may use current build metadata, but never a stale committed list of releases or commits.
-- Before the bootstrap release containing stable aliases exists, link to the latest release page with honest link text. After bootstrap, use stable `releases/latest/download/...` aliases so version bumps do not require repetitive link edits.
+- Public documentation must link to the website download page. That page resolves the latest release's canonical versioned assets from current build-time GitHub data.
 - A release workflow must explicitly dispatch Pages deployment after publishing; do not rely on token-generated release events to trigger another workflow.
 
 ## 10. Delegation and Completion

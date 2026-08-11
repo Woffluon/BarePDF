@@ -77,7 +77,7 @@ const hasReleaseMetadata = release.state === 'published';
         <p class="guide-desc">
           You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
         </p>
-        <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64.exe'}</code></pre>
+        <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64-vX.Y.Z.exe'}</code></pre>
         <p class="guide-note">
           Compare the output hash against the SHA256SUMS manifest file listed above.
         </p>

@@ -69,9 +69,7 @@ function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
   });
 
   return (['installer', 'portable', 'checksum'] as const).flatMap((type: ReleaseAssetType) => {
-    const [versionedName, aliasName] = expectedNames[type];
-    const asset = candidates.find((candidate) => candidate.name === versionedName)
-      ?? candidates.find((candidate) => candidate.name === aliasName);
+    const asset = candidates.find((candidate) => candidate.name === expectedNames[type]);
     return asset ? [asset] : [];
   });
 }

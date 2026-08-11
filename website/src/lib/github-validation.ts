@@ -24,14 +24,14 @@ export function trustedGitHubUrl(value: unknown): string | null {
   }
 }
 
-export function releaseAssetNames(tag: string): Record<ReleaseAssetType, readonly [string, string]> | null {
+export function releaseAssetNames(tag: string): Record<ReleaseAssetType, string> | null {
   const version = /^v(\d+\.\d+\.\d+)$/.exec(tag)?.[1];
   if (!version) return null;
 
   return {
-    installer: [`BarePDF-Setup-x64-v${version}.exe`, 'BarePDF-Setup-x64.exe'],
-    portable: [`BarePDF-Portable-x64-v${version}.zip`, 'BarePDF-Portable-x64.zip'],
-    checksum: [`BarePDF-v${version}-SHA256SUMS.txt`, 'BarePDF-SHA256SUMS.txt'],
+    installer: `BarePDF-Setup-x64-v${version}.exe`,
+    portable: `BarePDF-Portable-x64-v${version}.zip`,
+    checksum: `BarePDF-v${version}-SHA256SUMS.txt`,
   };
 }
 
@@ -40,7 +40,7 @@ export function releaseAssetType(name: string, tag: string): ReleaseAssetType | 
   if (!names) return null;
 
   for (const type of ['installer', 'portable', 'checksum'] as const) {
-    if (names[type].includes(name)) return type;
+    if (names[type] === name) return type;
   }
   return null;
 }

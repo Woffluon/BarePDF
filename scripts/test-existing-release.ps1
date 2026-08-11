@@ -53,14 +53,13 @@ if ($LASTEXITCODE -ne 0 -or $ReleaseTarget -cne $ReleaseSha) { throw "Existing r
 $VersionedInstaller = "BarePDF-Setup-x64-v$Version.exe"
 $VersionedPortable = "BarePDF-Portable-x64-v$Version.zip"
 $VersionedChecksums = "BarePDF-v$Version-SHA256SUMS.txt"
-$AliasInstaller = "BarePDF-Setup-x64.exe"
-$AliasPortable = "BarePDF-Portable-x64.zip"
-$AliasChecksums = "BarePDF-SHA256SUMS.txt"
-$Required = @($VersionedInstaller, $VersionedPortable, $VersionedChecksums, $AliasInstaller, $AliasPortable, $AliasChecksums, "latest.json", "latest.json.sig")
+$Required = @($VersionedInstaller, $VersionedPortable, $VersionedChecksums, "latest.json", "latest.json.sig")
 $Assets = @($Release.assets)
 $Names = @($Assets | ForEach-Object { $_.name })
 $Missing = @($Required | Where-Object { $_ -notin $Names })
 if ($Missing.Count -gt 0) { throw "Existing immutable release is incomplete: $($Missing -join ', ')" }
+$Unexpected = @($Names | Where-Object { $_ -notin $Required })
+if ($Unexpected.Count -gt 0) { throw "Existing immutable release contains unexpected assets: $($Unexpected -join ', ')" }
 
 $BytesByName = @{}
 $HashByName = @{}
@@ -97,12 +96,6 @@ try {
     }
 } finally { $Client.Dispose() }
 
-foreach ($Pair in @(@($VersionedInstaller, $AliasInstaller), @($VersionedPortable, $AliasPortable))) {
-    if ($BytesByName[$Pair[0]].Length -ne $BytesByName[$Pair[1]].Length -or $HashByName[$Pair[0]] -cne $HashByName[$Pair[1]]) {
-        throw "Stable alias does not match versioned asset $($Pair[0])."
-    }
-}
-
 function Read-ChecksumMap([byte[]]$Bytes, [string]$Name) {
     $Map = @{}
     foreach ($Line in ([Text.Encoding]::UTF8.GetString($Bytes) -split '\r?\n' | Where-Object { $_ })) {
@@ -114,12 +107,8 @@ function Read-ChecksumMap([byte[]]$Bytes, [string]$Name) {
 }
 
 $VersionedMap = Read-ChecksumMap $BytesByName[$VersionedChecksums] $VersionedChecksums
-$AliasMap = Read-ChecksumMap $BytesByName[$AliasChecksums] $AliasChecksums
 if ($VersionedMap.Count -ne 2 -or $VersionedMap[$VersionedInstaller] -cne $HashByName[$VersionedInstaller] -or $VersionedMap[$VersionedPortable] -cne $HashByName[$VersionedPortable]) {
     throw "Versioned checksum manifest does not match release assets."
-}
-if ($AliasMap.Count -ne 2 -or $AliasMap[$AliasInstaller] -cne $HashByName[$AliasInstaller] -or $AliasMap[$AliasPortable] -cne $HashByName[$AliasPortable]) {
-    throw "Stable checksum manifest does not match release assets."
 }
 
 $Manifest = [Text.Encoding]::UTF8.GetString($BytesByName["latest.json"]) | ConvertFrom-Json
