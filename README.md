@@ -38,10 +38,8 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
 
 BarePDF stable releases require trusted, timestamped Authenticode signatures. Unsigned builds are never published as stable releases.
 
-The planned trust-provider statement, effective only after enrollment approval, is: **Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).**
-
-- Committers, reviewers, and signing approvers: [Woffluon](https://github.com/Woffluon).
-- Release provenance: GitHub Actions builds release artifacts from this repository; signing remains fail-closed and requires explicit maintainer approval.
+- Publisher identity and signing provider must be independently trusted by Windows and configured before release automation is enabled.
+- Release provenance: GitHub Actions builds release artifacts from this repository; signing remains fail-closed.
 - Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Update checks remain disabled until the user explicitly opts in.
 
 ## Architecture Workspace
