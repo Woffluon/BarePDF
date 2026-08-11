@@ -31,11 +31,11 @@ const recentCommits = await getRecentCommits(5);
     <div class="container">
       <div class="activity-header">
         <div>
-          <h2 class="activity-title">Recent Development Activity</h2>
-          <p class="activity-subtitle">Synced from the default branch on each site deployment.</p>
+          <h2 class="activity-title" data-i18n data-en="Recent Development Activity" data-tr="Son geliştirme hareketleri">Recent Development Activity</h2>
+          <p class="activity-subtitle" data-i18n data-en="Synced from the default branch on each site deployment." data-tr="Her site dağıtımında varsayılan daldan güncellenir.">Synced from the default branch on each site deployment.</p>
         </div>
         <a href={`${baseUrl}/changelog`} class="btn btn-secondary">
-          View Full Changelog &rarr;
+          <span data-i18n data-en="View Full Changelog →" data-tr="Tüm değişiklikleri gör →">View Full Changelog →</span>
         </a>
       </div>
 
@@ -46,21 +46,21 @@ const recentCommits = await getRecentCommits(5);
   <section class="docs-cta-section">
     <div class="container docs-cta-box">
       <div class="cta-text">
-        <h2 class="cta-title">Explore Documentation</h2>
-        <p class="cta-desc">
+        <h2 class="cta-title" data-i18n data-en="Explore Documentation" data-tr="Belgeleri keşfedin">Explore Documentation</h2>
+        <p class="cta-desc" data-i18n data-en="Whether you are an end user configuring settings or a developer building from source, check our guides." data-tr="Ayarlarını düzenleyen bir kullanıcı veya kaynaktan derleme yapan bir geliştirici olun, rehberlerimize göz atın.">
           Whether you are an end user configuring settings or a developer building from source, check our guides.
         </p>
       </div>
 
       <div class="cta-buttons">
         <a href={`${baseUrl}/docs/user/getting-started`} class="btn btn-primary">
-          User Guide
+          <span data-i18n data-en="User Guide" data-tr="Kullanıcı rehberi">User Guide</span>
         </a>
         <a href={`${baseUrl}/docs/developer/building`} class="btn btn-secondary">
-          Developer Guide
+          <span data-i18n data-en="Developer Guide" data-tr="Geliştirici rehberi">Developer Guide</span>
         </a>
         <a href={`${baseUrl}/docs/user/keyboard-shortcuts`} class="btn btn-secondary">
-          Shortcuts Reference
+          <span data-i18n data-en="Shortcuts Reference" data-tr="Kısayol başvurusu">Shortcuts Reference</span>
         </a>
       </div>
     </div>

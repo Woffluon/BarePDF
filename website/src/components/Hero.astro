@@ -16,17 +16,19 @@ const hasReleaseMetadata = release.state === 'published';
   <div class="container hero-container">
     <div class="hero-badge">
       <span class="badge badge-success">
-        {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+        <span data-i18n data-en={hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`} data-tr={hasReleaseMetadata ? `Son sürüm ${release.tag}` : `Derleme ${release.tag}`}>
+          {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+        </span>
       </span>
-      <span class="hero-tagline">Windows 10 / 11 64-bit</span>
+      <span class="hero-tagline" data-i18n data-en="Windows 10 / 11 64-bit" data-tr="Windows 10 / 11 · 64 bit">Windows 10 / 11 64-bit</span>
     </div>
 
     <h1 class="hero-title">
-      Bare. Fast. Yours.
+      <span data-i18n data-en="Bare. Fast. Yours." data-tr="Sade. Hızlı. Senin.">Bare. Fast. Yours.</span>
     </h1>
 
     <p class="hero-subtitle">
-      A minimal, high-speed PDF reader for Windows built with Rust and PDFium. No ads, no tracking, and no bloat.
+      <span data-i18n data-en="A minimal, high-speed PDF reader for Windows built with Rust and PDFium. No ads, no tracking, and no bloat." data-tr="Rust ve PDFium ile Windows için geliştirilen yalın ve hızlı bir PDF okuyucu. Reklam yok, takip yok, gereksiz yük yok.">A minimal, high-speed PDF reader for Windows built with Rust and PDFium. No ads, no tracking, and no bloat.</span>
     </p>
 
     <div class="hero-cta-group">
@@ -37,41 +39,41 @@ const hasReleaseMetadata = release.state === 'published';
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          <span>Download Setup Installer ({release.tag})</span>
+          <span data-i18n data-en={`Download Setup Installer (${release.tag})`} data-tr={`Kurulum paketini indir (${release.tag})`}>Download Setup Installer ({release.tag})</span>
         </a>
       ) : (
         <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-hero">
-          <span>View Latest Release on GitHub</span>
+          <span data-i18n data-en="View Latest Release on GitHub" data-tr="GitHub'daki son sürümü aç">View Latest Release on GitHub</span>
         </a>
       )}
 
       <a href={`${baseUrl}/download`} class="btn btn-secondary btn-hero">
-        Portable ZIP & Checksums
+        <span data-i18n data-en="Portable ZIP & Checksums" data-tr="Taşınabilir ZIP ve sağlama değerleri">Portable ZIP & Checksums</span>
       </a>
 
       <a href={`${baseUrl}/docs`} class="btn btn-secondary btn-hero">
-        Documentation
+        <span data-i18n data-en="Documentation" data-tr="Belgeler">Documentation</span>
       </a>
     </div>
 
     <div class="hero-meta-strip">
       <div class="meta-item">
-        <span class="meta-label">Rendering:</span>
+        <span class="meta-label" data-i18n data-en="Rendering:" data-tr="İşleme:">Rendering:</span>
         <strong class="meta-value">Byte-Bounded</strong>
       </div>
       <div class="meta-divider"></div>
       <div class="meta-item">
-        <span class="meta-label">Engine:</span>
+        <span class="meta-label" data-i18n data-en="Engine:" data-tr="Motor:">Engine:</span>
         <strong class="meta-value">Google PDFium</strong>
       </div>
       <div class="meta-divider"></div>
       <div class="meta-item">
-        <span class="meta-label">Privacy:</span>
+        <span class="meta-label" data-i18n data-en="Privacy:" data-tr="Gizlilik:">Privacy:</span>
         <strong class="meta-value">Zero Telemetry</strong>
       </div>
       <div class="meta-divider"></div>
       <div class="meta-item">
-        <span class="meta-label">License:</span>
+        <span class="meta-label" data-i18n data-en="License:" data-tr="Lisans:">License:</span>
         <strong class="meta-value">Open Source (MIT)</strong>
       </div>
     </div>

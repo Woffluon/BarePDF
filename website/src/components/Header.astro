@@ -1,5 +1,6 @@
 ---
 import { repository } from '../lib/repository';
+import LanguageSwitcher from './LanguageSwitcher.astro';
 
 interface Props {
   currentPath?: string;
@@ -9,9 +10,9 @@ const { currentPath = '' } = Astro.props;
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 const navLinks = [
-  { name: 'Download', href: `${baseUrl}/download` },
-  { name: 'Docs', href: `${baseUrl}/docs` },
-  { name: 'Changelog', href: `${baseUrl}/changelog` },
+  { name: 'Download', tr: 'İndir', href: `${baseUrl}/download` },
+  { name: 'Docs', tr: 'Belgeler', href: `${baseUrl}/docs` },
+  { name: 'Changelog', tr: 'Değişiklikler', href: `${baseUrl}/changelog` },
 ];
 ---
 
@@ -31,7 +32,7 @@ const navLinks = [
             class:list={['nav-link', { active: isActive }]}
             aria-current={isActive ? 'page' : undefined}
           >
-            {link.name}
+            <span data-i18n data-en={link.name} data-tr={link.tr}>{link.name}</span>
           </a>
         );
       })}
@@ -43,7 +44,7 @@ const navLinks = [
         class="nav-link external-link"
         aria-label="BarePDF GitHub Repository"
       >
-        <span>GitHub</span>
+        <span data-i18n data-en="GitHub" data-tr="GitHub">GitHub</span>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
           <polyline points="15 3 21 3 21 9"></polyline>
@@ -51,6 +52,8 @@ const navLinks = [
         </svg>
       </a>
     </nav>
+
+    <LanguageSwitcher />
 
     <div class="mobile-actions">
       <button id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle navigation menu" aria-expanded="false">
@@ -67,7 +70,7 @@ const navLinks = [
     <nav class="container mobile-nav">
       {navLinks.map((link) => (
         <a href={link.href} class="mobile-nav-link">
-          {link.name}
+          <span data-i18n data-en={link.name} data-tr={link.tr}>{link.name}</span>
         </a>
       ))}
       <a href={repository.url} target="_blank" rel="noopener noreferrer" class="mobile-nav-link">

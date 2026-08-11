@@ -21,10 +21,12 @@ const hasReleaseMetadata = release.state === 'published';
   <section class="download-page-header">
     <div class="container header-container">
       <span class="badge badge-success">
-        {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+        <span data-i18n data-en={hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`} data-tr={hasReleaseMetadata ? `Son sürüm ${release.tag}` : `Derleme ${release.tag}`}>
+          {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+        </span>
       </span>
-      <h1 class="page-title">Download BarePDF</h1>
-      <p class="page-subtitle">
+      <h1 class="page-title" data-i18n data-en="Download BarePDF" data-tr="BarePDF’i indirin">Download BarePDF</h1>
+      <p class="page-subtitle" data-i18n data-en="Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private." data-tr="Windows 10 ve 11 (64 bit) için resmi sürüm paketleri. Hızlı, hafif ve tamamen özel.">
         Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private.
       </p>
     </div>
@@ -63,8 +65,8 @@ const hasReleaseMetadata = release.state === 'published';
           />
         )}
       </div> : <div class="release-metadata-notice">
-        <h3 class="guide-title">Release Metadata Unavailable</h3>
-        <p class="guide-desc">
+        <h3 class="guide-title" data-i18n data-en="Release Metadata Unavailable" data-tr="Sürüm bilgisi kullanılamıyor">Release Metadata Unavailable</h3>
+        <p class="guide-desc" data-i18n data-en="This site build could not verify current release assets. Use GitHub Releases to view published downloads." data-tr="Bu site derlemesi güncel sürüm varlıklarını doğrulayamadı. Yayımlanan indirmeler için GitHub Releases sayfasını açın.">
           This site build could not verify current release assets. Use GitHub Releases to view published downloads.
         </p>
         <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary">
@@ -73,8 +75,8 @@ const hasReleaseMetadata = release.state === 'published';
       </div>}
 
       {checksumAsset && <div class="verification-guide-box">
-        <h3 class="guide-title">How to Verify Download Hashes</h3>
-        <p class="guide-desc">
+        <h3 class="guide-title" data-i18n data-en="How to Verify Download Hashes" data-tr="İndirme sağlama değerlerini doğrulama">How to Verify Download Hashes</h3>
+        <p class="guide-desc" data-i18n data-en="You can verify the cryptographic hash of your downloaded file using Windows PowerShell:" data-tr="İndirdiğiniz dosyanın kriptografik sağlama değerini Windows PowerShell ile doğrulayabilirsiniz:">
           You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
         </p>
         <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64-vX.Y.Z.exe'}</code></pre>
@@ -84,8 +86,8 @@ const hasReleaseMetadata = release.state === 'published';
       </div>}
 
       <div class="signing-policy-note">
-        <h3 class="guide-title">Update authenticity policy</h3>
-        <p class="guide-desc">
+        <h3 class="guide-title" data-i18n data-en="Update authenticity policy" data-tr="Güncelleme doğrulama politikası">Update authenticity policy</h3>
+        <p class="guide-desc" data-i18n data-en="BarePDF verifies the release manifest signature, installer URL, size, SHA-256, and version before launching an update. Windows may still show an unknown-publisher warning." data-tr="BarePDF güncellemeyi başlatmadan önce bildirim imzasını, kurulum URL’sini, boyutu, SHA-256 değerini ve sürümü doğrular. Windows yine de bilinmeyen yayımcı uyarısı gösterebilir.">
           BarePDF verifies the release manifest signature, installer URL, size, SHA-256, and version before launching an update. Windows may still show an unknown-publisher warning.
         </p>
         <a href={`${repository.url}#update-authenticity-policy`} target="_blank" rel="noopener noreferrer">
@@ -101,8 +103,8 @@ const hasReleaseMetadata = release.state === 'published';
 
       <div class="all-releases-banner">
         <div>
-          <h4 class="banner-heading">Need Older Releases or Raw Assets?</h4>
-          <p class="banner-sub">View complete tag history, source archives, and assets directly on GitHub Releases.</p>
+          <h4 class="banner-heading" data-i18n data-en="Need Older Releases or Raw Assets?" data-tr="Eski sürümler veya ham dosyalar mı gerekli?">Need Older Releases or Raw Assets?</h4>
+          <p class="banner-sub" data-i18n data-en="View complete tag history, source archives, and assets directly on GitHub Releases." data-tr="Etiket geçmişini, kaynak arşivlerini ve dosyaları doğrudan GitHub Releases’te görüntüleyin.">View complete tag history, source archives, and assets directly on GitHub Releases.</p>
         </div>
         <a href={`${repository.url}/releases`} target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
           View All GitHub Releases ↗

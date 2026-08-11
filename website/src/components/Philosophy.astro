@@ -2,19 +2,27 @@
 const points = [
   {
     title: 'Zero Telemetry & Tracking',
-    description: 'No background tracking, analytics beacons, or phone-home requests. Your document reading activity is private.'
+    trTitle: 'Sıfır telemetri ve takip',
+    description: 'No background tracking, analytics beacons, or phone-home requests. Your document reading activity is private.',
+    trDescription: 'Arka plan takibi, analitik sinyali veya eve çağrı yok. Belgelerinizi nasıl okuduğunuz size ait.'
   },
   {
     title: 'No User Accounts Required',
-    description: 'No email signups, paywalls, trial countdowns, or cloud subscription prompts. Download and open your PDFs.'
+    trTitle: 'Kullanıcı hesabı gerekmez',
+    description: 'No email signups, paywalls, trial countdowns, or cloud subscription prompts. Download and open your PDFs.',
+    trDescription: 'E-posta kaydı, ödeme duvarı, deneme sayacı veya bulut aboneliği yok. İndirin ve PDF’inizi açın.'
   },
   {
     title: 'No AI Clutter or Ads',
-    description: 'Focused strictly on fast PDF reading. Free of intrusive AI summarize popups, advertisements, or sponsored sidebars.'
+    trTitle: 'Yapay zekâ kalabalığı ve reklam yok',
+    description: 'Focused strictly on fast PDF reading. Free of intrusive AI summarize popups, advertisements, or sponsored sidebars.',
+    trDescription: 'Yalnızca hızlı PDF okumaya odaklanır. Zorlayıcı özet pencereleri, reklamlar ve sponsorlu kenar çubukları yok.'
   },
   {
     title: '100% Offline & Local Operation',
-    description: 'Your documents never leave your computer. PDF parsing, bitmap rendering, and search happen locally.'
+    trTitle: '%100 çevrimdışı ve yerel çalışma',
+    description: 'Your documents never leave your computer. PDF parsing, bitmap rendering, and search happen locally.',
+    trDescription: 'Belgeleriniz bilgisayarınızdan çıkmaz. PDF ayrıştırma, görüntüleme ve arama yerel olarak yapılır.'
   }
 ];
 ---
@@ -23,8 +31,8 @@ const points = [
   <div class="container">
     <div class="philosophy-box">
       <div class="philosophy-header">
-        <h2 class="philosophy-title">Private & Minimalist by Principle</h2>
-        <p class="philosophy-subtitle">
+        <h2 class="philosophy-title" data-i18n data-en="Private & Minimalist by Principle" data-tr="İlke olarak özel ve yalın">Private & Minimalist by Principle</h2>
+        <p class="philosophy-subtitle" data-i18n data-en="BarePDF is built around a clear open-source philosophy: software should respect user privacy and system resources." data-tr="BarePDF şu açık kaynak ilkesine dayanır: yazılım, kullanıcının gizliliğine ve sistem kaynaklarına saygı göstermelidir.">
           BarePDF is built around a clear open-source philosophy: software should respect user privacy and system resources.
         </p>
       </div>
@@ -38,8 +46,8 @@ const points = [
               </svg>
             </div>
             <div>
-              <h3 class="item-title">{item.title}</h3>
-              <p class="item-desc">{item.description}</p>
+              <h3 class="item-title" data-i18n data-en={item.title} data-tr={item.trTitle}>{item.title}</h3>
+              <p class="item-desc" data-i18n data-en={item.description} data-tr={item.trDescription}>{item.description}</p>
             </div>
           </div>
         ))}

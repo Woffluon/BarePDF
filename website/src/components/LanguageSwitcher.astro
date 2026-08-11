@@ -1,0 +1,69 @@
+<div class="language-switcher">
+  <label for="site-language" class="sr-only" data-i18n data-en="Language" data-tr="Dil">Language</label>
+  <select id="site-language" aria-label="Language">
+    <option value="en">English</option>
+    <option value="tr">Türkçe</option>
+  </select>
+</div>
+
+<style>
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .language-switcher select {
+    appearance: none;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    padding: 0.4rem 1.8rem 0.4rem 0.6rem;
+    font: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+  }
+
+  .language-switcher select:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+</style>
+
+<script is:inline>
+  (() => {
+    const storageKey = 'barepdf-locale';
+    const selector = document.getElementById('site-language');
+    const locale = localStorage.getItem(storageKey) === 'tr' ? 'tr' : 'en';
+
+    function applyLocale(nextLocale) {
+      const next = nextLocale === 'tr' ? 'tr' : 'en';
+      document.documentElement.lang = next;
+      document.documentElement.dataset.locale = next;
+      document.querySelectorAll('[data-i18n]').forEach((element) => {
+        const value = element.getAttribute(`data-${next}`);
+        if (value !== null) element.textContent = value;
+      });
+      if (selector) selector.value = next;
+      selector?.setAttribute('aria-label', next === 'tr' ? 'Dil' : 'Language');
+      localStorage.setItem(storageKey, next);
+    }
+
+    const init = () => {
+      applyLocale(locale);
+      selector?.addEventListener('change', () => applyLocale(selector.value));
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init, { once: true });
+    } else {
+      init();
+    }
+  })();
+</script>

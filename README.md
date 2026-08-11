@@ -20,6 +20,8 @@
   [Changelog](https://woffluon.github.io/BarePDF/changelog/) ·
   [Report a bug](https://github.com/Woffluon/BarePDF/issues/new) ·
   [Contribute](#contributing)
+
+  [English](README.md) · [Türkçe](README.tr.md)
 </div>
 
 ---

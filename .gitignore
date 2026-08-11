@@ -60,6 +60,7 @@ $RECYCLE.BIN/
 # IDE & Editor Configurations
 # ------------------------------------------
 # Visual Studio Code
+/analizler/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

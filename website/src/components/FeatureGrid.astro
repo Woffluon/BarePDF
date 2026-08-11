@@ -2,32 +2,44 @@
 const features = [
   {
     title: 'Low Overhead',
+    trTitle: 'Düşük kaynak kullanımı',
     description: 'Demand-driven work and byte-bounded caches keep settled idle CPU usage negligible and memory predictable.',
+    trDescription: 'İhtiyaca göre çalışan işler ve byte bütçeli önbellekler, boşta CPU kullanımını düşük ve belleği öngörülebilir tutar.',
     icon: `<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>`
   },
   {
     title: 'Demand-Driven Rendering',
+    trTitle: 'İhtiyaca göre işleme',
     description: 'Separate byte-budgeted raw, page, and thumbnail caches plus generation cancellation prevent stale work from piling up.',
+    trDescription: 'Ham görüntü, sayfa ve küçük resim önbellekleri ile nesil iptali, eski işlerin birikmesini önler.',
     icon: `<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>`
   },
   {
     title: 'Google PDFium Engine',
+    trTitle: 'Google PDFium motoru',
     description: 'Industry-standard rendering fidelity, text extraction, font metric parsing, and security compliance.',
+    trDescription: 'Endüstri standardında görüntüleme, metin çıkarma, yazı tipi ölçümleme ve güvenlik uyumluluğu.',
     icon: `<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>`
   },
   {
     title: 'Modern Slint Desktop UX',
+    trTitle: 'Modern Slint masaüstü deneyimi',
     description: 'Native dark and light theme integration, clean high-DPI crisp vector controls, and responsive toolbars.',
+    trDescription: 'Yerel açık/koyu tema, yüksek DPI için keskin vektör kontrolleri ve uyarlanabilir araç çubukları.',
     icon: `<path d="M12 2v20M2 12h20"></path>`
   },
   {
     title: 'Flexible Viewing Modes',
+    trTitle: 'Esnek okuma modları',
     description: 'Continuous vertical scrolling and focused Single Page reading, with Full Screen (F11) and Presentation (F5).',
+    trDescription: 'Sürekli dikey kaydırma veya odaklı tek sayfa okuma; F11 tam ekran ve F5 sunum modu.',
     icon: `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>`
   },
   {
     title: 'Native Windows Integration',
+    trTitle: 'Yerel Windows entegrasyonu',
     description: 'Clean setup installer or zero-install portable ZIP. Registers safely in Windows Default Apps settings without registry hacks.',
+    trDescription: 'Temiz kurulum paketi veya kurulum gerektirmeyen ZIP. Kayıt defteri hileleri olmadan Windows varsayılan uygulamalarına güvenle kaydolur.',
     icon: `<path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>`
   }
 ];
@@ -36,8 +48,8 @@ const features = [
 <section class="features-section">
   <div class="container">
     <div class="section-header">
-      <h2 class="section-title">Engineered for Fast, Focused Reading</h2>
-      <p class="section-subtitle">
+      <h2 class="section-title" data-i18n data-en="Engineered for Fast, Focused Reading" data-tr="Hızlı ve odaklı okuma için tasarlandı">Engineered for Fast, Focused Reading</h2>
+      <p class="section-subtitle" data-i18n data-en="Built from the ground up in Rust for performance, stability, and minimalist desktop usability." data-tr="Performans, kararlılık ve yalın masaüstü kullanımı için baştan sona Rust ile geliştirildi.">
         Built from the ground up in Rust for performance, stability, and minimalist desktop usability.
       </p>
     </div>
@@ -48,8 +60,8 @@ const features = [
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={f.icon}></svg>
           </div>
-          <h3 class="feature-title">{f.title}</h3>
-          <p class="feature-desc">{f.description}</p>
+          <h3 class="feature-title" data-i18n data-en={f.title} data-tr={f.trTitle}>{f.title}</h3>
+          <p class="feature-desc" data-i18n data-en={f.description} data-tr={f.trDescription}>{f.description}</p>
         </div>
       ))}
     </div>

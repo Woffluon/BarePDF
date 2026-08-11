@@ -11,6 +11,16 @@ interface Props {
 }
 
 const { asset, title, description, badge, iconType } = Astro.props;
+const localizedTitle = {
+  'Windows Setup Installer': 'Windows kurulum paketi',
+  'Portable ZIP Package': 'Taşınabilir ZIP paketi',
+  'SHA-256 Checksums': 'SHA-256 sağlama değerleri',
+}[title] ?? title;
+const localizedDescription = {
+  'Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without admin rights.': 'Masaüstü kurulumu için önerilir. BarePDF’i yönetici izni olmadan Windows Birlikte Aç ve Varsayılan Uygulamalar’a kaydeder.',
+  'Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or installation.': 'Kurulum gerektirmeyen arşiv. Her yere çıkarıp kayıt defterini değiştirmeden BarePDF.exe’yi çalıştırın.',
+  'Official SHA256SUMS.txt manifest file to verify cryptographic integrity of release binaries.': 'Sürüm dosyalarının kriptografik bütünlüğünü doğrulamak için resmi SHA256SUMS.txt bildirimi.',
+}[description] ?? description;
 ---
 
 <div class="download-card">
@@ -39,10 +49,10 @@ const { asset, title, description, badge, iconType } = Astro.props;
     
     <div>
       <div class="title-row">
-        <h3 class="card-title">{title}</h3>
-        {badge && <span class="badge">{badge}</span>}
+        <h3 class="card-title" data-i18n data-en={title} data-tr={localizedTitle}>{title}</h3>
+        {badge && <span class="badge" data-i18n data-en={badge} data-tr={badge === 'Recommended' ? 'Önerilen' : badge === 'Portable' ? 'Taşınabilir' : 'Doğrulama'}>{badge}</span>}
       </div>
-      <p class="card-desc">{description}</p>
+      <p class="card-desc" data-i18n data-en={description} data-tr={localizedDescription}>{description}</p>
     </div>
   </div>
 
@@ -53,7 +63,7 @@ const { asset, title, description, badge, iconType } = Astro.props;
     </div>
 
     <a href={asset.downloadUrl} class="btn btn-primary btn-download">
-      <span>Download</span>
+      <span data-i18n data-en="Download" data-tr="İndir">Download</span>
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="12" y1="5" x2="12" y2="19"></line>
         <polyline points="19 12 12 19 5 12"></polyline>
