@@ -54,6 +54,13 @@ $VersionedInstaller = "BarePDF-Setup-x64-v$Version.exe"
 $VersionedPortable = "BarePDF-Portable-x64-v$Version.zip"
 $VersionedChecksums = "BarePDF-v$Version-SHA256SUMS.txt"
 $Required = @($VersionedInstaller, $VersionedPortable, $VersionedChecksums, "latest.json", "latest.json.sig")
+$UsesCanonicalAssets = [version]$Version -ge [version]"1.1.2"
+if (-not $UsesCanonicalAssets) {
+    $AliasInstaller = "BarePDF-Setup-x64.exe"
+    $AliasPortable = "BarePDF-Portable-x64.zip"
+    $AliasChecksums = "BarePDF-SHA256SUMS.txt"
+    $Required += @($AliasInstaller, $AliasPortable, $AliasChecksums)
+}
 $Assets = @($Release.assets)
 $Names = @($Assets | ForEach-Object { $_.name })
 $Missing = @($Required | Where-Object { $_ -notin $Names })
@@ -96,6 +103,14 @@ try {
     }
 } finally { $Client.Dispose() }
 
+if (-not $UsesCanonicalAssets) {
+    foreach ($Pair in @(@($VersionedInstaller, $AliasInstaller), @($VersionedPortable, $AliasPortable))) {
+        if ($BytesByName[$Pair[0]].Length -ne $BytesByName[$Pair[1]].Length -or $HashByName[$Pair[0]] -cne $HashByName[$Pair[1]]) {
+            throw "Legacy stable alias does not match versioned asset $($Pair[0])."
+        }
+    }
+}
+
 function Read-ChecksumMap([byte[]]$Bytes, [string]$Name) {
     $Map = @{}
     foreach ($Line in ([Text.Encoding]::UTF8.GetString($Bytes) -split '\r?\n' | Where-Object { $_ })) {
@@ -109,6 +124,12 @@ function Read-ChecksumMap([byte[]]$Bytes, [string]$Name) {
 $VersionedMap = Read-ChecksumMap $BytesByName[$VersionedChecksums] $VersionedChecksums
 if ($VersionedMap.Count -ne 2 -or $VersionedMap[$VersionedInstaller] -cne $HashByName[$VersionedInstaller] -or $VersionedMap[$VersionedPortable] -cne $HashByName[$VersionedPortable]) {
     throw "Versioned checksum manifest does not match release assets."
+}
+if (-not $UsesCanonicalAssets) {
+    $AliasMap = Read-ChecksumMap $BytesByName[$AliasChecksums] $AliasChecksums
+    if ($AliasMap.Count -ne 2 -or $AliasMap[$AliasInstaller] -cne $HashByName[$AliasInstaller] -or $AliasMap[$AliasPortable] -cne $HashByName[$AliasPortable]) {
+        throw "Legacy stable checksum manifest does not match release assets."
+    }
 }
 
 $Manifest = [Text.Encoding]::UTF8.GetString($BytesByName["latest.json"]) | ConvertFrom-Json
