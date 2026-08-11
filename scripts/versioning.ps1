@@ -69,11 +69,19 @@ function Assert-ReleaseBaseContract {
     }
 }
 
-function Select-LatestUnreleasedVersion {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates)
+function Get-LatestReleaseSelection {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates,
+        [Parameter(Mandatory)][string]$TargetSha
+    )
 
     if ($Candidates.Count -eq 0) { return }
-    return $Candidates[-1]
+    $Latest = $Candidates[-1]
+    return [pscustomobject]@{
+        sha = $TargetSha
+        version = $Latest.version
+        tag = $Latest.tag
+    }
 }
 
 function Set-ProductVersionInToml {

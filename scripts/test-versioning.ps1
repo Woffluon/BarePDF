@@ -44,8 +44,10 @@ $ReleaseCandidates = @(
     [pscustomobject]@{ version = "1.1.0"; tag = "v1.1.0" },
     [pscustomobject]@{ version = "1.1.1"; tag = "v1.1.1" }
 )
-Assert-Equal "1.1.1" (Select-LatestUnreleasedVersion -Candidates $ReleaseCandidates).version "release backlog compaction"
-Assert-Equal 0 @(Select-LatestUnreleasedVersion -Candidates @()).Count "empty release backlog"
+$ReleaseSelection = Get-LatestReleaseSelection -Candidates $ReleaseCandidates -TargetSha "tested-main-sha"
+Assert-Equal "1.1.1" $ReleaseSelection.version "release backlog compaction"
+Assert-Equal "tested-main-sha" $ReleaseSelection.sha "release target"
+Assert-Equal 0 @(Get-LatestReleaseSelection -Candidates @() -TargetSha "tested-main-sha").Count "empty release backlog"
 
 $PreparePath = Join-Path $PSScriptRoot "prepare-version.ps1"
 $TestRoot = Join-Path ([IO.Path]::GetTempPath()) ("barepdf-versioning-" + [Guid]::NewGuid().ToString("N"))

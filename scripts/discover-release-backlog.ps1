@@ -75,7 +75,7 @@ $Candidates = @($History | Where-Object {
 } | ForEach-Object {
     [ordered]@{ sha = $_.sha; version = $_.version; tag = $_.tag }
 })
-$Items = @(Select-LatestUnreleasedVersion -Candidates $Candidates)
+$Items = @(Get-LatestReleaseSelection -Candidates $Candidates -TargetSha $Target)
 
 $Json = ConvertTo-Json -InputObject @($Items) -Compress
 if ($env:GITHUB_OUTPUT) {
