@@ -83,6 +83,16 @@ const hasReleaseMetadata = release.state === 'published';
         </p>
       </div>}
 
+      <div class="signing-policy-note">
+        <h3 class="guide-title">Code signing policy</h3>
+        <p class="guide-desc">
+          Stable releases must carry a trusted, timestamped Authenticode signature. Unsigned builds are not published as stable releases.
+        </p>
+        <a href={`${repository.url}#code-signing-policy`} target="_blank" rel="noopener noreferrer">
+          Read the Code signing policy ↗
+        </a>
+      </div>
+
       <div class="all-releases-banner">
         <div>
           <h4 class="banner-heading">Need Older Releases or Raw Assets?</h4>
@@ -148,6 +158,10 @@ const hasReleaseMetadata = release.state === 'published';
     border: 1px solid var(--color-border);
     border-radius: var(--radius-xl);
     padding: 2rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .signing-policy-note {
     margin-bottom: 2.5rem;
   }
 

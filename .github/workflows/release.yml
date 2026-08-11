@@ -292,7 +292,10 @@ jobs:
         with:
           tag_name: ${{ matrix.release.tag }}
           name: BarePDF ${{ matrix.release.tag }}
-          body: ${{ env.COMMIT_MSG }}
+          body: |
+            ${{ env.COMMIT_MSG }}
+
+            Code signing policy: https://github.com/Woffluon/BarePDF#code-signing-policy
           target_commitish: ${{ matrix.release.sha }}
           files: target/release/artifacts/*
           generate_release_notes: false
