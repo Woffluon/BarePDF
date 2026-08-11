@@ -1,9 +1,15 @@
-<div class="language-switcher">
-  <label for="site-language" class="sr-only" data-i18n data-en="Language" data-tr="Dil">Language</label>
-  <select id="site-language" aria-label="Language">
-    <option value="en">English</option>
-    <option value="tr">Türkçe</option>
-  </select>
+<div class="language-switcher" data-language-switcher>
+  <span class="language-label" data-i18n data-en="Language" data-tr="Dil">Language</span>
+  <div class="language-control" role="group" aria-label="Language">
+    <button type="button" class="language-option active" data-locale-option="en" aria-pressed="true" title="English">
+      <span aria-hidden="true">EN</span>
+      <span class="sr-only">English</span>
+    </button>
+    <button type="button" class="language-option" data-locale-option="tr" aria-pressed="false" title="Türkçe">
+      <span aria-hidden="true">TR</span>
+      <span class="sr-only">Türkçe</span>
+    </button>
+  </div>
 </div>
 
 <style>
@@ -19,28 +25,82 @@
     border: 0;
   }
 
-  .language-switcher select {
-    appearance: none;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-    color: var(--color-text-muted);
-    padding: 0.4rem 1.8rem 0.4rem 0.6rem;
-    font: inherit;
-    font-size: 0.8125rem;
-    cursor: pointer;
+  .language-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
   }
 
-  .language-switcher select:focus-visible {
+  .language-label {
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .language-control {
+    display: inline-flex;
+    gap: 0.125rem;
+    padding: 0.1875rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-subtle);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  .language-option {
+    min-width: 2.15rem;
+    height: 1.7rem;
+    padding: 0 0.35rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+  }
+
+  .language-option:hover {
+    color: var(--color-text);
+  }
+
+  .language-option:active {
+    transform: scale(0.96);
+  }
+
+  .language-option.active {
+    border-color: var(--color-accent-border);
+    background: var(--color-surface);
+    color: var(--color-accent-hover);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .language-option:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
+  }
+
+  @media (max-width: 768px) {
+    .language-label {
+      display: none;
+    }
   }
 </style>
 
 <script is:inline>
   (() => {
     const storageKey = 'barepdf-locale';
-    const selector = document.getElementById('site-language');
+    const switcher = document.querySelector('[data-language-switcher]');
+    const options = switcher?.querySelectorAll('[data-locale-option]') ?? [];
     const locale = localStorage.getItem(storageKey) === 'tr' ? 'tr' : 'en';
 
     function applyLocale(nextLocale) {
@@ -51,14 +111,20 @@
         const value = element.getAttribute(`data-${next}`);
         if (value !== null) element.textContent = value;
       });
-      if (selector) selector.value = next;
-      selector?.setAttribute('aria-label', next === 'tr' ? 'Dil' : 'Language');
+      switcher?.querySelector('[role="group"]')?.setAttribute('aria-label', next === 'tr' ? 'Dil' : 'Language');
+      options.forEach((option) => {
+        const isActive = option.getAttribute('data-locale-option') === next;
+        option.classList.toggle('active', isActive);
+        option.setAttribute('aria-pressed', String(isActive));
+      });
       localStorage.setItem(storageKey, next);
     }
 
     const init = () => {
       applyLocale(locale);
-      selector?.addEventListener('change', () => applyLocale(selector.value));
+      options.forEach((option) => {
+        option.addEventListener('click', () => applyLocale(option.getAttribute('data-locale-option') ?? 'en'));
+      });
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', init, { once: true });

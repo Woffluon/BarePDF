@@ -23,7 +23,8 @@ const navLinks = [
       <span class="brand-name">BarePDF</span>
     </a>
 
-    <nav class="nav-desktop" aria-label="Main Navigation">
+    <div class="header-tools">
+      <nav class="nav-desktop" aria-label="Main Navigation">
       {navLinks.map((link) => {
         const isActive = currentPath.startsWith(link.href);
         return (
@@ -51,9 +52,10 @@ const navLinks = [
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </a>
-    </nav>
+      </nav>
 
-    <LanguageSwitcher />
+      <LanguageSwitcher />
+    </div>
 
     <div class="mobile-actions">
       <button id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle navigation menu" aria-expanded="false">
@@ -95,6 +97,12 @@ const navLinks = [
     align-items: center;
     justify-content: space-between;
     height: 64px;
+  }
+
+  .header-tools {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
   }
 
   .brand-link {
