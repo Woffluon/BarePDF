@@ -28,7 +28,7 @@ The release pipeline executes in the following sequence:
 
 ## GitHub Actions Release Workflow
 
-The `.github/workflows/release.yml` workflow starts after a successful `CI` push run on `main`, or through a manual dispatch. `RELEASE_AUTOMATION_ENABLED=true` is the fail-closed gate; the Ed25519 manifest signing key must match the public key pinned in the repository before release discovery begins.
+The `.github/workflows/release.yml` workflow starts automatically after a successful `CI` push run on `main`, or through a manual dispatch. The Ed25519 manifest signing key must match the public key pinned in the repository before release discovery begins; a missing or mismatched key fails closed.
 
 Discovery validates every first-parent commit since the latest stable tag, then publishes only the newest unreleased product version. Superseded intermediate versions are intentionally skipped instead of shipping obsolete binaries. An existing matching release is accepted idempotently; conflicting or incomplete releases fail. After publication, that stable version becomes GitHub's latest release and the Pages workflow is explicitly dispatched.
 

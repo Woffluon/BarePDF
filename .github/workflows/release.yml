@@ -28,24 +28,19 @@ jobs:
       - name: Evaluate release gate
         id: gate
         env:
-          AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
           EVENT_NAME: ${{ github.event_name }}
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
           CI_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           enabled=false
-          reason="Release automation is disabled. Set RELEASE_AUTOMATION_ENABLED=true after the update signing key is configured."
-          if [[ "$AUTOMATION_ENABLED" == "true" ]]; then
-            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-              enabled=true
-              reason="Manual release requested."
-            elif [[ "$CI_CONCLUSION" == "success" && "$CI_BRANCH" == "main" && "$CI_EVENT" == "push" ]]; then
-              enabled=true
-              reason="Successful main CI run is eligible for release discovery."
-            else
-              reason="CI run is not a successful push on main; release skipped."
-            fi
+          reason="CI run is not a successful push on main; release skipped."
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            enabled=true
+            reason="Manual release requested."
+          elif [[ "$CI_CONCLUSION" == "success" && "$CI_BRANCH" == "main" && "$CI_EVENT" == "push" ]]; then
+            enabled=true
+            reason="Successful main CI run is eligible for release discovery."
           fi
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
           echo "### Release gate" >> "$GITHUB_STEP_SUMMARY"
