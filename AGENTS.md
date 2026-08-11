@@ -79,13 +79,13 @@ powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact
 
 ## 7. Release and Supply-Chain Security
 
-- Stable Windows releases MUST be Authenticode-signed and timestamped. Missing signing material must fail closed.
-- Never print, persist, commit, upload, or echo certificates, passwords, tokens, signing keys, or secret values.
+- Stable Windows releases MUST include an Ed25519-signed update manifest. Missing signing material must fail closed. Authenticode is optional and Windows may show an unknown-publisher warning.
+- Never print, persist in the repository, commit, publish as an artifact, or echo passwords, tokens, signing keys, or secret values. Release signing keys belong only in the repository's encrypted Actions secrets.
 - Third-party native binaries must come from pinned HTTPS sources and pass the repository checksum allowlist before staging.
 - GitHub Actions must use least-privilege permissions and pin third-party actions by full commit SHA.
 - Release publication must be idempotent: an existing tag is accepted only when it resolves to the same commit; conflicting tags/releases fail.
 - Never overwrite assets on an older stable release. Every product version gets a new immutable tag and release.
-- Hash checks do not replace signature verification. Update installers require SHA-256, trusted Authenticode validation, and the expected signer identity.
+- Hash checks do not replace signature verification. Update installers require a valid manifest signature from the public key pinned in the application, exact SHA-256/size/version matching, and an approved immutable release URL.
 
 ## 8. Updater and Privacy Rules
 

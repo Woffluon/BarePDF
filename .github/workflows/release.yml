@@ -35,7 +35,7 @@ jobs:
           CI_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           enabled=false
-          reason="Release automation is disabled. Set RELEASE_AUTOMATION_ENABLED=true after signing secrets are configured."
+          reason="Release automation is disabled. Set RELEASE_AUTOMATION_ENABLED=true after the update signing key is configured."
           if [[ "$AUTOMATION_ENABLED" == "true" ]]; then
             if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
               enabled=true
@@ -52,7 +52,7 @@ jobs:
           echo "$reason" >> "$GITHUB_STEP_SUMMARY"
 
   preflight:
-    name: Signing Preflight
+    name: Update Signing Preflight
     needs: gate
     if: needs.gate.outputs.enabled == 'true'
     runs-on: windows-latest
@@ -79,33 +79,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Release target must be reachable from main: $Target" }
           "sha=$Target" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Verify signing configuration
+      - name: Verify update signing key
         shell: powershell
         env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
-          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
+          UPDATE_MANIFEST_PRIVATE_KEY_BASE64: ${{ secrets.UPDATE_MANIFEST_PRIVATE_KEY_BASE64 }}
         run: |
-          foreach ($Name in "WINDOWS_SIGNING_CERTIFICATE_BASE64", "WINDOWS_SIGNING_CERTIFICATE_PASSWORD", "WINDOWS_SIGNING_TIMESTAMP_URL", "WINDOWS_SIGNING_CERTIFICATE_SHA256") {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))) {
-              throw "Missing required release signing configuration: $Name"
-            }
+          if ([string]::IsNullOrWhiteSpace($env:UPDATE_MANIFEST_PRIVATE_KEY_BASE64)) {
+            throw "Missing required release signing configuration: UPDATE_MANIFEST_PRIVATE_KEY_BASE64"
           }
-          if (-not [Uri]::IsWellFormedUriString($env:WINDOWS_SIGNING_TIMESTAMP_URL, [UriKind]::Absolute) -or -not $env:WINDOWS_SIGNING_TIMESTAMP_URL.StartsWith("https://")) {
-            throw "WINDOWS_SIGNING_TIMESTAMP_URL must be an absolute HTTPS URL."
-          }
-          $Bytes = [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
-          $Flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
-          $Certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Bytes, $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD, $Flags)
+          $PrivateKeyPath = Join-Path $env:RUNNER_TEMP "barepdf-update-signing.pem"
           try {
-            $Hasher = [Security.Cryptography.SHA256]::Create()
-            try { $Actual = ([BitConverter]::ToString($Hasher.ComputeHash($Certificate.RawData))).Replace("-", "") } finally { $Hasher.Dispose() }
-            $Expected = $env:WINDOWS_SIGNING_CERTIFICATE_SHA256.Replace(":", "").Replace(" ", "").ToUpperInvariant()
-            if ($Actual -cne $Expected) { throw "Signing certificate fingerprint does not match WINDOWS_SIGNING_CERTIFICATE_SHA256." }
-            if (-not $Certificate.HasPrivateKey) { throw "Signing certificate does not contain a private key." }
+            [IO.File]::WriteAllBytes($PrivateKeyPath, [Convert]::FromBase64String($env:UPDATE_MANIFEST_PRIVATE_KEY_BASE64))
+            powershell -File packaging/windows/scripts/update-manifest-signature.ps1 -Action CheckKey -PrivateKeyPath $PrivateKeyPath
           } finally {
-            $Certificate.Dispose()
+            Remove-Item -LiteralPath $PrivateKeyPath -Force -ErrorAction SilentlyContinue
           }
 
   discover:
@@ -217,31 +204,7 @@ jobs:
       - name: Stage release artifacts
         if: steps.state.outputs.needed == 'true'
         shell: powershell
-        env:
-          BAREPDF_UPDATE_SIGNER_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
         run: powershell -File packaging/windows/scripts/stage-release.ps1
-
-      - name: Sign staged native binaries
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
-        run: |
-          $CertificatePath = Join-Path $env:RUNNER_TEMP "barepdf-signing.pfx"
-          try {
-            [IO.File]::WriteAllBytes($CertificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
-            foreach ($Target in "target/release/staged/BarePDF.exe", "target/release/staged/BarePDF.Thumbnail.dll", "target/release/staged/pdfium.dll") {
-              if (-not (Test-Path -LiteralPath $Target)) { throw "Missing signing target: $Target" }
-              & signtool.exe sign /f $CertificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Target
-              if ($LASTEXITCODE -ne 0) { throw "Signing failed: $Target" }
-              & signtool.exe verify /pa $Target
-              if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $Target" }
-            }
-          } finally {
-            Remove-Item -LiteralPath $CertificatePath -Force -ErrorAction SilentlyContinue
-          }
 
       - name: Build portable package and installer
         if: steps.state.outputs.needed == 'true'
@@ -250,40 +213,35 @@ jobs:
           powershell -File packaging/windows/scripts/build-portable.ps1
           powershell -File packaging/windows/scripts/build-installer.ps1
 
-      - name: Sign and verify installer identity
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
-          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
-        run: |
-          $CertificatePath = Join-Path $env:RUNNER_TEMP "barepdf-signing.pfx"
-          try {
-            [IO.File]::WriteAllBytes($CertificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
-            $Installer = Get-Item "target/release/installer/BarePDF-Setup-x64-v${{ matrix.release.version }}.exe"
-            & signtool.exe sign /f $CertificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /tr $env:WINDOWS_SIGNING_TIMESTAMP_URL /td sha256 /fd sha256 $Installer.FullName
-            if ($LASTEXITCODE -ne 0) { throw "Installer signing failed." }
-            & signtool.exe verify /pa $Installer.FullName
-            if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed." }
-            $Signature = Get-AuthenticodeSignature -LiteralPath $Installer.FullName
-            if ($Signature.Status -ne "Valid" -or -not $Signature.SignerCertificate) { throw "Installer Authenticode signature is not valid." }
-            $Hasher = [Security.Cryptography.SHA256]::Create()
-            try { $Actual = ([BitConverter]::ToString($Hasher.ComputeHash($Signature.SignerCertificate.RawData))).Replace("-", "") } finally { $Hasher.Dispose() }
-            $Expected = $env:WINDOWS_SIGNING_CERTIFICATE_SHA256.Replace(":", "").Replace(" ", "").ToUpperInvariant()
-            if ($Actual -cne $Expected) { throw "Installer signer identity does not match the pinned certificate." }
-          } finally {
-            Remove-Item -LiteralPath $CertificatePath -Force -ErrorAction SilentlyContinue
-          }
-
       - name: Validate installer and generate release assets
         if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: |
           powershell -File packaging/windows/scripts/validate-installer.ps1
           powershell -File packaging/windows/scripts/generate-checksums.ps1
-          powershell -File packaging/windows/scripts/test-release-manifest.ps1
+
+      - name: Sign update manifest
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        env:
+          UPDATE_MANIFEST_PRIVATE_KEY_BASE64: ${{ secrets.UPDATE_MANIFEST_PRIVATE_KEY_BASE64 }}
+        run: |
+          $PrivateKeyPath = Join-Path $env:RUNNER_TEMP "barepdf-update-signing.pem"
+          try {
+            [IO.File]::WriteAllBytes($PrivateKeyPath, [Convert]::FromBase64String($env:UPDATE_MANIFEST_PRIVATE_KEY_BASE64))
+            powershell -File packaging/windows/scripts/update-manifest-signature.ps1 `
+              -Action Sign `
+              -PrivateKeyPath $PrivateKeyPath `
+              -ManifestPath target/release/artifacts/latest.json
+          } finally {
+            Remove-Item -LiteralPath $PrivateKeyPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Validate signed release manifest
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        run: |
+          powershell -File packaging/windows/scripts/test-release-manifest.ps1 -RequireSignature
           "COMMIT_MSG=$(git log -1 --format='%s')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Publish immutable GitHub release
@@ -295,7 +253,7 @@ jobs:
           body: |
             ${{ env.COMMIT_MSG }}
 
-            Code signing policy: https://github.com/Woffluon/BarePDF#code-signing-policy
+            Update authenticity policy: https://github.com/Woffluon/BarePDF#update-authenticity-policy
           target_commitish: ${{ matrix.release.sha }}
           files: target/release/artifacts/*
           generate_release_notes: false

@@ -9,9 +9,10 @@ $Version = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select
 if (-not $Version) { throw "barepdf package version not found" }
 
 $ArtifactsDir = Join-Path $RepoRoot "target\release\artifacts"
-if (-not (Test-Path $ArtifactsDir)) {
-    New-Item -ItemType Directory -Path $ArtifactsDir | Out-Null
+if (Test-Path -LiteralPath $ArtifactsDir) {
+    Remove-Item -LiteralPath $ArtifactsDir -Recurse -Force
 }
+New-Item -ItemType Directory -Path $ArtifactsDir | Out-Null
 
 $InstallerPath = Join-Path $RepoRoot "target\release\installer\BarePDF-Setup-x64-v$Version.exe"
 $PortablePath = Join-Path $RepoRoot "target\release\portable\BarePDF-Portable-x64-v$Version.zip"

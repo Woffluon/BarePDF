@@ -1,5 +1,4 @@
 fn main() {
-    println!("cargo:rerun-if-env-changed=BAREPDF_UPDATE_SIGNER_SHA256");
     #[cfg(target_os = "windows")]
     {
         let manifest_dir = std::path::PathBuf::from(

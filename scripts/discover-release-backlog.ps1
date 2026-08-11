@@ -66,7 +66,7 @@ if ($Tags.Count -gt 0) {
     }
 }
 
-$Items = @($History | Where-Object {
+$Candidates = @($History | Where-Object {
     if ($_.bump -eq "none") { return $false }
     if (-not $BaseCommit) { return $true }
     & git -C $RepoRoot merge-base --is-ancestor $BaseCommit $_.sha
@@ -75,6 +75,7 @@ $Items = @($History | Where-Object {
 } | ForEach-Object {
     [ordered]@{ sha = $_.sha; version = $_.version; tag = $_.tag }
 })
+$Items = @(Select-LatestUnreleasedVersion -Candidates $Candidates)
 
 $Json = ConvertTo-Json -InputObject @($Items) -Compress
 if ($env:GITHUB_OUTPUT) {
@@ -83,6 +84,6 @@ if ($env:GITHUB_OUTPUT) {
 }
 if ($env:GITHUB_STEP_SUMMARY) {
     "### Release discovery" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-    "Found $($Items.Count) unreleased product version(s) through $Target." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+    "Selected $($Items.Count) release from $($Candidates.Count) validated unreleased product version(s) through $Target." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 }
 if (-not $env:GITHUB_OUTPUT) { $Json }

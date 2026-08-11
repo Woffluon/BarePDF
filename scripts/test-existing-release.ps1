@@ -56,7 +56,7 @@ $VersionedChecksums = "BarePDF-v$Version-SHA256SUMS.txt"
 $AliasInstaller = "BarePDF-Setup-x64.exe"
 $AliasPortable = "BarePDF-Portable-x64.zip"
 $AliasChecksums = "BarePDF-SHA256SUMS.txt"
-$Required = @($VersionedInstaller, $VersionedPortable, $VersionedChecksums, $AliasInstaller, $AliasPortable, $AliasChecksums, "latest.json")
+$Required = @($VersionedInstaller, $VersionedPortable, $VersionedChecksums, $AliasInstaller, $AliasPortable, $AliasChecksums, "latest.json", "latest.json.sig")
 $Assets = @($Release.assets)
 $Names = @($Assets | ForEach-Object { $_.name })
 $Missing = @($Required | Where-Object { $_ -notin $Names })
@@ -129,6 +129,19 @@ if ($Manifest.schemaVersion -ne 1 -or $Manifest.version -cne $Version -or $Manif
 }
 if ($Manifest.installer.url -cne $ExpectedInstallerUrl -or $Manifest.installer.sha256 -cne $HashByName[$VersionedInstaller] -or $Manifest.installer.size -ne $BytesByName[$VersionedInstaller].Length) {
     throw "latest.json installer metadata does not match release assets."
+}
+
+$SignatureDirectory = Join-Path ([IO.Path]::GetTempPath()) ("barepdf-release-signature-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $SignatureDirectory | Out-Null
+try {
+    $ManifestPath = Join-Path $SignatureDirectory "latest.json"
+    $SignaturePath = Join-Path $SignatureDirectory "latest.json.sig"
+    [IO.File]::WriteAllBytes($ManifestPath, $BytesByName["latest.json"])
+    [IO.File]::WriteAllBytes($SignaturePath, $BytesByName["latest.json.sig"])
+    & (Join-Path $RepoRoot "packaging\windows\scripts\update-manifest-signature.ps1") -Action Verify -ManifestPath $ManifestPath -SignaturePath $SignaturePath
+    if ($LASTEXITCODE -ne 0) { throw "Existing release manifest signature is invalid." }
+} finally {
+    Remove-Item -LiteralPath $SignatureDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if (-not $NoOutput -and $env:GITHUB_OUTPUT) { "needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append }

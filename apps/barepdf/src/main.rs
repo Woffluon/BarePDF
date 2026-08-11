@@ -610,11 +610,6 @@ fn wire_callbacks(
             }
             return;
         }
-        if !update::signer_is_configured() {
-            app.update_ui_state = UpdateUiState::Error;
-            render_update_ui(&window, &app);
-            return;
-        }
         app.update_busy = true;
         app.update_ui_state = UpdateUiState::Downloading;
         render_update_ui(&window, &app);
@@ -1135,7 +1130,7 @@ fn start_event_timer(
             }
         }
         while let Ok(event) = update_receiver.try_recv() {
-            handle_update_event(event, &window, &state);
+            handle_update_event(event, &window, &state, &update_sender);
         }
         if Instant::now() >= next_update_due_poll {
             next_update_due_poll = Instant::now() + UPDATE_DUE_POLL_INTERVAL;
@@ -1189,7 +1184,12 @@ fn queue_update_check(
     }
 }
 
-fn handle_update_event(event: UpdateEvent, window: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn handle_update_event(
+    event: UpdateEvent,
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    sender: &std::sync::mpsc::Sender<UpdateCommand>,
+) {
     let mut app = state.borrow_mut();
     app.update_busy = false;
     match event {
@@ -1199,9 +1199,18 @@ fn handle_update_event(event: UpdateEvent, window: &AppWindow, state: &Rc<RefCel
             app.update_ui_state = UpdateUiState::Current;
         }
         UpdateEvent::Available(update) => {
-            app.available_update = Some(update);
+            app.available_update = Some(update.clone());
             app.verified_update = None;
-            app.update_ui_state = UpdateUiState::Available;
+            if is_installed_build() {
+                app.update_busy = true;
+                app.update_ui_state = UpdateUiState::Downloading;
+                if sender.send(UpdateCommand::Download(update)).is_err() {
+                    app.update_busy = false;
+                    app.update_ui_state = UpdateUiState::Error;
+                }
+            } else {
+                app.update_ui_state = UpdateUiState::Available;
+            }
         }
         UpdateEvent::Downloaded { path, update } => {
             app.available_update = Some(update);
@@ -1288,7 +1297,7 @@ fn render_update_ui(window: &AppWindow, app: &AppState) {
                         "updates.action.release"
                     },
                 ),
-                !is_installed_build() || update::signer_is_configured(),
+                true,
             )
         }
     };

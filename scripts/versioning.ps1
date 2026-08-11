@@ -69,6 +69,13 @@ function Assert-ReleaseBaseContract {
     }
 }
 
+function Select-LatestUnreleasedVersion {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates)
+
+    if ($Candidates.Count -eq 0) { return }
+    return $Candidates[-1]
+}
+
 function Set-ProductVersionInToml {
     param(
         [Parameter(Mandatory)][string]$Content,

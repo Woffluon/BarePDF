@@ -1,7 +1,5 @@
-use barepdf_platform_windows::{
-    executable_file_version, launch_installer, normalize_signer_fingerprint,
-    verify_authenticode_signer,
-};
+use barepdf_platform_windows::{executable_file_version, launch_installer};
+use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -16,14 +14,18 @@ use ureq::Agent;
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const METADATA_URL: &str =
     "https://github.com/Woffluon/BarePDF/releases/latest/download/latest.json";
+pub const METADATA_SIGNATURE_URL: &str =
+    "https://github.com/Woffluon/BarePDF/releases/latest/download/latest.json.sig";
 pub const AUTO_CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 const MAX_METADATA_BYTES: u64 = 64 * 1024;
+const MAX_SIGNATURE_BYTES: u64 = 64;
 const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 const INSTALLER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const USER_AGENT: &str = concat!("BarePDF/", env!("CARGO_PKG_VERSION"));
+const UPDATE_PUBLIC_KEY_HEX: &str = include_str!("../../../assets/update-public-key.hex");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateInfo {
@@ -76,11 +78,6 @@ pub fn start_worker() -> (Sender<UpdateCommand>, Receiver<UpdateEvent>) {
     (command_sender, event_receiver)
 }
 
-#[must_use]
-pub fn signer_is_configured() -> bool {
-    expected_signer().is_ok()
-}
-
 fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
     let agent = Agent::config_builder()
         .https_only(true)
@@ -126,13 +123,70 @@ fn check_for_update(agent: &Agent) -> Result<Option<UpdateInfo>, String> {
         RequestTarget::Metadata,
         METADATA_TIMEOUT,
     )?;
-    let json = response
+    let manifest = response
         .body_mut()
         .with_config()
         .limit(MAX_METADATA_BYTES)
-        .read_to_string()
+        .read_to_vec()
         .map_err(|error| format!("Update metadata could not be read: {error}"))?;
-    parse_manifest(&json, CURRENT_VERSION)
+    let mut signature_response = get_with_redirects(
+        agent,
+        METADATA_SIGNATURE_URL,
+        RequestTarget::Metadata,
+        METADATA_TIMEOUT,
+    )?;
+    let signature = signature_response
+        .body_mut()
+        .with_config()
+        .limit(MAX_SIGNATURE_BYTES + 1)
+        .read_to_vec()
+        .map_err(|error| format!("Update signature could not be read: {error}"))?;
+    verify_manifest_signature(&manifest, &signature)?;
+    let json = std::str::from_utf8(&manifest)
+        .map_err(|_| "Update metadata is not valid UTF-8".to_string())?;
+    parse_manifest(json, CURRENT_VERSION)
+}
+
+fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
+    verify_manifest_signature_with_key(manifest, signature, UPDATE_PUBLIC_KEY_HEX)
+}
+
+fn verify_manifest_signature_with_key(
+    manifest: &[u8],
+    signature: &[u8],
+    public_key: &str,
+) -> Result<(), String> {
+    let public_key = decode_public_key(public_key)?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| "Update verification key is invalid".to_string())?;
+    let signature = Signature::from_slice(signature)
+        .map_err(|_| "Update metadata signature is invalid".to_string())?;
+    verifying_key
+        .verify_strict(manifest, &signature)
+        .map_err(|_| "Update metadata signature verification failed".to_string())
+}
+
+fn decode_public_key(value: &str) -> Result<[u8; 32], String> {
+    let value = value.trim().as_bytes();
+    if value.len() != 64 {
+        return Err("Update verification key is invalid".into());
+    }
+    let mut key = [0_u8; 32];
+    for (index, byte) in key.iter_mut().enumerate() {
+        let high = decode_hex(value[index * 2])?;
+        let low = decode_hex(value[index * 2 + 1])?;
+        *byte = (high << 4) | low;
+    }
+    Ok(key)
+}
+
+fn decode_hex(value: u8) -> Result<u8, String> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err("Update verification key is invalid".into()),
+    }
 }
 
 fn parse_manifest(json: &str, current_version: &str) -> Result<Option<UpdateInfo>, String> {
@@ -273,7 +327,11 @@ fn validate_request_url(url: &str, target: RequestTarget<'_>) -> Result<ureq::ht
 }
 
 fn metadata_path_is_approved(path: &str) -> bool {
-    if path == "/Woffluon/BarePDF/releases/latest/download/latest.json" {
+    if matches!(
+        path,
+        "/Woffluon/BarePDF/releases/latest/download/latest.json"
+            | "/Woffluon/BarePDF/releases/latest/download/latest.json.sig"
+    ) {
         return true;
     }
     let Some(remainder) = path.strip_prefix("/Woffluon/BarePDF/releases/download/v") else {
@@ -282,12 +340,12 @@ fn metadata_path_is_approved(path: &str) -> bool {
     let Some((version, filename)) = remainder.split_once('/') else {
         return false;
     };
-    filename == "latest.json" && Version::parse(version).is_ok_and(|version| version.pre.is_empty())
+    matches!(filename, "latest.json" | "latest.json.sig")
+        && Version::parse(version).is_ok_and(|version| version.pre.is_empty())
 }
 
 fn download_update(agent: &Agent, update: &UpdateInfo) -> Result<PathBuf, String> {
     validate_installer_url(&update.installer_url, &update.version)?;
-    let signer = expected_signer()?;
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?;
     let directory = PathBuf::from(local_app_data)
@@ -299,7 +357,7 @@ fn download_update(agent: &Agent, update: &UpdateInfo) -> Result<PathBuf, String
     let (partial_path, partial_file) = create_unique_partial(&directory, &update.version)?;
 
     let result = download_to_partial(agent, update, partial_file).and_then(|()| {
-        verify_download_with_signer(&partial_path, update, &signer)?;
+        verify_download(&partial_path, update)?;
         if final_path.is_file() {
             fs::remove_file(&final_path)
                 .map_err(|error| format!("Could not replace previous update: {error}"))?;
@@ -378,15 +436,6 @@ fn download_to_partial(agent: &Agent, update: &UpdateInfo, mut file: File) -> Re
 }
 
 fn verify_download(path: &Path, update: &UpdateInfo) -> Result<(), String> {
-    let signer = expected_signer()?;
-    verify_download_with_signer(path, update, &signer)
-}
-
-fn verify_download_with_signer(
-    path: &Path,
-    update: &UpdateInfo,
-    signer: &str,
-) -> Result<(), String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Could not inspect downloaded update: {error}"))?;
     if metadata.len() != update.installer_size {
@@ -401,7 +450,6 @@ fn verify_download_with_signer(
     if actual != update.installer_sha256 {
         return Err("Downloaded installer changed after verification".into());
     }
-    verify_authenticode_signer(path, signer).map_err(|error| error.to_string())?;
     let actual_version = executable_file_version(path).map_err(|error| error.to_string())?;
     let expected_version = Version::parse(&update.version)
         .map_err(|error| format!("Invalid release version: {error}"))
@@ -427,16 +475,10 @@ fn expected_file_version(version: &Version) -> Result<[u16; 4], String> {
     ])
 }
 
-fn expected_signer() -> Result<String, String> {
-    normalize_signer_fingerprint(option_env!("BAREPDF_UPDATE_SIGNER_SHA256").unwrap_or_default())
-        .ok_or_else(|| {
-            "Secure updater is unavailable because the publisher identity is not configured".into()
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
 
     fn manifest(version: &str, url_version: &str, hash: &str, size: u64) -> String {
         format!(
@@ -472,6 +514,26 @@ mod tests {
             "1.1.0"
         )
         .is_err());
+    }
+
+    #[test]
+    fn accepts_only_metadata_signed_by_the_pinned_key() {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let public_key = signing_key
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let manifest = b"signed update metadata";
+        let signature = signing_key.sign(manifest).to_bytes();
+
+        assert!(verify_manifest_signature_with_key(manifest, &signature, &public_key).is_ok());
+        assert!(verify_manifest_signature_with_key(b"tampered", &signature, &public_key).is_err());
+        assert!(
+            verify_manifest_signature_with_key(manifest, &signature[..63], &public_key).is_err()
+        );
+        assert!(verify_manifest_signature_with_key(manifest, &signature, "bad").is_err());
     }
 
     #[test]
@@ -522,6 +584,7 @@ mod tests {
     #[test]
     fn requests_accept_only_approved_https_hosts_and_paths() {
         assert!(validate_request_url(METADATA_URL, RequestTarget::Metadata).is_ok());
+        assert!(validate_request_url(METADATA_SIGNATURE_URL, RequestTarget::Metadata).is_ok());
         assert!(validate_request_url(
             "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/latest.json",
             RequestTarget::Metadata

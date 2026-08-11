@@ -40,6 +40,13 @@ foreach ($LegacyTag in "v0.9.0", "v1.0.1", "v2.0.0") {
 }
 Assert-ReleaseBaseContract -Tag "v2.0.0" -HasVersionContract $true
 
+$ReleaseCandidates = @(
+    [pscustomobject]@{ version = "1.1.0"; tag = "v1.1.0" },
+    [pscustomobject]@{ version = "1.1.1"; tag = "v1.1.1" }
+)
+Assert-Equal "1.1.1" (Select-LatestUnreleasedVersion -Candidates $ReleaseCandidates).version "release backlog compaction"
+Assert-Equal 0 @(Select-LatestUnreleasedVersion -Candidates @()).Count "empty release backlog"
+
 $PreparePath = Join-Path $PSScriptRoot "prepare-version.ps1"
 $TestRoot = Join-Path ([IO.Path]::GetTempPath()) ("barepdf-versioning-" + [Guid]::NewGuid().ToString("N"))
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)

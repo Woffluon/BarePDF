@@ -84,12 +84,12 @@ const hasReleaseMetadata = release.state === 'published';
       </div>}
 
       <div class="signing-policy-note">
-        <h3 class="guide-title">Code signing policy</h3>
+        <h3 class="guide-title">Update authenticity policy</h3>
         <p class="guide-desc">
-          Stable releases must carry a trusted, timestamped Authenticode signature. Unsigned builds are not published as stable releases.
+          BarePDF verifies the release manifest signature, installer URL, size, SHA-256, and version before launching an update. Windows may still show an unknown-publisher warning.
         </p>
-        <a href={`${repository.url}#code-signing-policy`} target="_blank" rel="noopener noreferrer">
-          Read the Code signing policy ↗
+        <a href={`${repository.url}#update-authenticity-policy`} target="_blank" rel="noopener noreferrer">
+          Read the update authenticity policy ↗
         </a>
       </div>
 

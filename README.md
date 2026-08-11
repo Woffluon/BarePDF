@@ -34,12 +34,13 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
 # Compare with BarePDF-v<version>-SHA256SUMS.txt from the same GitHub Release
 ```
 
-## Code signing policy
+## Update authenticity policy
 
-BarePDF stable releases require trusted, timestamped Authenticode signatures. Unsigned builds are never published as stable releases.
+BarePDF stable releases include an Ed25519-signed update manifest. The corresponding public key is pinned in the application, while the private key is restricted to the release workflow's encrypted GitHub Actions secret.
 
-- Publisher identity and signing provider must be independently trusted by Windows and configured before release automation is enabled.
-- Release provenance: GitHub Actions builds release artifacts from this repository; signing remains fail-closed.
+- Installers are checked against the signed manifest's immutable GitHub URL, size, SHA-256, and embedded product version before launch.
+- Release automation fails closed when the manifest signing key is unavailable or does not match the pinned public key.
+- The installer is not Authenticode-signed, so Windows may display an unknown-publisher warning.
 - Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Update checks remain disabled until the user explicitly opts in.
 
 ## Architecture Workspace

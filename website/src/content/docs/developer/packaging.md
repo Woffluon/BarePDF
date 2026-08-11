@@ -28,8 +28,8 @@ The release pipeline executes in the following sequence:
 
 ## GitHub Actions Release Workflow
 
-The `.github/workflows/release.yml` workflow starts after a successful `CI` push run on `main`, or through a manual dispatch. `RELEASE_AUTOMATION_ENABLED=true` is the fail-closed gate; signing secrets and the pinned signer fingerprint must pass preflight before release discovery begins.
+The `.github/workflows/release.yml` workflow starts after a successful `CI` push run on `main`, or through a manual dispatch. `RELEASE_AUTOMATION_ENABLED=true` is the fail-closed gate; the Ed25519 manifest signing key must match the public key pinned in the repository before release discovery begins.
 
-Discovery walks the first-parent backlog since the latest stable tag and selects every commit whose Conventional Commit message changes the product version. Eligible commits are validated and published in source order with one immutable `vMAJOR.MINOR.PATCH` release per version. Existing matching releases are accepted idempotently; conflicting or incomplete releases fail. After publishing the backlog, the newest stable version becomes GitHub's latest release and the Pages workflow is explicitly dispatched.
+Discovery validates every first-parent commit since the latest stable tag, then publishes only the newest unreleased product version. Superseded intermediate versions are intentionally skipped instead of shipping obsolete binaries. An existing matching release is accepted idempotently; conflicting or incomplete releases fail. After publication, that stable version becomes GitHub's latest release and the Pages workflow is explicitly dispatched.
 
-Public documentation links to the latest release page until `v1.1.0` has been published with stable alias assets. Switching public links to `releases/latest/download/BarePDF-Setup-x64.exe` and the matching portable/checksum aliases is a separate documentation-only commit after that bootstrap release exists.
+Public documentation links to the latest release page until the first automated release with stable alias assets has been published. Switching public links to `releases/latest/download/BarePDF-Setup-x64.exe` and the matching portable/checksum aliases is a separate documentation-only commit after that bootstrap release exists.

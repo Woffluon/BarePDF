@@ -1,5 +1,6 @@
 param(
-    [string]$ManifestPath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")) "target\release\artifacts\latest.json")
+    [string]$ManifestPath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")) "target\release\artifacts\latest.json"),
+    [switch]$RequireSignature
 )
 
 Set-StrictMode -Version 3.0
@@ -23,6 +24,14 @@ if ($Manifest.installer.sha256 -notmatch '^[a-f0-9]{64}$' -or $Manifest.installe
 }
 if ([string]::IsNullOrWhiteSpace($Manifest.releaseNotes)) {
     throw "latest.json releaseNotes must not be empty"
+}
+
+$SignaturePath = "$ManifestPath.sig"
+if (Test-Path -LiteralPath $SignaturePath) {
+    & (Join-Path $PSScriptRoot "update-manifest-signature.ps1") -Action Verify -ManifestPath $ManifestPath -SignaturePath $SignaturePath
+    if ($LASTEXITCODE -ne 0) { throw "latest.json signature validation failed" }
+} elseif ($RequireSignature) {
+    throw "latest.json.sig is required"
 }
 
 Write-Host "Release manifest validation passed." -ForegroundColor Green
