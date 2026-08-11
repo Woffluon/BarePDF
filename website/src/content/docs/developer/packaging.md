@@ -32,4 +32,4 @@ The `.github/workflows/release.yml` workflow starts automatically after a succes
 
 Discovery validates every first-parent commit since the latest stable tag, selects the newest unreleased product version, and tags the exact `main` snapshot whose CI run triggered publication. Superseded intermediate versions are intentionally skipped instead of shipping obsolete binaries. An existing matching release is accepted idempotently; conflicting or incomplete releases fail. After publication, that stable version becomes GitHub's latest release and the Pages workflow is explicitly dispatched.
 
-Public documentation links to the latest release page until the first automated release with stable alias assets has been published. Switching public links to `releases/latest/download/BarePDF-Setup-x64.exe` and the matching portable/checksum aliases is a separate documentation-only commit after that bootstrap release exists.
+Public documentation uses the stable `releases/latest/download/BarePDF-Setup-x64.exe`, `BarePDF-Portable-x64.zip`, and `BarePDF-SHA256SUMS.txt` aliases published with every release. Version bumps therefore require no repetitive download-link edits.

@@ -17,21 +17,21 @@ It provides the speed and low resource usage of SumatraPDF paired with a clean d
 ## Downloads & Installation
 
 ### Windows Setup Installer
-[Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Setup-x64-v<version>.exe` asset.
+[Download the latest Windows installer](https://github.com/Woffluon/BarePDF/releases/latest/download/BarePDF-Setup-x64.exe).
 - Installs to `%LOCALAPPDATA%\Programs\BarePDF` (no administrator rights required).
 - Registers BarePDF in Windows "Open with" and Default Apps.
 - Offers option during setup to launch Windows Default Apps settings to select BarePDF as your default `.pdf` reader.
 
 ### Portable Package
-[Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Portable-x64-v<version>.zip` asset.
+[Download the latest portable package](https://github.com/Woffluon/BarePDF/releases/latest/download/BarePDF-Portable-x64.zip).
 - Extract anywhere and run `BarePDF.exe` directly.
 - Requires no installation or registry modifications.
 
 ### Verifying Release Checksums
 ```powershell
-$Installer = Get-Item .\BarePDF-Setup-x64-v*.exe
+$Installer = Get-Item .\BarePDF-Setup-x64.exe
 Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
-# Compare with BarePDF-v<version>-SHA256SUMS.txt from the same GitHub Release
+# Compare with BarePDF-SHA256SUMS.txt from the latest GitHub Release
 ```
 
 ## Update authenticity policy

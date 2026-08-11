@@ -31,8 +31,8 @@ This document provides a manual test verification checklist for BarePDF releases
 ## Clean Windows Installation Verification
 
 ### Interactive Setup Test
-1. [Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Setup-x64-v<version>.exe` asset onto a clean Windows 10 or 11 system.
-2. Verify its SHA-256 checksum against `BarePDF-v<version>-SHA256SUMS.txt` from the same release.
+1. [Download the latest Windows installer](https://github.com/Woffluon/BarePDF/releases/latest/download/BarePDF-Setup-x64.exe) onto a clean Windows 10 or 11 system.
+2. Verify its SHA-256 checksum against the latest [`BarePDF-SHA256SUMS.txt`](https://github.com/Woffluon/BarePDF/releases/latest/download/BarePDF-SHA256SUMS.txt).
 3. Launch the downloaded installer as a normal non-administrator user.
 4. Confirm destination defaults to `%LOCALAPPDATA%\Programs\BarePDF`.
 5. On the **Default PDF Reader** page, select *"Yes, open Windows Default Apps settings after installation"*.
@@ -52,7 +52,7 @@ This document provides a manual test verification checklist for BarePDF releases
 
 ## Portable Package Verification
 
-1. [Open the latest GitHub Release](https://github.com/Woffluon/BarePDF/releases/latest) and download its versioned `BarePDF-Portable-x64-v<version>.zip` asset.
+1. [Download the latest portable package](https://github.com/Woffluon/BarePDF/releases/latest/download/BarePDF-Portable-x64.zip).
 2. Extract to desktop or USB drive (`C:\Users\Public\BarePDF-Portable`).
 3. Run `BarePDF.exe` directly without installation.
 4. Verify application runs fully offline without writing installer registry keys.
