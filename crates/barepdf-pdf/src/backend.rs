@@ -21,6 +21,12 @@ impl fmt::Display for InvalidBitmap {
 impl std::error::Error for InvalidBitmap {}
 
 impl RawBitmap {
+    /// Creates an RGBA bitmap whose byte length matches its dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidBitmap`] when either dimension is zero, the dimensions overflow, or the
+    /// pixel buffer is not exactly four bytes per pixel.
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, InvalidBitmap> {
         let expected = usize::try_from(width)
             .ok()
@@ -50,6 +56,11 @@ impl RawBitmap {
     #[must_use]
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (u32, u32, Vec<u8>) {
+        (self.width, self.height, self.pixels)
     }
 }
 
@@ -128,5 +139,15 @@ mod tests {
         assert_eq!(bitmap.width(), 2);
         assert_eq!(bitmap.height(), 1);
         assert_eq!(bitmap.pixels(), &[0; 8]);
+    }
+
+    #[test]
+    fn raw_bitmap_parts_reuse_the_original_pixel_allocation() {
+        let bitmap = RawBitmap::new(2, 1, vec![0; 8]).expect("valid RGBA bitmap");
+        let original_pixels = bitmap.pixels().as_ptr();
+        let (width, height, pixels) = bitmap.into_parts();
+
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(pixels.as_ptr(), original_pixels);
     }
 }

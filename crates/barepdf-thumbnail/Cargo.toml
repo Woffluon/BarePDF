@@ -13,8 +13,7 @@ crate-type = ["cdylib", "rlib"]
 name = "barepdf_thumbnail"
 
 [dependencies]
-barepdf-core = { path = "../barepdf-core" }
-pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+pdfium-render.workspace = true
 windows-core = "0.58"
 windows = { version = "0.58", features = [
     "implement",

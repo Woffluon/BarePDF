@@ -64,6 +64,13 @@ slint::slint! {
         path: string,
     }
 
+    export struct TabItem {
+        id: int,
+        title: string,
+        is_active: bool,
+        is_loading: bool,
+    }
+
     component IconButton inherits Rectangle {
         in property <image> icon;
         in property <string> label: "";
@@ -148,6 +155,66 @@ slint::slint! {
         }
     }
 
+    component DocumentTab inherits Rectangle {
+        in property <TabItem> item;
+        in property <string> close-label;
+        callback activate();
+        callback close();
+
+        width: 156px;
+        height: 32px;
+        border-radius: 6px;
+        background: item.is_active ? ThemeTokens.panel
+            : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+        border-width: item.is_active ? 1px : 0px;
+        border-color: item.is_active ? ThemeTokens.accent : ThemeTokens.border;
+        accessible-role: tab;
+        accessible-label: item.title;
+
+        tab-touch := TouchArea { clicked => { root.activate(); } }
+
+        HorizontalLayout {
+            padding-left: 9px;
+            padding-right: 5px;
+            spacing: 6px;
+
+            if root.item.is_loading : Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 4px;
+                background: ThemeTokens.accent;
+            }
+            Text {
+                text: root.item.title;
+                color: ThemeTokens.text;
+                font-size: 11px;
+                font-weight: root.item.is_active ? 600 : 500;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            close-button := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 5px;
+                background: close-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                accessible-role: button;
+                accessible-label: root.close-label + " " + root.item.title;
+                close-touch := TouchArea { clicked => { root.close(); } }
+                Image {
+                    x: 3px;
+                    y: 3px;
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                    colorize: ThemeTokens.text-muted;
+                    image-fit: contain;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+
     component PasswordPopover inherits Rectangle {
         in-out property <string> password-input: "";
         in property <string> file-name: "";
@@ -213,10 +280,14 @@ slint::slint! {
         in property <[ThumbnailItem]> thumbnail-items: [];
         in property <[OutlineItem]> outline-items: [];
         in property <[RecentFileItem]> recent-files: [];
+        in property <[TabItem]> tab-items: [];
         in-out property <length> current-scroll-y: 0px;
         in-out property <length> thumbnail-scroll-y: 0px;
         out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 248px : 0px);
-        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 88px - (root.banner-visible ? 42px : 0px);
+        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 88px
+            - (root.banner-visible ? 42px : 0px)
+            - (root.tab-items.length > 0 ? 38px : 0px)
+            - (root.print-active || root.print-status != "" ? 38px : 0px);
         out property <length> thumbnail-viewport-height: root.pdf-viewport-height - 56px;
         in property <bool> has-document: false;
         in property <bool> has-selection: false;
@@ -242,6 +313,9 @@ slint::slint! {
         in property <bool> banner-visible: false;
         in property <string> banner-text: "";
         in property <bool> banner-can-retry: false;
+        in property <bool> print-active: false;
+        in property <float> print-progress: 0;
+        in property <string> print-status: "";
 
         in property <string> text-open: "Open PDF";
         in property <string> text-sidebar: "Sidebar";
@@ -270,6 +344,9 @@ slint::slint! {
         in property <string> text-update-enabled: "Enabled";
         in property <string> text-update-disabled: "Disabled";
         in property <string> text-check-now: "Check now";
+        in property <string> text-new-tab: "New tab";
+        in property <string> text-print: "Print";
+        in property <string> text-cancel-print: "Cancel";
 
         callback request-open-file();
         callback request-next-page();
@@ -302,6 +379,11 @@ slint::slint! {
         callback request-drop(data-transfer);
         callback request-dismiss-banner();
         callback request-retry();
+        callback request-activate-tab(int);
+        callback request-close-tab(int);
+        callback request-new-tab();
+        callback request-print();
+        callback request-cancel-print();
         callback pointer-down(int, length, length, int);
         callback pointer-move(int, length, length);
         callback pointer-up(int, length, length);
@@ -322,6 +404,7 @@ slint::slint! {
                 if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.request-copy(); return accept; }
                 if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.request-select-all(); return accept; }
                 if (event.modifiers.control && (event.text == "o" || event.text == "O")) { root.request-open-file(); return accept; }
+                if (event.modifiers.control && (event.text == "p" || event.text == "P") && root.has-document && !root.print-active) { root.request-print(); return accept; }
                 if (event.modifiers.control && event.text == "0") { root.request-actual-size(); return accept; }
                 if (event.text == "+" || event.text == "=") { root.request-zoom-in(); return accept; }
                 if (event.text == "-") { root.request-zoom-out(); return accept; }
@@ -430,6 +513,11 @@ slint::slint! {
                         label: root.text-fit-page; tooltip: root.text-fit-page; show-label: root.width >= 1180px;
                         enabled: root.has-document; clicked => { root.request-fit-page(); }
                     }
+                    TextButton {
+                        text: root.text-print;
+                        enabled: root.has-document && !root.print-active;
+                        clicked => { root.request-print(); }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
@@ -450,6 +538,59 @@ slint::slint! {
                 }
             }
 
+            if root.window-mode == 0 && root.tab-items.length > 0 : Rectangle {
+                height: 38px;
+                background: ThemeTokens.command;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    spacing: 5px;
+
+                    tab-strip := Flickable {
+                        horizontal-stretch: 1;
+                        viewport-width: root.tab-items.length * 160px;
+                        viewport-height: self.height;
+                        interactive: true;
+
+                        HorizontalLayout {
+                            width: tab-strip.viewport-width;
+                            height: tab-strip.viewport-height;
+                            spacing: 4px;
+                            for tab in root.tab-items : DocumentTab {
+                                item: tab;
+                                close-label: root.text-close;
+                                activate => { root.request-activate-tab(tab.id); }
+                                close => { root.request-close-tab(tab.id); }
+                            }
+                        }
+                    }
+                    new-tab-button := Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 6px;
+                        background: new-tab-touch.has-hover && new-tab-touch.enabled ? ThemeTokens.control-hover : #00000000;
+                        accessible-role: button;
+                        accessible-label: root.text-new-tab;
+                        new-tab-touch := TouchArea {
+                            enabled: root.tab-items.length < 16;
+                            clicked => { root.request-new-tab(); }
+                        }
+                        Text {
+                            text: "+";
+                            color: new-tab-touch.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
+                            font-size: 20px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
             if root.banner-visible : Rectangle {
                 height: 42px;
                 background: ThemeTokens.dark ? #3a2618 : #fff4e8;
@@ -460,6 +601,38 @@ slint::slint! {
                     Text { text: root.banner-text; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     if root.banner-can-retry : TextButton { text: root.text-retry; clicked => { root.request-retry(); } }
                     IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-dismiss; clicked => { root.request-dismiss-banner(); } }
+                }
+            }
+
+            if root.window-mode == 0 && (root.print-active || root.print-status != "") : Rectangle {
+                height: 38px;
+                background: ThemeTokens.panel;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+
+                Rectangle {
+                    x: 0px;
+                    y: parent.height - 2px;
+                    width: parent.width * Math.max(0, Math.min(1, root.print-progress));
+                    height: 2px;
+                    background: ThemeTokens.accent;
+                }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    Text {
+                        text: root.print-status != "" ? root.print-status : root.text-print;
+                        color: ThemeTokens.text-muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    if root.print-active : TextButton {
+                        text: root.text-cancel-print;
+                        clicked => { root.request-cancel-print(); }
+                    }
                 }
             }
 

@@ -1,139 +1,23 @@
-use crate::cache::{CacheKey, SharedBitmapCache};
-use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId, Rotation};
-use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
+use crate::protocol::RenderRequestKey;
+use crate::worker::RenderWorker;
+use crate::RenderError;
+use barepdf_core::MemoryBudget;
+use barepdf_pdf::PdfBackend;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Priority {
-    Visible = 0,
-    Prefetch = 1,
-    Thumbnail = 2,
-}
+pub use crate::protocol::{Priority, RenderCommand, RenderEvent, RenderJob, RenderKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RenderKind {
-    Page,
-    Thumbnail,
-}
-
-#[derive(Debug, Clone)]
-pub struct RenderJob {
-    pub request_id: RequestId,
-    pub generation: u64,
-    pub document_id: DocumentId,
-    pub page_index: PageIndex,
-    pub target_width: u32,
-    pub target_height: u32,
-    pub rotation: Rotation,
-    pub priority: Priority,
-    pub kind: RenderKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct RenderRequestKey {
-    generation: u64,
-    document_id: DocumentId,
-    page_index: PageIndex,
-    target_width: u32,
-    target_height: u32,
-    rotation: Rotation,
-    kind: RenderKind,
-}
-
-impl From<&RenderJob> for RenderRequestKey {
-    fn from(job: &RenderJob) -> Self {
-        Self {
-            generation: job.generation,
-            document_id: job.document_id,
-            page_index: job.page_index,
-            target_width: job.target_width,
-            target_height: job.target_height,
-            rotation: job.rotation,
-            kind: job.kind,
-        }
-    }
-}
-
-pub enum RenderCommand {
-    OpenDocument {
-        document_id: DocumentId,
-        path: PathBuf,
-        password: Option<String>,
-    },
-    RenderPage(RenderJob),
-    ExtractText {
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-    },
-    FetchTextGeometry {
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-    },
-    FetchOutline {
-        document_id: DocumentId,
-    },
-    FetchPageDimensions {
-        document_id: DocumentId,
-        start: u32,
-        count: u32,
-    },
-    CloseDocument(DocumentId),
-    Shutdown,
-}
-
-pub enum RenderEvent {
-    DocumentOpened {
-        document_id: DocumentId,
-        page_count: u32,
-        first_page_dimensions: (f32, f32),
-    },
-    PageRendered {
-        request_id: RequestId,
-        generation: u64,
-        document_id: DocumentId,
-        page_index: PageIndex,
-        kind: RenderKind,
-        bitmap: Arc<RawBitmap>,
-    },
-    TextExtracted {
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-        text: String,
-        spans: Vec<TextSpan>,
-    },
-    TextGeometryFetched {
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-        geometry: barepdf_core::PageTextGeometry,
-    },
-    OutlineFetched {
-        document_id: DocumentId,
-        outline: Vec<OutlineNode>,
-    },
-    PageDimensionsFetched {
-        document_id: DocumentId,
-        start: u32,
-        dimensions: Vec<(f32, f32)>,
-    },
-    Error {
-        request_id: Option<RequestId>,
-        document_id: DocumentId,
-        generation: Option<u64>,
-        error: PdfError,
-    },
-}
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub struct RenderScheduler {
     worker: Mutex<Option<JoinHandle<()>>>,
+    shutdown_sender: Sender<()>,
     control_cmd_sender: Sender<RenderCommand>,
     visible_cmd_sender: Sender<RenderCommand>,
     low_cmd_sender: Sender<RenderCommand>,
@@ -141,342 +25,6 @@ pub struct RenderScheduler {
     event_receiver: Receiver<RenderEvent>,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
-    cache: SharedBitmapCache,
-}
-
-fn emit_lossy_event(event_sender: &Sender<RenderEvent>, event: RenderEvent) -> bool {
-    !matches!(
-        event_sender.try_send(event),
-        Err(TrySendError::Disconnected(_))
-    )
-}
-
-fn emit_critical(event_sender: &Sender<RenderEvent>, event: RenderEvent) -> bool {
-    event_sender.send(event).is_ok()
-}
-
-struct RenderWorker<B> {
-    backend: B,
-    active_doc: Option<(DocumentId, Box<dyn PdfDocument>)>,
-    cache: SharedBitmapCache,
-    current_generation: Arc<AtomicU64>,
-    pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
-    critical_event_sender: Sender<RenderEvent>,
-    event_sender: Sender<RenderEvent>,
-}
-
-impl<B: PdfBackend> RenderWorker<B> {
-    fn run(
-        mut self,
-        control_receiver: Receiver<RenderCommand>,
-        visible_receiver: Receiver<RenderCommand>,
-        low_receiver: Receiver<RenderCommand>,
-    ) {
-        while let Some(command) =
-            receive_command(&control_receiver, &visible_receiver, &low_receiver)
-        {
-            if !self.handle_command(command) {
-                break;
-            }
-        }
-    }
-
-    fn handle_command(&mut self, command: RenderCommand) -> bool {
-        match command {
-            RenderCommand::OpenDocument {
-                document_id,
-                path,
-                password,
-            } => self.open_document(document_id, path, password),
-            RenderCommand::RenderPage(job) => self.render_page(job),
-            RenderCommand::ExtractText {
-                document_id,
-                generation,
-                page_index,
-            } => self.extract_text(document_id, generation, page_index),
-            RenderCommand::FetchTextGeometry {
-                document_id,
-                generation,
-                page_index,
-            } => self.fetch_text_geometry(document_id, generation, page_index),
-            RenderCommand::FetchOutline { document_id } => self.fetch_outline(document_id),
-            RenderCommand::FetchPageDimensions {
-                document_id,
-                start,
-                count,
-            } => self.fetch_page_dimensions(document_id, start, count),
-            RenderCommand::CloseDocument(document_id) => self.close_document(document_id),
-            RenderCommand::Shutdown => false,
-        }
-    }
-
-    fn open_document(
-        &mut self,
-        document_id: DocumentId,
-        path: PathBuf,
-        password: Option<String>,
-    ) -> bool {
-        let result = self
-            .backend
-            .open_path(&path, password.as_deref())
-            .and_then(|document| {
-                let document_info = document.page_count().and_then(|count| {
-                    document
-                        .page_dimensions(PageIndex::zero())
-                        .map(|dimensions| (count, dimensions))
-                })?;
-                Ok((document, document_info))
-            });
-        match result {
-            Ok((document, (count, first_page_dimensions))) => {
-                self.active_doc = Some((document_id, document));
-                match self.cache.clear() {
-                    Ok(()) => emit_critical(
-                        &self.critical_event_sender,
-                        RenderEvent::DocumentOpened {
-                            document_id,
-                            page_count: count.get(),
-                            first_page_dimensions,
-                        },
-                    ),
-                    Err(error) => self.emit_error(None, document_id, None, error),
-                }
-            }
-            Err(error) => self.emit_error(None, document_id, None, error),
-        }
-    }
-
-    fn render_page(&mut self, job: RenderJob) -> bool {
-        let pending_key = RenderRequestKey::from(&job);
-        let emitted = self.render_page_inner(&job);
-        if let Ok(mut pending) = self.pending_renders.lock() {
-            pending.remove(&pending_key);
-        }
-        emitted
-    }
-
-    fn render_page_inner(&self, job: &RenderJob) -> bool {
-        if job.generation != self.current_generation.load(Ordering::Acquire) {
-            return true;
-        }
-        let cache_key = CacheKey {
-            document_id: job.document_id,
-            page_index: job.page_index,
-            target_width: job.target_width,
-            target_height: job.target_height,
-            rotation: job.rotation,
-        };
-        match self.cache.get(&cache_key) {
-            Ok(Some(bitmap)) => return self.emit_rendered(job, bitmap),
-            Ok(None) => {}
-            Err(error) => {
-                return self.emit_error(
-                    Some(job.request_id),
-                    job.document_id,
-                    Some(job.generation),
-                    error,
-                );
-            }
-        }
-        let Some((document_id, document)) = self.active_doc.as_ref() else {
-            return true;
-        };
-        if *document_id != job.document_id {
-            return true;
-        }
-        match document.render_page(
-            job.page_index,
-            job.target_width,
-            job.target_height,
-            job.rotation,
-        ) {
-            Ok(bitmap) => match self.cache.insert(cache_key, bitmap) {
-                Ok(bitmap) => self.emit_rendered(job, bitmap),
-                Err(error) => self.emit_error(
-                    Some(job.request_id),
-                    job.document_id,
-                    Some(job.generation),
-                    error,
-                ),
-            },
-            Err(error) => self.emit_error(
-                Some(job.request_id),
-                job.document_id,
-                Some(job.generation),
-                error,
-            ),
-        }
-    }
-
-    fn emit_rendered(&self, job: &RenderJob, bitmap: Arc<RawBitmap>) -> bool {
-        emit_lossy_event(
-            &self.event_sender,
-            RenderEvent::PageRendered {
-                request_id: job.request_id,
-                generation: job.generation,
-                document_id: job.document_id,
-                page_index: job.page_index,
-                kind: job.kind,
-                bitmap,
-            },
-        )
-    }
-
-    fn extract_text(
-        &self,
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-    ) -> bool {
-        if generation != self.current_generation.load(Ordering::Acquire) {
-            return true;
-        }
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            return true;
-        };
-        if *active_document_id != document_id {
-            return true;
-        }
-        match document.extract_text(page_index).and_then(|text| {
-            document
-                .extract_text_spans(page_index)
-                .map(|spans| (text, spans))
-        }) {
-            Ok((text, spans)) => emit_lossy_event(
-                &self.event_sender,
-                RenderEvent::TextExtracted {
-                    document_id,
-                    generation,
-                    page_index,
-                    text,
-                    spans,
-                },
-            ),
-            Err(error) => self.emit_error(None, document_id, Some(generation), error),
-        }
-    }
-
-    fn fetch_text_geometry(
-        &self,
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-    ) -> bool {
-        if generation != self.current_generation.load(Ordering::Acquire) {
-            return true;
-        }
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            return true;
-        };
-        if *active_document_id != document_id {
-            return true;
-        }
-        match document.get_page_text_geometry(page_index) {
-            Ok(geometry) => emit_lossy_event(
-                &self.event_sender,
-                RenderEvent::TextGeometryFetched {
-                    document_id,
-                    generation,
-                    page_index,
-                    geometry,
-                },
-            ),
-            Err(error) => self.emit_error(None, document_id, Some(generation), error),
-        }
-    }
-
-    fn fetch_outline(&self, document_id: DocumentId) -> bool {
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            return true;
-        };
-        if *active_document_id != document_id {
-            return true;
-        }
-        match document.get_outline() {
-            Ok(outline) => emit_critical(
-                &self.critical_event_sender,
-                RenderEvent::OutlineFetched {
-                    document_id,
-                    outline,
-                },
-            ),
-            Err(error) => self.emit_error(None, document_id, None, error),
-        }
-    }
-
-    fn fetch_page_dimensions(&self, document_id: DocumentId, start: u32, count: u32) -> bool {
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            return true;
-        };
-        if *active_document_id != document_id {
-            return true;
-        }
-        let dimensions = document.page_count().and_then(|page_count| {
-            let end = start.saturating_add(count).min(page_count.get());
-            (start..end)
-                .map(|index| document.page_dimensions(PageIndex::from_raw(index)))
-                .collect()
-        });
-        match dimensions {
-            Ok(dimensions) => emit_critical(
-                &self.critical_event_sender,
-                RenderEvent::PageDimensionsFetched {
-                    document_id,
-                    start,
-                    dimensions,
-                },
-            ),
-            Err(error) => self.emit_error(None, document_id, None, error),
-        }
-    }
-
-    fn close_document(&mut self, document_id: DocumentId) -> bool {
-        if self
-            .active_doc
-            .as_ref()
-            .is_some_and(|(id, _)| *id == document_id)
-        {
-            self.active_doc = None;
-            if let Err(error) = self.cache.clear() {
-                return self.emit_error(None, document_id, None, error);
-            }
-        }
-        true
-    }
-
-    fn emit_error(
-        &self,
-        request_id: Option<RequestId>,
-        document_id: DocumentId,
-        generation: Option<u64>,
-        error: PdfError,
-    ) -> bool {
-        emit_critical(
-            &self.critical_event_sender,
-            RenderEvent::Error {
-                request_id,
-                document_id,
-                generation,
-                error,
-            },
-        )
-    }
-}
-
-fn receive_command(
-    control_receiver: &Receiver<RenderCommand>,
-    visible_receiver: &Receiver<RenderCommand>,
-    low_receiver: &Receiver<RenderCommand>,
-) -> Option<RenderCommand> {
-    match control_receiver.try_recv() {
-        Ok(command) => Some(command),
-        Err(_) => crossbeam_channel::select! {
-            recv(control_receiver) -> command => command,
-            recv(visible_receiver) -> command => command,
-            recv(low_receiver) -> command => command,
-        }
-        .ok(),
-    }
 }
 
 impl RenderScheduler {
@@ -485,32 +33,31 @@ impl RenderScheduler {
         let (control_tx, control_rx) = bounded::<RenderCommand>(8);
         let (visible_tx, visible_rx) = bounded::<RenderCommand>(32);
         let (low_tx, low_rx) = bounded::<RenderCommand>(128);
+        let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
         let (critical_event_tx, critical_event_rx) = bounded::<RenderEvent>(32);
         let (event_tx, event_rx) = bounded::<RenderEvent>(128);
         let current_generation = Arc::new(AtomicU64::new(1));
         let pending_renders = Arc::new(Mutex::new(HashSet::new()));
-        let cache = SharedBitmapCache::new(budget);
-
         let worker = thread::spawn({
-            let cache = cache.clone();
             let current_generation = current_generation.clone();
             let pending_renders = pending_renders.clone();
             move || {
-                RenderWorker {
+                RenderWorker::new(
                     backend,
-                    active_doc: None,
-                    cache,
+                    budget,
                     current_generation,
                     pending_renders,
-                    critical_event_sender: critical_event_tx,
-                    event_sender: event_tx,
-                }
-                .run(control_rx, visible_rx, low_rx);
+                    shutdown_rx,
+                    critical_event_tx,
+                    event_tx,
+                )
+                .run(&control_rx, &visible_rx, &low_rx);
             }
         });
 
         Self {
             worker: Mutex::new(Some(worker)),
+            shutdown_sender: shutdown_tx,
             control_cmd_sender: control_tx,
             visible_cmd_sender: visible_tx,
             low_cmd_sender: low_tx,
@@ -518,26 +65,36 @@ impl RenderScheduler {
             event_receiver: event_rx,
             current_generation,
             pending_renders,
-            cache,
         }
     }
 
     /// Stops the worker and waits for it to release its active PDF document.
-    pub fn shutdown(&self) {
-        let worker = {
-            let Ok(mut worker) = self.worker.lock() else {
-                return;
-            };
-            let Some(worker) = worker.take() else {
-                return;
-            };
-            worker
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError::WorkerTerminated` when the worker panics or does not stop before the
+    /// bounded shutdown deadline.
+    pub fn shutdown(&self) -> Result<(), RenderError> {
+        let _ = self.shutdown_sender.try_send(());
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| RenderError::WorkerTerminated)?;
+        let Some(handle) = worker.as_ref() else {
+            return Ok(());
         };
-
-        let _ = self.control_cmd_sender.send(RenderCommand::Shutdown);
-        if worker.join().is_err() {
-            eprintln!("Render worker panicked during shutdown.");
+        let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
+        while !handle.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(RenderError::WorkerTerminated);
+            }
+            thread::sleep(SHUTDOWN_POLL_INTERVAL);
         }
+        let Some(handle) = worker.take() else {
+            return Ok(());
+        };
+        drop(worker);
+        handle.join().map_err(|_| RenderError::WorkerTerminated)
     }
 
     #[must_use]
@@ -616,48 +173,54 @@ impl RenderScheduler {
     }
 
     /// Returns `Ok(None)` while worker remains live without an event, and
-    /// `PdfError::WorkerTerminated` after worker event senders are disconnected.
+    /// `RenderError::WorkerStopped` after worker event senders are disconnected.
     ///
     /// # Errors
     ///
-    /// Returns `PdfError::WorkerTerminated` when the worker has stopped and all queued events
+    /// Returns `RenderError::WorkerStopped` when the worker has stopped and all queued events
     /// were already received.
-    pub fn try_recv_event(&self) -> Result<Option<RenderEvent>, PdfError> {
-        match self.critical_event_receiver.try_recv() {
+    pub fn try_recv_event(&self) -> Result<Option<RenderEvent>, RenderError> {
+        let critical_status = match self.critical_event_receiver.try_recv() {
+            Ok(event) => return Ok(Some(event)),
+            Err(status) => status,
+        };
+        match self.event_receiver.try_recv() {
             Ok(event) => Ok(Some(event)),
-            Err(TryRecvError::Empty) => match self.event_receiver.try_recv() {
-                Ok(event) => Ok(Some(event)),
-                Err(TryRecvError::Empty) => Ok(None),
-                Err(TryRecvError::Disconnected) => Err(PdfError::WorkerTerminated),
-            },
-            Err(TryRecvError::Disconnected) => match self.event_receiver.try_recv() {
-                Ok(event) => Ok(Some(event)),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
-                    Err(PdfError::WorkerTerminated)
-                }
-            },
+            Err(TryRecvError::Disconnected)
+                if matches!(critical_status, TryRecvError::Disconnected) =>
+            {
+                Err(RenderError::WorkerStopped)
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => Ok(None),
         }
     }
+}
 
-    #[must_use]
-    pub fn cache(&self) -> &SharedBitmapCache {
-        &self.cache
+impl Drop for RenderScheduler {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barepdf_core::{PageCount, PageTextGeometry};
-    use std::path::Path;
+    use crate::worker::emit_critical;
+    use barepdf_core::{
+        DocumentId, PageCount, PageIndex, PageTextGeometry, PdfError, RequestId, Rotation,
+    };
+    use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
     struct MockBackend {
         render_delay: Duration,
+        render_started: Option<Sender<()>>,
     }
 
     struct MockDocument {
         render_delay: Duration,
+        render_started: Option<Sender<()>>,
     }
 
     impl PdfBackend for MockBackend {
@@ -668,6 +231,7 @@ mod tests {
         ) -> Result<Box<dyn PdfDocument>, PdfError> {
             Ok(Box::new(MockDocument {
                 render_delay: self.render_delay,
+                render_started: self.render_started.clone(),
             }))
         }
 
@@ -696,6 +260,9 @@ mod tests {
             _target_height: u32,
             _rotation: Rotation,
         ) -> Result<RawBitmap, PdfError> {
+            if let Some(started) = &self.render_started {
+                let _ = started.try_send(());
+            }
             std::thread::sleep(self.render_delay);
             RawBitmap::new(1, 1, vec![0; 4]).map_err(|_| PdfError::RenderingFailed {
                 page_index: 0,
@@ -741,7 +308,13 @@ mod tests {
     }
 
     fn scheduler(render_delay: Duration) -> RenderScheduler {
-        RenderScheduler::spawn(MockBackend { render_delay }, MemoryBudget::new(1024 * 1024))
+        RenderScheduler::spawn(
+            MockBackend {
+                render_delay,
+                render_started: None,
+            },
+            MemoryBudget::new(1024 * 1024),
+        )
     }
 
     fn open_document(scheduler: &RenderScheduler, id: DocumentId) {
@@ -764,29 +337,18 @@ mod tests {
     }
 
     #[test]
-    fn render_request_key_includes_generation_and_kind() {
-        assert_ne!(
-            RenderRequestKey::from(&job(1, RenderKind::Page)),
-            RenderRequestKey::from(&job(2, RenderKind::Page))
-        );
-        assert_ne!(
-            RenderRequestKey::from(&job(1, RenderKind::Page)),
-            RenderRequestKey::from(&job(1, RenderKind::Thumbnail))
-        );
-    }
-
-    #[test]
     fn disconnected_event_channels_report_worker_termination() {
+        let (shutdown_sender, _shutdown_receiver) = bounded(1);
         let (control_sender, _control_receiver) = bounded(1);
         let (visible_sender, _visible_receiver) = bounded(1);
         let (low_sender, _low_receiver) = bounded(1);
         let (critical_sender, critical_receiver) = bounded(1);
         let (event_sender, event_receiver) = bounded(1);
         drop(critical_sender);
-        drop(event_sender);
 
         let scheduler = RenderScheduler {
             worker: Mutex::new(None),
+            shutdown_sender,
             control_cmd_sender: control_sender,
             visible_cmd_sender: visible_sender,
             low_cmd_sender: low_sender,
@@ -794,12 +356,13 @@ mod tests {
             event_receiver,
             current_generation: Arc::new(AtomicU64::new(1)),
             pending_renders: Arc::new(Mutex::new(HashSet::new())),
-            cache: SharedBitmapCache::new(MemoryBudget::new(1024)),
         };
 
+        assert!(matches!(scheduler.try_recv_event(), Ok(None)));
+        drop(event_sender);
         assert!(matches!(
             scheduler.try_recv_event(),
-            Err(PdfError::WorkerTerminated)
+            Err(RenderError::WorkerStopped)
         ));
     }
 
@@ -853,12 +416,131 @@ mod tests {
     #[test]
     fn shutdown_joins_worker_and_rejects_new_commands() {
         let scheduler = scheduler(Duration::ZERO);
-        scheduler.shutdown();
+        assert!(scheduler.shutdown().is_ok());
+        assert!(scheduler.shutdown().is_ok());
         assert!(!scheduler.send_command(RenderCommand::OpenDocument {
             document_id: DocumentId::new(7),
             path: PathBuf::from("mock.pdf"),
             password: None,
         }));
+    }
+
+    #[test]
+    fn shutdown_unblocks_worker_when_critical_event_channel_is_full() {
+        let (shutdown_sender, shutdown_receiver) = bounded(1);
+        let (control_sender, _control_receiver) = bounded(1);
+        let (visible_sender, _visible_receiver) = bounded(1);
+        let (low_sender, _low_receiver) = bounded(1);
+        let (critical_sender, critical_receiver) = bounded(1);
+        let (_event_sender, event_receiver) = bounded(1);
+        critical_sender
+            .try_send(RenderEvent::OutlineFetched {
+                document_id: DocumentId::new(7),
+                outline: Vec::new(),
+            })
+            .expect("critical event channel has one free slot");
+        let worker = thread::spawn(move || {
+            emit_critical(
+                &shutdown_receiver,
+                &critical_sender,
+                RenderEvent::OutlineFetched {
+                    document_id: DocumentId::new(7),
+                    outline: Vec::new(),
+                },
+            );
+        });
+        let scheduler = RenderScheduler {
+            worker: Mutex::new(Some(worker)),
+            shutdown_sender,
+            control_cmd_sender: control_sender,
+            visible_cmd_sender: visible_sender,
+            low_cmd_sender: low_sender,
+            critical_event_receiver: critical_receiver,
+            event_receiver,
+            current_generation: Arc::new(AtomicU64::new(1)),
+            pending_renders: Arc::new(Mutex::new(HashSet::new())),
+        };
+
+        let start = Instant::now();
+        assert!(scheduler.shutdown().is_ok());
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn worker_panic_is_returned_as_structured_shutdown_error() {
+        let (shutdown_sender, _shutdown_receiver) = bounded(1);
+        let (control_sender, _control_receiver) = bounded(1);
+        let (visible_sender, _visible_receiver) = bounded(1);
+        let (low_sender, _low_receiver) = bounded(1);
+        let (_critical_sender, critical_event_receiver) = bounded(1);
+        let (_event_sender, event_receiver) = bounded(1);
+        let scheduler = RenderScheduler {
+            worker: Mutex::new(Some(thread::spawn(|| panic!("worker test panic")))),
+            shutdown_sender,
+            control_cmd_sender: control_sender,
+            visible_cmd_sender: visible_sender,
+            low_cmd_sender: low_sender,
+            critical_event_receiver,
+            event_receiver,
+            current_generation: Arc::new(AtomicU64::new(1)),
+            pending_renders: Arc::new(Mutex::new(HashSet::new())),
+        };
+
+        assert!(matches!(
+            scheduler.shutdown(),
+            Err(RenderError::WorkerTerminated)
+        ));
+        assert!(scheduler.shutdown().is_ok());
+    }
+
+    #[test]
+    fn shutdown_retains_blocking_render_and_joins_it_on_retry() {
+        let (started_sender, started_receiver) = bounded(1);
+        let scheduler = RenderScheduler::spawn(
+            MockBackend {
+                render_delay: Duration::from_millis(600),
+                render_started: Some(started_sender),
+            },
+            MemoryBudget::new(1024 * 1024),
+        );
+        open_document(&scheduler, DocumentId::new(7));
+        assert!(scheduler.send_command(RenderCommand::RenderPage(job(
+            scheduler.current_generation(),
+            RenderKind::Page,
+        ))));
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mock render starts before shutdown");
+
+        let started = Instant::now();
+        assert!(matches!(
+            scheduler.shutdown(),
+            Err(RenderError::WorkerTerminated)
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(scheduler.worker.lock().is_ok_and(|worker| worker.is_some()));
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut worker_stopped = false;
+        while Instant::now() < deadline {
+            match scheduler.try_recv_event() {
+                Ok(Some(RenderEvent::PageRendered { .. })) => {
+                    panic!("cancelled render emitted a bitmap")
+                }
+                Err(RenderError::WorkerStopped) => {
+                    worker_stopped = true;
+                    break;
+                }
+                Ok(Some(_) | None) => thread::sleep(Duration::from_millis(5)),
+                Err(error) => panic!("unexpected render event error: {error}"),
+            }
+        }
+        assert!(
+            worker_stopped,
+            "render worker did not stop after cancellation"
+        );
+        assert!(scheduler.shutdown().is_ok());
+        assert!(scheduler.worker.lock().is_ok_and(|worker| worker.is_none()));
     }
 
     #[test]

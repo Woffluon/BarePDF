@@ -6,7 +6,10 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::Agent;
@@ -23,12 +26,17 @@ const MAX_SIGNATURE_BYTES: u64 = 64;
 const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
-const INSTALLER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const INSTALLER_TIMEOUT: Duration = Duration::from_mins(30);
+const NETWORK_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const NETWORK_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+const NETWORK_BODY_TIMEOUT: Duration = Duration::from_mins(2);
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const USER_AGENT: &str = concat!("BarePDF/", env!("CARGO_PKG_VERSION"));
-const UPDATE_PUBLIC_KEY_HEX: &str = include_str!("../../../assets/update-public-key.hex");
+const UPDATE_PUBLIC_KEY_HEX: &str = include_str!("../../../../assets/update-public-key.hex");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct VerifiedUpdate {
+pub(crate) struct VerifiedUpdate {
     version: String,
     release_url: String,
     release_notes: String,
@@ -49,21 +57,23 @@ impl VerifiedUpdate {
         }
     }
 
-    pub(super) fn version(&self) -> &str {
+    pub(crate) fn version(&self) -> &str {
         &self.version
     }
 
-    pub(super) fn release_url(&self) -> &str {
+    pub(crate) fn release_url(&self) -> &str {
         &self.release_url
     }
 
-    pub(super) fn release_notes(&self) -> &str {
+    pub(crate) fn release_notes(&self) -> &str {
         &self.release_notes
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 enum UpdateError {
+    #[error("Update operation was cancelled")]
+    Cancelled,
     #[error("{0}")]
     Rejected(&'static str),
     #[error("{operation}: {source}")]
@@ -94,22 +104,23 @@ enum UpdateError {
     Platform {
         operation: &'static str,
         #[source]
-        source: barepdf_core::PdfError,
+        source: barepdf_platform::PlatformError,
     },
 }
 
 #[derive(Debug)]
-pub(super) enum UpdateCommand {
+pub(crate) enum UpdateCommand {
     Check,
     Download(VerifiedUpdate),
     Install {
         path: PathBuf,
         update: VerifiedUpdate,
     },
+    Shutdown,
 }
 
 #[derive(Debug)]
-pub(super) enum UpdateEvent {
+pub(crate) enum UpdateEvent {
     UpToDate,
     Available(VerifiedUpdate),
     Downloaded {
@@ -138,17 +149,80 @@ struct InstallerManifest {
     size: u64,
 }
 
-pub(super) fn start_worker() -> (Sender<UpdateCommand>, Receiver<UpdateEvent>) {
-    let (command_sender, command_receiver) = mpsc::channel();
-    let (event_sender, event_receiver) = mpsc::channel();
-    std::thread::spawn(move || run_worker(command_receiver, &event_sender));
-    (command_sender, event_receiver)
+pub(crate) struct UpdateWorker {
+    commands: Sender<UpdateCommand>,
+    cancelled: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
 }
 
-fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UpdateShutdownError {
+    #[error("Update worker did not stop before the shutdown deadline")]
+    TimedOut,
+    #[error("Update worker panicked during shutdown")]
+    Panicked,
+}
+
+impl UpdateWorker {
+    pub(crate) fn command_sender(&self) -> Sender<UpdateCommand> {
+        self.commands.clone()
+    }
+
+    pub(crate) fn shutdown(&mut self) -> Result<(), UpdateShutdownError> {
+        self.cancelled.store(true, Ordering::Release);
+        let _ = self.commands.send(UpdateCommand::Shutdown);
+        let Some(worker) = self.worker.as_ref() else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(UpdateShutdownError::TimedOut);
+            }
+            std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
+        }
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker.join().map_err(|_| UpdateShutdownError::Panicked)
+    }
+}
+
+impl Drop for UpdateWorker {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
+    let (command_sender, command_receiver) = mpsc::channel();
+    let (event_sender, event_receiver) = mpsc::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
+    let worker = std::thread::spawn(move || {
+        run_worker(&command_receiver, &event_sender, &worker_cancelled);
+    });
+    (
+        UpdateWorker {
+            commands: command_sender,
+            cancelled,
+            worker: Some(worker),
+        },
+        event_receiver,
+    )
+}
+
+fn run_worker(
+    commands: &Receiver<UpdateCommand>,
+    events: &Sender<UpdateEvent>,
+    cancelled: &AtomicBool,
+) {
     let agent = Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
+        .timeout_connect(Some(NETWORK_CONNECT_TIMEOUT))
+        .timeout_recv_response(Some(NETWORK_RESPONSE_TIMEOUT))
+        .timeout_recv_body(Some(NETWORK_BODY_TIMEOUT))
         .tls_config(
             TlsConfig::builder()
                 .root_certs(RootCerts::PlatformVerifier)
@@ -159,17 +233,18 @@ fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
 
     while let Ok(command) = commands.recv() {
         let event = match command {
-            UpdateCommand::Check => match check_for_update(&agent) {
+            UpdateCommand::Check => match check_for_update(&agent, cancelled) {
                 Ok(Some(update)) => UpdateEvent::Available(update),
                 Ok(None) => UpdateEvent::UpToDate,
                 Err(error) => UpdateEvent::Error(error.to_string()),
             },
-            UpdateCommand::Download(update) => match download_update(&agent, &update) {
+            UpdateCommand::Download(update) => match download_update(&agent, &update, cancelled) {
                 Ok(path) => UpdateEvent::Downloaded { path, update },
                 Err(error) => UpdateEvent::Error(error.to_string()),
             },
             UpdateCommand::Install { path, update } => {
                 match verify_download(&path, &update).and_then(|()| {
+                    check_cancelled(cancelled)?;
                     launch_installer(&path).map_err(|source| UpdateError::Platform {
                         operation: "Could not launch verified update",
                         source,
@@ -179,19 +254,27 @@ fn run_worker(commands: Receiver<UpdateCommand>, events: &Sender<UpdateEvent>) {
                     Err(error) => UpdateEvent::Error(error.to_string()),
                 }
             }
+            UpdateCommand::Shutdown => break,
         };
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
         if events.send(event).is_err() {
             break;
         }
     }
 }
 
-fn check_for_update(agent: &Agent) -> Result<Option<VerifiedUpdate>, UpdateError> {
+fn check_for_update(
+    agent: &Agent,
+    cancelled: &AtomicBool,
+) -> Result<Option<VerifiedUpdate>, UpdateError> {
     let mut response = get_with_redirects(
         agent,
         METADATA_URL,
         RequestTarget::Metadata,
         METADATA_TIMEOUT,
+        cancelled,
     )?;
     let manifest = response
         .body_mut()
@@ -202,11 +285,13 @@ fn check_for_update(agent: &Agent) -> Result<Option<VerifiedUpdate>, UpdateError
             operation: "Update metadata could not be read",
             source,
         })?;
+    check_cancelled(cancelled)?;
     let mut signature_response = get_with_redirects(
         agent,
         METADATA_SIGNATURE_URL,
         RequestTarget::Metadata,
         METADATA_TIMEOUT,
+        cancelled,
     )?;
     let signature = signature_response
         .body_mut()
@@ -217,6 +302,7 @@ fn check_for_update(agent: &Agent) -> Result<Option<VerifiedUpdate>, UpdateError
             operation: "Update signature could not be read",
             source,
         })?;
+    check_cancelled(cancelled)?;
     verify_manifest_signature(&manifest, &signature)?;
     let json = std::str::from_utf8(&manifest)
         .map_err(|_| UpdateError::Rejected("Update metadata is not valid UTF-8"))?;
@@ -350,10 +436,12 @@ fn get_with_redirects(
     initial_url: &str,
     target: RequestTarget<'_>,
     timeout: Duration,
+    cancelled: &AtomicBool,
 ) -> Result<ureq::http::Response<ureq::Body>, UpdateError> {
     let mut url = initial_url.to_string();
     let started = Instant::now();
     for redirect_count in 0..=MAX_REDIRECTS {
+        check_cancelled(cancelled)?;
         let uri = validate_request_url(&url, target)?;
         let remaining = timeout
             .checked_sub(started.elapsed())
@@ -370,6 +458,7 @@ fn get_with_redirects(
                 operation: "Update request failed",
                 source,
             })?;
+        check_cancelled(cancelled)?;
         if !response.status().is_redirection() {
             return Ok(response);
         }
@@ -393,7 +482,17 @@ fn get_with_redirects(
         url.clear();
         url.push_str(location);
     }
-    unreachable!("bounded redirect loop always returns")
+    Err(UpdateError::Rejected(
+        "Update request exceeded the redirect limit",
+    ))
+}
+
+fn check_cancelled(cancelled: &AtomicBool) -> Result<(), UpdateError> {
+    if cancelled.load(Ordering::Acquire) {
+        Err(UpdateError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_request_url(
@@ -443,7 +542,11 @@ fn metadata_path_is_approved(path: &str) -> bool {
         && Version::parse(version).is_ok_and(|version| version.pre.is_empty())
 }
 
-fn download_update(agent: &Agent, update: &VerifiedUpdate) -> Result<PathBuf, UpdateError> {
+fn download_update(
+    agent: &Agent,
+    update: &VerifiedUpdate,
+    cancelled: &AtomicBool,
+) -> Result<PathBuf, UpdateError> {
     validate_installer_url(&update.installer_url, &update.version)?;
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .ok_or(UpdateError::Rejected("LOCALAPPDATA is unavailable"))?;
@@ -457,8 +560,10 @@ fn download_update(agent: &Agent, update: &VerifiedUpdate) -> Result<PathBuf, Up
     let final_path = directory.join(format!("BarePDF-Setup-x64-v{}.exe", update.version));
     let (partial_path, partial_file) = create_unique_partial(&directory, &update.version)?;
 
-    let result = download_to_partial(agent, update, partial_file).and_then(|()| {
+    let result = download_to_partial(agent, update, partial_file, cancelled).and_then(|()| {
+        check_cancelled(cancelled)?;
         verify_download(&partial_path, update)?;
+        check_cancelled(cancelled)?;
         if final_path.is_file() {
             fs::remove_file(&final_path).map_err(|source| UpdateError::Io {
                 operation: "Could not replace previous update",
@@ -507,12 +612,14 @@ fn download_to_partial(
     agent: &Agent,
     update: &VerifiedUpdate,
     mut file: File,
+    cancelled: &AtomicBool,
 ) -> Result<(), UpdateError> {
     let mut response = get_with_redirects(
         agent,
         &update.installer_url,
         RequestTarget::Installer(&update.version),
         INSTALLER_TIMEOUT,
+        cancelled,
     )?;
     let mut reader = response
         .body_mut()
@@ -521,8 +628,9 @@ fn download_to_partial(
         .reader();
     let mut hasher = Sha256::new();
     let mut downloaded = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
+        check_cancelled(cancelled)?;
         let read = reader.read(&mut buffer).map_err(|source| UpdateError::Io {
             operation: "Could not download update",
             source,
@@ -545,6 +653,7 @@ fn download_to_partial(
                 source,
             })?;
     }
+    check_cancelled(cancelled)?;
     file.sync_all().map_err(|source| UpdateError::Io {
         operation: "Could not flush update file",
         source,
@@ -627,6 +736,7 @@ fn expected_file_version(version: &Version) -> Result<[u16; 4], UpdateError> {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+    use std::fmt::Write as _;
 
     fn manifest(version: &str, url_version: &str, hash: &str, size: u64) -> String {
         format!(
@@ -670,23 +780,110 @@ mod tests {
 
     #[test]
     fn updater_errors_preserve_their_source() {
-        let error = UpdateError::Io {
-            operation: "Could not write update file",
-            source: std::io::Error::other("disk full"),
+        let error = UpdateError::Platform {
+            operation: "Could not inspect update",
+            source: barepdf_platform::PlatformError::InvalidData {
+                operation: "Could not read Windows file version metadata",
+                reason: "metadata is truncated",
+            },
         };
 
         assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]
+    fn worker_shutdown_is_idempotent() {
+        let (mut worker, events) = start_worker();
+        drop(events);
+
+        worker.shutdown().expect("idle worker shuts down");
+        worker.shutdown().expect("second shutdown is a no-op");
+    }
+
+    #[test]
+    fn worker_shutdown_retains_active_work_and_joins_it_on_retry() {
+        let (commands, _command_receiver) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (release_sender, release_receiver) = mpsc::channel();
+        let (finished_sender, finished_receiver) = mpsc::channel();
+        let worker_thread = std::thread::spawn(move || {
+            let _ = release_receiver.recv();
+            let _ = finished_sender.send(());
+        });
+        let mut worker = UpdateWorker {
+            commands,
+            cancelled,
+            worker: Some(worker_thread),
+        };
+
+        let started = Instant::now();
+        assert!(matches!(
+            worker.shutdown(),
+            Err(UpdateShutdownError::TimedOut)
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(worker.worker.is_some());
+        release_sender
+            .send(())
+            .expect("active test work can be released");
+        finished_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("test worker reaches its completion point");
+        worker
+            .shutdown()
+            .expect("finished worker joins on the next shutdown call");
+        assert!(worker.worker.is_none());
+    }
+
+    #[test]
+    fn worker_panic_after_timeout_is_reported_on_retry() {
+        let (commands, _command_receiver) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (release_sender, release_receiver) = mpsc::channel();
+        let worker_thread = std::thread::spawn(move || {
+            let _ = release_receiver.recv();
+            panic!("update worker test panic");
+        });
+        let mut worker = UpdateWorker {
+            commands,
+            cancelled,
+            worker: Some(worker_thread),
+        };
+
+        assert!(matches!(
+            worker.shutdown(),
+            Err(UpdateShutdownError::TimedOut)
+        ));
+        release_sender
+            .send(())
+            .expect("panicking test worker can be released");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while worker
+            .worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            worker.worker.as_ref().is_some_and(JoinHandle::is_finished),
+            "panicking test worker did not finish"
+        );
+        assert!(matches!(
+            worker.shutdown(),
+            Err(UpdateShutdownError::Panicked)
+        ));
+        assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
     fn accepts_only_metadata_signed_by_the_pinned_key() {
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-        let public_key = signing_key
-            .verifying_key()
-            .to_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let mut public_key = String::with_capacity(64);
+        for byte in signing_key.verifying_key().to_bytes() {
+            write!(public_key, "{byte:02x}").expect("writing to String cannot fail");
+        }
         let manifest = b"signed update metadata";
         let signature = signing_key.sign(manifest).to_bytes();
 

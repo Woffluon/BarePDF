@@ -10,3 +10,4 @@ description = "Abstract platform interfaces for BarePDF desktop features"
 
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
+thiserror.workspace = true

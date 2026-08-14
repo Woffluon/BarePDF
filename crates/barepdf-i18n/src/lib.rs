@@ -248,8 +248,7 @@ pub fn t(lang: ResolvedLanguage, key: &str) -> &'static str {
 pub fn detect_system_language() -> ResolvedLanguage {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
-        let lang_id = unsafe { GetUserDefaultUILanguage() };
+        let lang_id = windows_ffi::user_default_ui_language();
         let primary_lang = lang_id & 0x3FF; // LANGID primary language bits
         if primary_lang == 0x1F {
             // LANG_TURKISH
@@ -257,6 +256,17 @@ pub fn detect_system_language() -> ResolvedLanguage {
         }
     }
     ResolvedLanguage::English
+}
+
+#[cfg(target_os = "windows")]
+mod windows_ffi {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+
+    pub(super) fn user_default_ui_language() -> u16 {
+        // SAFETY: GetUserDefaultUILanguage takes no pointers and returns a LANGID by value. Windows
+        // imposes no thread-affinity or lifetime requirement, so no borrowed memory crosses FFI.
+        unsafe { GetUserDefaultUILanguage() }
+    }
 }
 
 #[cfg(test)]

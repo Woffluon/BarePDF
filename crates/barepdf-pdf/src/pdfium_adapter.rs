@@ -1,17 +1,18 @@
 use crate::backend::{
     OutlineNode, PdfBackend, PdfDocument as CorePdfDocument, RawBitmap, TextSpan,
 };
-use barepdf_core::{PageCount, PageIndex, PdfError, Rotation};
+use crate::pdfium_lifetime::process_pdfium;
+use barepdf_core::{
+    PageCount, PageIndex, PdfError, Rotation, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+};
 use pdfium_render::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 
-const MAX_OUTLINE_NODES: usize = 4_096;
-const MAX_OUTLINE_DEPTH: usize = 128;
 const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
 
 pub struct PdfiumEngine {
-    pdfium: Arc<Pdfium>,
+    pdfium: &'static Pdfium,
 }
 
 impl PdfiumEngine {
@@ -19,32 +20,12 @@ impl PdfiumEngine {
     ///
     /// Returns a platform error when the sibling `PDFium` library cannot be located or bound.
     pub fn new() -> Result<Self, PdfError> {
-        let library_path = std::env::current_exe()
-            .map_err(|error| {
-                PdfError::PlatformError(format!("Cannot locate application executable: {error}"))
-            })?
-            .parent()
-            .map(|directory| directory.join(Pdfium::pdfium_platform_library_name()))
-            .ok_or_else(|| {
-                PdfError::PlatformError("Application executable has no parent directory".into())
-            })?
-            .canonicalize()
-            .map_err(|error| {
-                PdfError::PlatformError(format!("Cannot locate sibling PDFium library: {error}"))
-            })?;
-        let bindings = Pdfium::bind_to_library(library_path)
-            .map_err(|e| PdfError::PlatformError(format!("Failed to bind PDFium library: {e}")))?;
-
-        let pdfium = Pdfium::new(bindings);
-        Ok(Self {
-            pdfium: Arc::new(pdfium),
-        })
+        process_pdfium().map(|pdfium| Self { pdfium })
     }
 }
 
 pub struct PdfiumDocumentOwned {
     doc: PdfDocument<'static>,
-    _pdfium: Arc<Pdfium>,
 }
 
 impl PdfBackend for PdfiumEngine {
@@ -57,15 +38,7 @@ impl PdfBackend for PdfiumEngine {
             .pdfium
             .load_pdf_from_file(path, password)
             .map_err(|error| map_load_error(error, password.is_some()))?;
-
-        // SAFETY: doc borrows Pdfium. This owner keeps the Arc<Pdfium> alive and declares doc
-        // first, so Rust drops doc before the binding owner.
-        let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
-
-        Ok(Box::new(PdfiumDocumentOwned {
-            doc: doc_static,
-            _pdfium: self.pdfium.clone(),
-        }))
+        Ok(Box::new(PdfiumDocumentOwned { doc }))
     }
 
     fn open_bytes(
@@ -77,15 +50,7 @@ impl PdfBackend for PdfiumEngine {
             .pdfium
             .load_pdf_from_byte_vec(bytes, password)
             .map_err(|error| map_load_error(error, password.is_some()))?;
-
-        // SAFETY: doc borrows Pdfium. This owner keeps the Arc<Pdfium> alive and declares doc
-        // first, so Rust drops doc before the binding owner.
-        let doc_static: PdfDocument<'static> = unsafe { std::mem::transmute(doc) };
-
-        Ok(Box::new(PdfiumDocumentOwned {
-            doc: doc_static,
-            _pdfium: self.pdfium.clone(),
-        }))
+        Ok(Box::new(PdfiumDocumentOwned { doc }))
     }
 }
 
@@ -283,7 +248,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         let mut visited = 0;
         while let Some(bookmark) = current {
             current = bookmark.next_sibling();
-            nodes.push(bounded_outline(bookmark, &mut visited)?);
+            nodes.push(bounded_outline(&bookmark, &mut visited)?);
         }
         Ok(nodes)
     }
@@ -336,7 +301,7 @@ fn validate_glyph_count(page_index: PageIndex, count: usize) -> Result<(), PdfEr
     Ok(())
 }
 
-fn bounded_outline(root: PdfBookmark<'_>, visited: &mut usize) -> Result<OutlineNode, PdfError> {
+fn bounded_outline(root: &PdfBookmark<'_>, visited: &mut usize) -> Result<OutlineNode, PdfError> {
     let mut stack = vec![OutlineFrame::new(root, 0, visited)?];
 
     loop {
@@ -349,7 +314,7 @@ fn bounded_outline(root: PdfBookmark<'_>, visited: &mut usize) -> Result<Outline
         if let Some(bookmark) = frame.next_child.take() {
             frame.next_child = bookmark.next_sibling();
             let depth = frame.depth.saturating_add(1);
-            stack.push(OutlineFrame::new(bookmark, depth, visited)?);
+            stack.push(OutlineFrame::new(&bookmark, depth, visited)?);
             continue;
         }
 
@@ -371,13 +336,17 @@ struct OutlineFrame<'a> {
 }
 
 impl<'a> OutlineFrame<'a> {
-    fn new(bookmark: PdfBookmark<'a>, depth: usize, visited: &mut usize) -> Result<Self, PdfError> {
+    fn new(
+        bookmark: &PdfBookmark<'a>,
+        depth: usize,
+        visited: &mut usize,
+    ) -> Result<Self, PdfError> {
         validate_outline_limits(depth, *visited)?;
         *visited = visited.saturating_add(1);
         let next_child = bookmark.iter_direct_children().next();
         let node = OutlineNode {
             title: bookmark.title().unwrap_or_default(),
-            page_index: bookmark_page_index(&bookmark),
+            page_index: bookmark_page_index(bookmark),
             children: Vec::new(),
         };
 
@@ -390,7 +359,7 @@ impl<'a> OutlineFrame<'a> {
 }
 
 fn validate_outline_limits(depth: usize, visited: usize) -> Result<(), PdfError> {
-    if depth > MAX_OUTLINE_DEPTH || visited >= MAX_OUTLINE_NODES {
+    if depth > MAX_OUTLINE_DEPTH || visited >= MAX_OUTLINE_ITEMS {
         return Err(PdfError::InvalidPdfReason(
             "PDF outline exceeds limits".into(),
         ));
@@ -419,16 +388,14 @@ fn bookmark_page_index(bookmark: &PdfBookmark<'_>) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        validate_glyph_count, validate_outline_limits, MAX_OUTLINE_DEPTH, MAX_OUTLINE_NODES,
-    };
-    use barepdf_core::PageIndex;
+    use super::{validate_glyph_count, validate_outline_limits};
+    use barepdf_core::{PageIndex, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS};
 
     #[test]
     fn outline_limits_accept_boundary_and_reject_excess() {
-        assert!(validate_outline_limits(MAX_OUTLINE_DEPTH, MAX_OUTLINE_NODES - 1).is_ok());
+        assert!(validate_outline_limits(MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS - 1).is_ok());
         assert!(validate_outline_limits(MAX_OUTLINE_DEPTH + 1, 0).is_err());
-        assert!(validate_outline_limits(0, MAX_OUTLINE_NODES).is_err());
+        assert!(validate_outline_limits(0, MAX_OUTLINE_ITEMS).is_err());
     }
 
     #[test]

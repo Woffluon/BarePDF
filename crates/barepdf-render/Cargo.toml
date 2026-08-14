@@ -11,5 +11,7 @@ description = "Demand-driven render scheduler, PDFium actor, and LRU bitmap cach
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
 barepdf-pdf = { path = "../barepdf-pdf" }
-crossbeam-channel = "0.5"
+crossbeam-channel.workspace = true
 lru.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

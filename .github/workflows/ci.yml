@@ -86,6 +86,9 @@ jobs:
       - name: Clippy Lints
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      - name: Production Panic Policy
+        run: cargo clippy --workspace --lib --bins --all-features --locked -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable
+
       - name: Unit & Integration Tests
         run: cargo test --workspace --all-features --locked
 
