@@ -215,6 +215,8 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     )));
     window.set_current_version(SharedString::from(CURRENT_VERSION));
     window.set_update_checks_enabled(state.preferences.update_checks_enabled == Some(true));
+    window.set_zoom_mode(zoom_mode_index(state.zoom_mode));
+    window.set_zoom_str(SharedString::from(zoom_percentage(state.zoom_factor)));
     render_update_ui(window, state);
 }
 
@@ -1130,6 +1132,23 @@ pub(super) fn sync_effective_zoom(app: &mut AppState) {
     app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
 }
 
+pub(super) fn zoom_mode_index(mode: ZoomMode) -> i32 {
+    match mode {
+        ZoomMode::FitWidth => 1,
+        ZoomMode::FitPage => 2,
+        ZoomMode::ActualSize | ZoomMode::Custom(_) => 0,
+    }
+}
+
+pub(super) fn zoom_percentage(factor: ZoomFactor) -> String {
+    format!("{}%", (factor.get() * 100.0).round())
+}
+
+pub(super) fn update_zoom_ui(window: &AppWindow, mode: ZoomMode, factor: ZoomFactor) {
+    window.set_zoom_mode(zoom_mode_index(mode));
+    window.set_zoom_str(SharedString::from(zoom_percentage(factor)));
+}
+
 pub(super) fn save_zoom_preference(app: &mut AppState) {
     app.preferences.zoom_mode = app.zoom_mode;
 }
@@ -1286,6 +1305,7 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_view, "view.mode");
     set_text!(set_text_zoom_in, "zoom.in");
     set_text!(set_text_zoom_out, "zoom.out");
+    set_text!(set_text_zoom, "zoom.label");
     set_text!(set_text_fit_width, "zoom.fit_width");
     set_text!(set_text_fit_page, "zoom.fit_page");
     set_text!(set_text_actual_size, "zoom.actual_size");
@@ -1382,6 +1402,14 @@ mod tests {
         assert_eq!(theme_from_index(0), ThemeMode::System);
         assert_eq!(theme_from_index(1), ThemeMode::Light);
         assert_eq!(theme_from_index(2), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn zoom_mode_indices_distinguish_fit_modes() {
+        assert_eq!(zoom_mode_index(ZoomMode::Custom(ZoomFactor::default())), 0);
+        assert_eq!(zoom_mode_index(ZoomMode::ActualSize), 0);
+        assert_eq!(zoom_mode_index(ZoomMode::FitWidth), 1);
+        assert_eq!(zoom_mode_index(ZoomMode::FitPage), 2);
     }
 
     #[test]

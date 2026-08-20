@@ -74,6 +74,7 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("view.mode.book", "Book View");
     m.insert("zoom.in", "Zoom In");
     m.insert("zoom.out", "Zoom Out");
+    m.insert("zoom.label", "Zoom");
     m.insert("zoom.fit_width", "Fit Width");
     m.insert("zoom.fit_page", "Fit Page");
     m.insert("zoom.actual_size", "Actual Size");
@@ -170,6 +171,7 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("view.mode.book", "Kitap Görünümü");
     m.insert("zoom.in", "Yakınlaştır");
     m.insert("zoom.out", "Uzaklaştır");
+    m.insert("zoom.label", "Yakınlaştırma");
     m.insert("zoom.fit_width", "Genişliğe Sığdır");
     m.insert("zoom.fit_page", "Sayfaya Sığdır");
     m.insert("zoom.actual_size", "Gerçek Boyut");

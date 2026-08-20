@@ -68,9 +68,10 @@ impl fmt::Display for PageIndex {
 pub struct ZoomFactor(f32);
 
 impl ZoomFactor {
-    pub const MIN: f32 = 0.1;
-    pub const MAX: f32 = 10.0;
+    pub const MIN: f32 = 0.25;
+    pub const MAX: f32 = 2.0;
     pub const DEFAULT: f32 = 1.0;
+    pub const STEP: f32 = 0.25;
 
     #[must_use]
     pub fn new(factor: f32) -> Self {
@@ -88,12 +89,12 @@ impl ZoomFactor {
 
     #[must_use]
     pub fn zoom_in(self) -> Self {
-        Self::new(self.0 * 1.2)
+        Self::new(self.0 + Self::STEP)
     }
 
     #[must_use]
     pub fn zoom_out(self) -> Self {
-        Self::new(self.0 / 1.2)
+        Self::new(self.0 - Self::STEP)
     }
 }
 
@@ -347,5 +348,23 @@ mod tests {
     fn zoom_factor_normalizes_non_finite_values() {
         assert_eq!(ZoomFactor::new(f32::NAN), ZoomFactor::default());
         assert_eq!(ZoomFactor::new(f32::INFINITY), ZoomFactor::default());
+    }
+
+    #[test]
+    fn zoom_factor_uses_fixed_steps_and_bounds() {
+        assert_eq!(ZoomFactor::new(0.25).zoom_out(), ZoomFactor::new(0.25));
+        assert_eq!(ZoomFactor::new(0.25).zoom_in(), ZoomFactor::new(0.5));
+        assert_eq!(ZoomFactor::new(1.75).zoom_in(), ZoomFactor::new(2.0));
+        assert_eq!(ZoomFactor::new(2.0).zoom_in(), ZoomFactor::new(2.0));
+    }
+
+    #[test]
+    fn persisted_zoom_values_remain_deserializable() {
+        let zoom = ZoomFactor::deserialize(serde::de::value::F32Deserializer::<
+            serde::de::value::Error,
+        >::new(10.0))
+        .expect("valid persisted zoom");
+
+        assert_eq!(zoom, ZoomFactor::new(2.0));
     }
 }

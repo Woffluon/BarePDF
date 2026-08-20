@@ -20,7 +20,7 @@ use crate::infrastructure::{PrintEvent, UpdateCheckCanceller, UpdateCommand};
 
 use barepdf_core::{
     selection::SelectionEngine, DocumentId, PageIndex, TextPosition, TextSelection, ViewingMode,
-    WindowMode, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
+    WindowMode, ZoomFactor, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_platform::printing::PrinterDialog;
@@ -44,7 +44,8 @@ use super::ui::{
     navigate_to_page_inner, parse_drop_paths, persist_preferences, pointer_to_pdf,
     refresh_outline_model, render_visible_pages, request_visible_thumbnails, save_zoom_preference,
     send_render_command, show_banner, sync_effective_zoom, theme_from_index, update_ui_strings,
-    validated_page_input, view_mode_index, view_mode_label,
+    update_zoom_ui, validated_page_input, view_mode_index, view_mode_label, zoom_mode_index,
+    zoom_percentage,
 };
 use super::update_ui::{queue_update_check, render_update_ui};
 pub(super) fn wire_callbacks(
@@ -614,6 +615,7 @@ pub(super) fn restore_active_view(app: &mut AppState, window: &AppWindow) {
     window.set_current_scroll_y(view.scroll_y);
     window.set_sidebar_visible(view.sidebar_visible);
     window.set_sidebar_tab(view.sidebar_tab);
+    update_zoom_ui(window, app.zoom_mode, app.zoom_factor);
 }
 
 fn reset_empty_document(app: &mut AppState, window: &AppWindow) {
@@ -744,6 +746,7 @@ fn connect_zoom_callbacks(
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
             save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
+            update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
         }
     });
 
@@ -758,7 +761,29 @@ fn connect_zoom_callbacks(
             app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
             save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
+            update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
         }
+    });
+
+    let weak = window.as_weak();
+    let state_set = state.clone();
+    let scheduler_set = scheduler.clone();
+    window.on_request_set_zoom(move |input| {
+        let Some(window) = weak.upgrade() else {
+            return SharedString::default();
+        };
+        let mut app = state_set.borrow_mut();
+        sync_effective_zoom(&mut app);
+        let current = zoom_percentage(app.zoom_factor);
+        let Some(percent) = parse_zoom_percent(input.as_str()) else {
+            return SharedString::from(current);
+        };
+        app.zoom_factor = ZoomFactor::new(percent as f32 / 100.0);
+        app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+        save_zoom_preference(&mut app);
+        invalidate_layout_and_render(&mut app, &scheduler_set, &window, true);
+        update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
+        SharedString::from(zoom_percentage(app.zoom_factor))
     });
 
     connect_zoom_mode(window, state, scheduler, ZoomMode::FitWidth, |w, cb| {
@@ -792,9 +817,21 @@ fn connect_zoom_mode<F>(
                 app.zoom_mode = mode;
                 save_zoom_preference(&mut app);
                 invalidate_layout_and_render(&mut app, &scheduler, &window, true);
+                window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
             }
         }),
     );
+}
+
+fn parse_zoom_percent(input: &str) -> Option<i32> {
+    let input = input.trim();
+    let value = input
+        .strip_suffix('%')
+        .map_or(input, |without_percent| without_percent.trim());
+    value
+        .parse::<i32>()
+        .ok()
+        .map(|percent| percent.clamp(25, 200))
 }
 
 fn connect_view_callbacks(
@@ -1072,4 +1109,31 @@ fn connect_selection_callbacks(
             window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_zoom_percent;
+
+    #[test]
+    fn parses_and_clamps_integer_zoom_percentages() {
+        for (input, expected) in [
+            ("125", Some(125)),
+            (" 125% ", Some(125)),
+            ("125 %", Some(125)),
+            ("+125", Some(125)),
+            ("0", Some(25)),
+            ("-25", Some(25)),
+            ("250", Some(200)),
+        ] {
+            assert_eq!(parse_zoom_percent(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_integer_or_malformed_zoom_percentages() {
+        for input in ["", "%", "125.0", "125%%", "abc", "+ 125"] {
+            assert_eq!(parse_zoom_percent(input), None, "{input}");
+        }
+    }
 }

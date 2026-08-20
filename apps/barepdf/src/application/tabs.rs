@@ -28,7 +28,7 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             current_page: PageIndex::zero(),
-            zoom_mode: ZoomMode::default(),
+            zoom_mode: ZoomMode::FitPage,
             zoom_factor: ZoomFactor::default(),
             rotation: Rotation::default(),
             scroll_y: 0.0,
@@ -302,6 +302,34 @@ mod tests {
             tabs.active().map(|tab| tab.view.current_page.get()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn new_tabs_start_fit_page_and_keep_custom_zoom_per_tab() {
+        let mut tabs = TabSet::default();
+        let OpenTab::Created(first) = tabs.open(PathBuf::from("a.pdf"), "a".into()) else {
+            return;
+        };
+        assert_eq!(
+            tabs.active().map(|tab| tab.view.zoom_mode),
+            Some(ZoomMode::FitPage)
+        );
+        if let Some(tab) = tabs.active_mut() {
+            tab.view.zoom_mode = ZoomMode::Custom(ZoomFactor::new(1.5));
+        }
+        let OpenTab::Created(second) = tabs.open(PathBuf::from("b.pdf"), "b".into()) else {
+            return;
+        };
+        assert_eq!(
+            tabs.active().map(|tab| tab.view.zoom_mode),
+            Some(ZoomMode::FitPage)
+        );
+        assert!(tabs.activate(first));
+        assert_eq!(
+            tabs.active().map(|tab| tab.view.zoom_mode),
+            Some(ZoomMode::Custom(ZoomFactor::new(1.5)))
+        );
+        assert!(tabs.activate(second));
     }
 
     #[test]

@@ -11,9 +11,11 @@ slint::slint! {
         out property <color> window: dark ? #0f1114 : #f3f4f6;
         out property <color> command: dark ? #181a1e : #fbfbfc;
         out property <color> panel: dark ? #15171a : #ffffff;
+        out property <color> panel-elevated: dark ? #1b1e23 : #ffffff;
         out property <color> canvas: dark ? #0f1114 : #e9ebee;
         out property <color> control: dark ? #22252a : #ffffff;
         out property <color> control-hover: dark ? #2b2e34 : #f0f1f3;
+        out property <color> control-pressed: dark ? #343840 : #e4e6e9;
         out property <color> text: dark ? #f4f4f5 : #1f2328;
         out property <color> text-muted: dark ? #a7abb3 : #626972;
         out property <color> border: dark ? #ffffff18 : #1f23281f;
@@ -95,7 +97,7 @@ slint::slint! {
         background: !enabled ? #00000000
             : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
             : active ? ThemeTokens.selection
-            : (touch.pressed ? ThemeTokens.control-hover : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
+            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
         border-width: enabled && (primary || active || touch.has-hover) ? 1px : 0px;
         border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
         accessible-role: button;
@@ -168,7 +170,7 @@ slint::slint! {
         background: !enabled ? #00000000
             : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
             : active ? ThemeTokens.selection
-            : (touch.has-hover ? ThemeTokens.control-hover : #00000000);
+            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
         border-width: active || primary ? 1px : 0px;
         border-color: primary ? #d87912 : ThemeTokens.accent;
         accessible-role: button;
@@ -209,14 +211,22 @@ slint::slint! {
         width: 156px;
         height: ThemeTokens.control-height;
         border-radius: ThemeTokens.control-radius;
-        background: item.is_active ? ThemeTokens.panel
+        background: item.is_active ? ThemeTokens.panel-elevated
             : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
         border-width: item.is_active ? 1px : 0px;
-        border-color: item.is_active ? ThemeTokens.accent : ThemeTokens.border;
+        border-color: ThemeTokens.border;
         accessible-role: tab;
         accessible-label: item.title;
 
         tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
+        if root.item.is_active : Rectangle {
+            x: 0px;
+            y: 8px;
+            width: 3px;
+            height: parent.height - 16px;
+            border-radius: 2px;
+            background: ThemeTokens.accent;
+        }
         tab-focus := FocusScope {
             x: 0px;
             width: 0px;
@@ -296,11 +306,11 @@ slint::slint! {
             }
             Rectangle {
                 background: ThemeTokens.panel;
-                border-radius: ThemeTokens.space-3;
+                border-radius: 10px;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
-                drop-shadow-blur: 24px;
-                drop-shadow-color: #00000066;
+                drop-shadow-blur: 16px;
+                drop-shadow-color: #00000048;
                 VerticalLayout {
                     padding: 24px;
                     spacing: 13px;
@@ -339,6 +349,8 @@ slint::slint! {
         in-out property <string> current-page-str: "1";
         in property <string> total-pages-str: "0";
         in property <string> zoom-str: "100%";
+        in property <int> zoom-mode: 0;
+        property <bool> zoom-dirty: false;
         in property <image> page-bitmap;
         in property <length> page-display-width: 800px;
         in property <length> page-display-height: 1040px;
@@ -394,6 +406,7 @@ slint::slint! {
         in property <string> text-view: "View";
         in property <string> text-zoom-in: "Zoom In";
         in property <string> text-zoom-out: "Zoom Out";
+        in property <string> text-zoom: "Zoom";
         in property <string> text-fit-width: "Fit Width";
         in property <string> text-fit-page: "Fit Page";
         in property <string> text-actual-size: "Actual Size";
@@ -439,6 +452,7 @@ slint::slint! {
         callback request-go-to-page(string);
         callback request-zoom-in();
         callback request-zoom-out();
+        callback request-set-zoom(string) -> string;
         callback request-fit-width();
         callback request-fit-page();
         callback request-actual-size();
@@ -502,8 +516,8 @@ slint::slint! {
                 width: Math.min(parent.width - 40px, root.page-display-width);
                 height: Math.min(parent.height - 40px, root.page-display-height);
                 background: white;
-                drop-shadow-blur: 22px;
-                drop-shadow-color: #000000b0;
+                drop-shadow-blur: 12px;
+                drop-shadow-color: #00000078;
                 Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
             }
         }
@@ -523,9 +537,9 @@ slint::slint! {
 
                     HorizontalLayout {
                         height: ThemeTokens.control-height;
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        spacing: 5px;
+                        padding-left: root.width < 820px ? 4px : 10px;
+                        padding-right: root.width < 820px ? 4px : 10px;
+                        spacing: root.width < 820px ? 3px : 5px;
 
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
@@ -571,16 +585,55 @@ slint::slint! {
                         tooltip: root.text-zoom-out; enabled: root.has-document;
                         clicked => { root.request-zoom-out(); }
                     }
-                    Rectangle {
-                        width: 58px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.control;
-                        border-width: 1px; border-color: ThemeTokens.border;
-                        Text { text: root.zoom-str; color: ThemeTokens.text; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    zoom-field := Rectangle {
+                        width: 68px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.control;
+                        border-width: 1px; border-color: zoom-input.has-focus ? ThemeTokens.focus : ThemeTokens.border;
+                        in property <string> canonical-zoom: root.zoom-str;
+                        changed canonical-zoom => {
+                            if !zoom-input.has-focus {
+                                zoom-input.text = self.canonical-zoom;
+                            }
+                        }
+                        zoom-input := LineEdit {
+                            x: 7px; y: 1px; width: parent.width - 14px; height: parent.height - 2px;
+                            enabled: root.has-document;
+                            text: root.zoom-str;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            accessible-label: root.text-zoom;
+                            edited => { root.zoom-dirty = true; }
+                            accepted => {
+                                self.text = root.request-set-zoom(self.text);
+                                root.zoom-dirty = false;
+                            }
+                            changed has-focus => {
+                                if self.has-focus {
+                                    root.zoom-dirty = false;
+                                    self.select-all();
+                                } else if root.zoom-dirty {
+                                    self.text = root.request-set-zoom(self.text);
+                                    root.zoom-dirty = false;
+                                } else {
+                                    self.text = root.zoom-str;
+                                }
+                            }
+                            key-pressed(event) => {
+                                if event.text == "\u{001b}" {
+                                    self.text = root.zoom-str;
+                                    root.zoom-dirty = false;
+                                    self.clear-selection();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/zoom_in_20_regular.svg");
                         tooltip: root.text-zoom-in; enabled: root.has-document;
                         clicked => { root.request-zoom-in(); }
                     }
+                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
                         label: root.view-mode-label; tooltip: root.text-view; show-label: root.width >= 1120px;
@@ -589,13 +642,16 @@ slint::slint! {
                     IconButton {
                         icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
                         label: root.text-fit-width; tooltip: root.text-fit-width; show-label: root.width >= 1040px;
+                        active: root.zoom-mode == 1;
                         enabled: root.has-document; clicked => { root.request-fit-width(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
                         label: root.text-fit-page; tooltip: root.text-fit-page; show-label: root.width >= 1180px;
+                        active: root.zoom-mode == 2;
                         enabled: root.has-document; clicked => { root.request-fit-page(); }
                     }
+                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     TextButton {
                         text: root.text-print;
                         enabled: root.has-document && !root.print-active;
@@ -676,11 +732,12 @@ slint::slint! {
 
             if root.banner-visible : Rectangle {
                 height: 42px;
-                background: ThemeTokens.dark ? #3a2618 : #fff4e8;
+                background: ThemeTokens.dark ? #31251c : #fff7ef;
                 border-width: 1px;
                 border-color: ThemeTokens.accent.with-alpha(0.5);
+                Rectangle { width: 3px; height: parent.height; background: ThemeTokens.accent; }
                 HorizontalLayout {
-                    padding-left: 14px; padding-right: 9px; spacing: ThemeTokens.space-2;
+                    padding-left: 16px; padding-right: 9px; spacing: ThemeTokens.space-2;
                     Text { text: root.banner-text; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     if root.banner-update-action : TextButton {
                         text: root.banner-action-label;
@@ -737,7 +794,7 @@ slint::slint! {
                         padding: 10px;
                         spacing: 10px;
                         Rectangle {
-                            height: 36px; border-radius: 7px; background: ThemeTokens.window;
+                            height: 36px; border-radius: ThemeTokens.control-radius; background: ThemeTokens.window;
                             border-width: 1px; border-color: ThemeTokens.border;
                             HorizontalLayout {
                                 padding: 3px; spacing: 3px;
@@ -751,11 +808,15 @@ slint::slint! {
                                 viewport-y <=> root.thumbnail-scroll-y;
                                 for thumb in root.thumbnail-items : Rectangle {
                                     height: 188px;
-                                    border-radius: 8px;
+                                    border-radius: ThemeTokens.control-radius;
                                     background: thumb.is-selected ? ThemeTokens.selection : (thumb-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-                                    border-width: thumb.is-selected ? 2px : 1px;
-                                    border-color: thumb.is-selected ? ThemeTokens.accent : ThemeTokens.border;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.border;
                                     thumb-touch := TouchArea { clicked => { root.request-select-page(thumb.page-index); } }
+                                    if thumb.is-selected : Rectangle {
+                                        x: 0px; y: 8px; width: 3px; height: parent.height - 16px;
+                                        border-radius: 2px; background: ThemeTokens.accent;
+                                    }
                                     Rectangle {
                                         x: (parent.width - self.width) / 2;
                                         y: 8px + (150px - self.height) / 2;
@@ -812,7 +873,7 @@ slint::slint! {
                     }
 
                     if !root.has-document && !root.password-required : VerticalLayout {
-                        alignment: center; spacing: 13px;
+                        alignment: center; spacing: 14px;
                         HorizontalLayout {
                             height: 42px; alignment: center;
                             Image { source: @image-url("../../../assets/logo.svg"); width: 42px; height: 42px; image-fit: contain; }
@@ -823,7 +884,7 @@ slint::slint! {
                         HorizontalLayout {
                             height: 36px; alignment: center;
                             Rectangle {
-                                width: 128px; height: 36px; border-radius: 7px; background: ThemeTokens.accent;
+                                width: 128px; height: 36px; border-radius: ThemeTokens.control-radius; background: ThemeTokens.accent;
                                 TouchArea { clicked => { root.request-open-file(); } }
                                 Text { text: root.text-open; color: ThemeTokens.accent-content; font-size: 12px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
                             }
@@ -849,7 +910,7 @@ slint::slint! {
                             x: Math.max(24px, (parent.viewport-width - self.width) / 2);
                             y: Math.max(24px, (parent.viewport-height - self.height) / 2);
                             background: white; border-width: 1px; border-color: #00000020;
-                            drop-shadow-blur: ThemeTokens.dark ? 16px : 8px; drop-shadow-color: #00000040;
+                            drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
                             if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
                             if root.visible-pages.length > 0 : Rectangle {
                                 for box in root.visible-pages[0].selection-boxes : Rectangle {
@@ -874,7 +935,7 @@ slint::slint! {
                             width: page.width; height: page.height;
                             x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
                             background: white; border-width: 1px; border-color: #00000020;
-                            drop-shadow-blur: ThemeTokens.dark ? 16px : 8px; drop-shadow-color: #00000040;
+                            drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
                             TouchArea {
@@ -902,12 +963,12 @@ slint::slint! {
                         background: #00000001;
                         TouchArea { clicked => { root.settings-open = false; } }
                         Rectangle {
-                            x: parent.width - 350px; y: 8px; width: 340px; height: 390px;
+                            x: parent.width - 350px; y: 8px; width: 340px; height: 402px;
                             background: ThemeTokens.panel; border-radius: 10px; border-width: 1px; border-color: ThemeTokens.border;
-                            drop-shadow-blur: 20px; drop-shadow-color: #00000055;
+                            drop-shadow-blur: 12px; drop-shadow-color: #00000040;
                             TouchArea { clicked => { } }
                             VerticalLayout {
-                                padding: ThemeTokens.space-4; spacing: 11px;
+                                padding: 18px; spacing: ThemeTokens.space-3;
                                 Text { text: root.text-settings; color: ThemeTokens.text; font-size: 17px; font-weight: 700; }
                                 Text { text: root.text-settings-language; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
                                 HorizontalLayout {
