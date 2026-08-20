@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn older_preferences_default_update_consent() {
+    fn legacy_memory_budget_is_ignored_and_omitted_when_resaved() {
         let directory = tempfile::tempdir().expect("create temp directory");
         let path = directory.path().join("config.json");
         fs::write(
@@ -156,5 +156,9 @@ mod tests {
 
         assert_eq!(preferences.update_checks_enabled, None);
         assert_eq!(preferences.last_update_check_unix, None);
+
+        save_to_file(&preferences, &path).expect("resave old preferences");
+        let resaved = fs::read_to_string(&path).expect("read resaved preferences");
+        assert!(!resaved.contains("memory_budget_bytes"));
     }
 }

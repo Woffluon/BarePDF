@@ -143,6 +143,7 @@ jobs:
         run: |
           powershell -File packaging/windows/scripts/generate-checksums.ps1
           powershell -File packaging/windows/scripts/test-release-manifest.ps1
+          powershell -File packaging/windows/scripts/test-release-manifest.tests.ps1
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

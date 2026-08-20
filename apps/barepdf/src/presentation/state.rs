@@ -6,8 +6,7 @@
 )]
 
 use super::ui::{
-    normalize_viewing_mode, PAGE_IMAGE_BUDGET, RAW_BITMAP_BUDGET, TEXT_GEOMETRY_BUDGET,
-    THUMB_IMAGE_BUDGET,
+    normalize_viewing_mode, PAGE_IMAGE_BUDGET, TEXT_GEOMETRY_BUDGET, THUMB_IMAGE_BUDGET,
 };
 use crate::application::{Application, DocumentController, UpdateController};
 use barepdf_core::{
@@ -266,7 +265,6 @@ pub(super) struct AppState {
 impl AppState {
     pub(super) fn new(mut preferences: UserPreferences) -> Self {
         preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
-        preferences.memory_budget_bytes = RAW_BITMAP_BUDGET;
         Self {
             application: Application::default(),
             current_page: 0,
@@ -336,7 +334,7 @@ impl AppState {
     }
 
     pub(super) fn pump_requires_active(&self, now: Instant) -> bool {
-        self.update.busy
+        self.update.is_busy()
             || self.dimensions_request_pending
             || self.resize_changed_at.is_some()
             || self.active_document().is_some_and(|document| {
@@ -381,9 +379,9 @@ mod tests {
         let now = Instant::now();
         let mut app = AppState::new(UserPreferences::default());
 
-        app.update.busy = true;
+        assert!(app.update.begin_check());
         assert!(app.pump_requires_active(now));
-        app.update.busy = false;
+        app.update.mark_current();
         app.resize_changed_at = Some(now);
         assert!(app.pump_requires_active(now));
         app.resize_changed_at = None;

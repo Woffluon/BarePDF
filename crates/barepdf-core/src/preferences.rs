@@ -1,4 +1,4 @@
-use crate::types::{MemoryBudget, ReadingDirection, ViewingMode, ZoomMode};
+use crate::types::{ReadingDirection, ViewingMode, ZoomMode};
 use crate::MAX_RECENT_FILES;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,6 @@ pub struct UserPreferences {
     pub viewing_mode: ViewingMode,
     pub reading_direction: ReadingDirection,
     pub zoom_mode: ZoomMode,
-    pub memory_budget_bytes: usize,
     #[serde(deserialize_with = "deserialize_max_recent_files")]
     pub max_recent_files: usize,
     #[serde(deserialize_with = "deserialize_recent_files")]
@@ -40,7 +39,6 @@ impl Default for UserPreferences {
             viewing_mode: ViewingMode::ContinuousVertical,
             reading_direction: ReadingDirection::LeftToRight,
             zoom_mode: ZoomMode::FitWidth,
-            memory_budget_bytes: MemoryBudget::DEFAULT_BYTES,
             max_recent_files: MAX_RECENT_FILES,
             recent_files: Vec::new(),
             last_window_width: 1100,

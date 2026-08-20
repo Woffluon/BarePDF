@@ -1,5 +1,8 @@
+#![forbid(unsafe_code)]
+
 pub mod cache;
 mod error;
+mod observability;
 pub mod protocol;
 mod queue;
 pub mod scheduler;

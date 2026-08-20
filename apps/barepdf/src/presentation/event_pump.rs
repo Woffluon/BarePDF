@@ -1,12 +1,12 @@
 use super::callbacks::handle_print_event;
 use super::state::AppState;
 use super::ui::{
-    automatic_update_check_should_run, begin_open, handle_render_event, handle_update_event,
-    install_native_file_drop, is_pdf_path, process_view_changes, queue_update_check, show_banner,
-    unix_timestamp,
+    begin_open, handle_render_event, install_native_file_drop, is_pdf_path, process_view_changes,
+    show_banner,
 };
+use super::update_ui::handle_update_event;
 use crate::application::PrintController;
-use crate::infrastructure::{UpdateCommand, UpdateEvent};
+use crate::infrastructure::UpdateEvent;
 use barepdf_render::RenderScheduler;
 use barepdf_ui::AppWindow;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 pub(super) const ACTIVE_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_INTERVAL: Duration = Duration::from_millis(250);
-const UPDATE_DUE_POLL_INTERVAL: Duration = Duration::from_mins(5);
 const EVENTS_PER_TICK: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,19 +50,17 @@ pub(super) fn start(
     preferences_path: &Path,
     mut native_drop_receiver: Option<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
     updates: (
-        std::sync::mpsc::Sender<UpdateCommand>,
         std::sync::mpsc::Receiver<UpdateEvent>,
         Option<Rc<RefCell<PrintController>>>,
     ),
 ) {
-    let (update_sender, update_receiver, print_controller) = updates;
+    let (update_receiver, print_controller) = updates;
     let weak = window.as_weak();
     let state = state.clone();
     let scheduler = scheduler.clone();
     let preferences_path = preferences_path.to_path_buf();
     let callback_timer = timer.clone();
     let mut worker_terminated = false;
-    let mut next_update_due_poll = Instant::now() + UPDATE_DUE_POLL_INTERVAL;
     timer.start(TimerMode::Repeated, ACTIVE_INTERVAL, move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -92,7 +89,7 @@ pub(super) fn start(
                 break;
             };
             had_activity = true;
-            handle_update_event(event, &window, &state, &update_sender);
+            handle_update_event(event, &window, &state);
         }
         if let Some(controller) = print_controller.as_ref() {
             for _ in 0..EVENTS_PER_TICK {
@@ -101,17 +98,6 @@ pub(super) fn start(
                 };
                 had_activity = true;
                 handle_print_event(event, &window);
-            }
-        }
-        if Instant::now() >= next_update_due_poll {
-            next_update_due_poll = Instant::now() + UPDATE_DUE_POLL_INTERVAL;
-            let should_check = {
-                let app = state.borrow();
-                automatic_update_check_should_run(&app, unix_timestamp())
-            };
-            if should_check {
-                queue_update_check(&update_sender, &state, &window, &preferences_path);
-                had_activity = true;
             }
         }
         process_view_changes(&window, &state, &scheduler);

@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![forbid(unsafe_code)]
 
 mod app_error;
 mod application;

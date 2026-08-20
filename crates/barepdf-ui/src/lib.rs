@@ -21,6 +21,14 @@ slint::slint! {
         out property <color> accent-content: #241407;
         out property <color> selection: #f694232e;
         out property <color> danger: dark ? #ffb4ab : #b42318;
+        out property <color> focus: dark ? #ffd08a : #9a4f00;
+        out property <length> space-1: 4px;
+        out property <length> space-2: 8px;
+        out property <length> space-3: 12px;
+        out property <length> space-4: 16px;
+        out property <length> control-height: 34px;
+        out property <length> control-radius: 6px;
+        out property <length> focus-width: 2px;
     }
 
     export struct SelectionBox {
@@ -81,9 +89,9 @@ slint::slint! {
         in property <bool> primary: false;
         callback clicked();
 
-        height: 34px;
-        min-width: show-label ? 42px : 34px;
-        border-radius: 6px;
+        height: ThemeTokens.control-height;
+        min-width: show-label ? 42px : ThemeTokens.control-height;
+        border-radius: ThemeTokens.control-radius;
         background: !enabled ? #00000000
             : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
             : active ? ThemeTokens.selection
@@ -92,16 +100,27 @@ slint::slint! {
         border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
         accessible-role: button;
         accessible-label: tooltip;
+        accessible-enabled: root.enabled;
 
         touch := TouchArea {
             enabled: root.enabled;
-            clicked => { root.clicked(); }
+            clicked => { focus-scope.focus(); root.clicked(); }
+        }
+
+        focus-scope := FocusScope {
+            x: 0px;
+            width: 0px;
+            enabled <=> root.enabled;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
+                return reject;
+            }
         }
 
         HorizontalLayout {
             height: root.height;
-            padding-left: root.show-label ? 10px : 7px;
-            padding-right: root.show-label ? 11px : 7px;
+            padding-left: root.show-label ? 10px : ThemeTokens.space-2;
+            padding-right: root.show-label ? 11px : ThemeTokens.space-2;
             spacing: root.show-label ? 7px : 0px;
             alignment: center;
 
@@ -129,29 +148,55 @@ slint::slint! {
                 overflow: elide;
             }
         }
+
+        if focus-scope.has-focus && root.enabled : Rectangle {
+            border-width: ThemeTokens.focus-width;
+            border-color: ThemeTokens.focus;
+            border-radius: root.border-radius;
+        }
     }
 
     component TextButton inherits Rectangle {
         in property <string> text;
         in property <bool> active: false;
         in property <bool> enabled: true;
+        in property <bool> primary: false;
         callback clicked();
-        height: 32px;
+        height: ThemeTokens.control-height;
         min-width: 52px;
-        border-radius: 6px;
-        background: active ? ThemeTokens.selection : (touch.has-hover && enabled ? ThemeTokens.control-hover : #00000000);
-        border-width: active ? 1px : 0px;
-        border-color: ThemeTokens.accent;
+        border-radius: ThemeTokens.control-radius;
+        background: !enabled ? #00000000
+            : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
+            : active ? ThemeTokens.selection
+            : (touch.has-hover ? ThemeTokens.control-hover : #00000000);
+        border-width: active || primary ? 1px : 0px;
+        border-color: primary ? #d87912 : ThemeTokens.accent;
         accessible-role: button;
         accessible-label: text;
-        touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+        accessible-enabled: root.enabled;
+        touch := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.clicked(); } }
+        focus-scope := FocusScope {
+            x: 0px;
+            width: 0px;
+            enabled <=> root.enabled;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
+                return reject;
+            }
+        }
         Text {
             text: root.text;
-            color: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.55);
+            color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
+                : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
             font-size: 12px;
             font-weight: active ? 600 : 500;
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+        if focus-scope.has-focus && root.enabled : Rectangle {
+            border-width: ThemeTokens.focus-width;
+            border-color: ThemeTokens.focus;
+            border-radius: root.border-radius;
         }
     }
 
@@ -162,8 +207,8 @@ slint::slint! {
         callback close();
 
         width: 156px;
-        height: 32px;
-        border-radius: 6px;
+        height: ThemeTokens.control-height;
+        border-radius: ThemeTokens.control-radius;
         background: item.is_active ? ThemeTokens.panel
             : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
         border-width: item.is_active ? 1px : 0px;
@@ -171,7 +216,15 @@ slint::slint! {
         accessible-role: tab;
         accessible-label: item.title;
 
-        tab-touch := TouchArea { clicked => { root.activate(); } }
+        tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
+        tab-focus := FocusScope {
+            x: 0px;
+            width: 0px;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") { root.activate(); return accept; }
+                return reject;
+            }
+        }
 
         HorizontalLayout {
             padding-left: 9px;
@@ -213,45 +266,59 @@ slint::slint! {
                 }
             }
         }
+        if tab-focus.has-focus : Rectangle {
+            border-width: ThemeTokens.focus-width;
+            border-color: ThemeTokens.focus;
+            border-radius: root.border-radius;
+        }
     }
 
     component PasswordPopover inherits Rectangle {
         in-out property <string> password-input: "";
         in property <string> file-name: "";
         in property <string> error-text: "";
+        in property <string> title: "";
+        in property <string> placeholder: "";
+        in property <string> cancel-label: "";
+        in property <string> unlock-label: "";
         callback submit(string);
         callback cancel();
         background: #0000008a;
+        forward-focus: modal-focus;
         TouchArea { clicked => { } }
-        Rectangle {
+        modal-focus := FocusScope {
             width: 420px;
             height: error-text == "" ? 230px : 258px;
-            background: ThemeTokens.panel;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: ThemeTokens.border;
-            drop-shadow-blur: 24px;
-            drop-shadow-color: #00000066;
-            VerticalLayout {
-                padding: 24px;
-                spacing: 13px;
-                Text { text: "Password required"; color: ThemeTokens.text; font-size: 19px; font-weight: 700; }
-                Text { text: root.file-name; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
-                if root.error-text != "" : Text { text: root.error-text; color: ThemeTokens.danger; font-size: 12px; }
-                LineEdit {
-                    text <=> root.password-input;
-                    placeholder-text: "Password";
-                    input-type: password;
-                    accepted => { root.submit(root.password-input); }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    TextButton { text: "Cancel"; clicked => { root.cancel(); } }
-                    Rectangle {
-                        width: 76px; height: 32px; border-radius: 6px; background: ThemeTokens.accent;
-                        TouchArea { clicked => { root.submit(root.password-input); } }
-                        Text { text: "Unlock"; color: ThemeTokens.accent-content; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            forward-focus: password-field;
+            key-pressed(event) => {
+                if (event.text == "\u{001b}") { root.cancel(); return accept; }
+                return reject;
+            }
+            Rectangle {
+                background: ThemeTokens.panel;
+                border-radius: ThemeTokens.space-3;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+                drop-shadow-blur: 24px;
+                drop-shadow-color: #00000066;
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 13px;
+                    Text { text: root.title; color: ThemeTokens.text; font-size: 19px; font-weight: 700; }
+                    Text { text: root.file-name; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
+                    if root.error-text != "" : Text { text: root.error-text; color: ThemeTokens.danger; font-size: 12px; }
+                    password-field := LineEdit {
+                        text <=> root.password-input;
+                        placeholder-text: root.placeholder;
+                        accessible-label: root.placeholder;
+                        input-type: password;
+                        accepted => { root.submit(root.password-input); }
+                    }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.cancel-label; clicked => { root.cancel(); } }
+                        TextButton { text: root.unlock-label; primary: true; clicked => { root.submit(root.password-input); } }
                     }
                 }
             }
@@ -313,6 +380,9 @@ slint::slint! {
         in property <bool> banner-visible: false;
         in property <string> banner-text: "";
         in property <bool> banner-can-retry: false;
+        in property <bool> banner-update-action: false;
+        in property <string> banner-action-label: "";
+        in property <bool> banner-action-enabled: false;
         in property <bool> print-active: false;
         in property <float> print-progress: 0;
         in property <string> print-status: "";
@@ -344,6 +414,19 @@ slint::slint! {
         in property <string> text-update-enabled: "Enabled";
         in property <string> text-update-disabled: "Disabled";
         in property <string> text-check-now: "Check now";
+        in property <string> text-prev-page: "Previous page";
+        in property <string> text-next-page: "Next page";
+        in property <string> text-password-title: "Password Required";
+        in property <string> text-password-placeholder: "Password";
+        in property <string> text-password-cancel: "Cancel";
+        in property <string> text-password-unlock: "Unlock";
+        in property <string> text-settings-language: "Language";
+        in property <string> text-settings-theme: "Theme";
+        in property <string> text-settings-system: "System";
+        in property <string> text-settings-english: "English";
+        in property <string> text-settings-turkish: "Türkçe";
+        in property <string> text-settings-light: "Light";
+        in property <string> text-settings-dark: "Dark";
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
         in property <string> text-cancel-print: "Cancel";
@@ -439,7 +522,7 @@ slint::slint! {
                     padding-bottom: 12px;
 
                     HorizontalLayout {
-                        height: 34px;
+                        height: ThemeTokens.control-height;
                         padding-left: 10px;
                         padding-right: 10px;
                         spacing: 5px;
@@ -458,11 +541,11 @@ slint::slint! {
                     Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
-                        tooltip: "Previous page"; enabled: root.has-document;
+                        tooltip: root.text-prev-page; enabled: root.has-document;
                         clicked => { root.request-prev-page(); }
                     }
                     Rectangle {
-                        width: 94px; height: 34px; border-radius: 6px;
+                        width: 94px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius;
                         background: ThemeTokens.control; border-width: 1px; border-color: ThemeTokens.border;
                         HorizontalLayout {
                             padding-left: 5px; padding-right: 7px; spacing: 3px;
@@ -479,7 +562,7 @@ slint::slint! {
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
-                        tooltip: "Next page"; enabled: root.has-document;
+                        tooltip: root.text-next-page; enabled: root.has-document;
                         clicked => { root.request-next-page(); }
                     }
                     Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
@@ -489,7 +572,7 @@ slint::slint! {
                         clicked => { root.request-zoom-out(); }
                     }
                     Rectangle {
-                        width: 58px; height: 34px; border-radius: 6px; background: ThemeTokens.control;
+                        width: 58px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.control;
                         border-width: 1px; border-color: ThemeTokens.border;
                         Text { text: root.zoom-str; color: ThemeTokens.text; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -597,8 +680,14 @@ slint::slint! {
                 border-width: 1px;
                 border-color: ThemeTokens.accent.with-alpha(0.5);
                 HorizontalLayout {
-                    padding-left: 14px; padding-right: 9px; spacing: 8px;
+                    padding-left: 14px; padding-right: 9px; spacing: ThemeTokens.space-2;
                     Text { text: root.banner-text; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    if root.banner-update-action : TextButton {
+                        text: root.banner-action-label;
+                        enabled: root.banner-action-enabled;
+                        primary: true;
+                        clicked => { root.request-update-action(); }
+                    }
                     if root.banner-can-retry : TextButton { text: root.text-retry; clicked => { root.request-retry(); } }
                     IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-dismiss; clicked => { root.request-dismiss-banner(); } }
                 }
@@ -801,6 +890,10 @@ slint::slint! {
 
                     if root.password-required : password-popup := PasswordPopover {
                         file-name: root.protected-file-name; error-text: root.password-error;
+                        title: root.text-password-title;
+                        placeholder: root.text-password-placeholder;
+                        cancel-label: root.text-password-cancel;
+                        unlock-label: root.text-password-unlock;
                         submit(password) => { root.request-unlock-password(password); password-popup.password-input = ""; }
                         cancel => { password-popup.password-input = ""; root.password-required = false; }
                     }
@@ -814,21 +907,21 @@ slint::slint! {
                             drop-shadow-blur: 20px; drop-shadow-color: #00000055;
                             TouchArea { clicked => { } }
                             VerticalLayout {
-                                padding: 16px; spacing: 11px;
+                                padding: ThemeTokens.space-4; spacing: 11px;
                                 Text { text: root.text-settings; color: ThemeTokens.text; font-size: 17px; font-weight: 700; }
-                                Text { text: "Language"; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                Text { text: root.text-settings-language; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
                                 HorizontalLayout {
                                     spacing: 5px;
-                                    TextButton { text: "System"; active: root.current-language == 0; clicked => { root.request-change-language(0); } }
-                                    TextButton { text: "English"; active: root.current-language == 1; clicked => { root.request-change-language(1); } }
-                                    TextButton { text: "Türkçe"; active: root.current-language == 2; clicked => { root.request-change-language(2); } }
+                                    TextButton { text: root.text-settings-system; active: root.current-language == 0; clicked => { root.request-change-language(0); } }
+                                    TextButton { text: root.text-settings-english; active: root.current-language == 1; clicked => { root.request-change-language(1); } }
+                                    TextButton { text: root.text-settings-turkish; active: root.current-language == 2; clicked => { root.request-change-language(2); } }
                                 }
-                                Text { text: "Theme"; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                Text { text: root.text-settings-theme; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
                                 HorizontalLayout {
                                     spacing: 5px;
-                                    TextButton { text: "System"; active: root.current-theme == 0; clicked => { root.request-change-theme(0); } }
-                                    TextButton { text: "Light"; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
-                                    TextButton { text: "Dark"; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
+                                    TextButton { text: root.text-settings-system; active: root.current-theme == 0; clicked => { root.request-change-theme(0); } }
+                                    TextButton { text: root.text-settings-light; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
+                                    TextButton { text: root.text-settings-dark; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
                                 }
                                 Rectangle { height: 1px; background: ThemeTokens.border; }
                                 Text { text: root.text-updates + " · BarePDF v" + root.current-version; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }

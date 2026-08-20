@@ -14,17 +14,15 @@
     unused_must_use
 )]
 
-use crate::application::{
-    DocumentController, PrintController, PrintControllerError, UpdateUiState,
-};
+use crate::application::{DocumentController, PrintController, PrintControllerError};
 use crate::diagnostics::{self, DiagnosticEvent};
-use crate::infrastructure::{PrintEvent, UpdateCommand};
+use crate::infrastructure::{PrintEvent, UpdateCheckCanceller, UpdateCommand};
 
 use barepdf_core::{
     selection::SelectionEngine, DocumentId, PageIndex, TextPosition, TextSelection, ViewingMode,
     WindowMode, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
 };
-use barepdf_i18n::Language;
+use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_platform::printing::PrinterDialog;
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
@@ -39,16 +37,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::models::{refresh_page_model, refresh_tab_model};
+use super::models::{refresh_page_model, refresh_tab_model, refresh_thumbnail_model};
 use super::state::AppState;
 use super::ui::{
     apply_theme, begin_open, invalidate_layout_and_render, native_window_handle, navigate_to_page,
     navigate_to_page_inner, parse_drop_paths, persist_preferences, pointer_to_pdf,
-    queue_update_check, refresh_outline_model, render_update_ui, render_visible_pages,
-    request_visible_thumbnails, save_zoom_preference, send_render_command, show_banner,
-    sync_effective_zoom, theme_from_index, update_ui_strings, validated_page_input,
-    view_mode_index, view_mode_label,
+    refresh_outline_model, render_visible_pages, request_visible_thumbnails, save_zoom_preference,
+    send_render_command, show_banner, sync_effective_zoom, theme_from_index, update_ui_strings,
+    validated_page_input, view_mode_index, view_mode_label,
 };
+use super::update_ui::{queue_update_check, render_update_ui};
 pub(super) fn wire_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -58,10 +56,11 @@ pub(super) fn wire_callbacks(
     preferences_path: &Path,
     background: (
         std::sync::mpsc::Sender<UpdateCommand>,
+        UpdateCheckCanceller,
         Option<Rc<RefCell<PrintController>>>,
     ),
 ) {
-    let (update_sender, print_controller) = background;
+    let (update_sender, update_check_canceller, print_controller) = background;
     let weak = window.as_weak();
     let state_open = state.clone();
     let scheduler_open = scheduler.clone();
@@ -83,8 +82,12 @@ pub(super) fn wire_callbacks(
     let scheduler_password = scheduler.clone();
     window.on_request_unlock_password(move |password| {
         if password.as_str().len() > MAX_PASSWORD_BYTES {
+            let language = state_password.borrow().preferences.language.resolve();
             if let Some(window) = weak.upgrade() {
-                window.set_password_error(SharedString::from("Password is too long."));
+                window.set_password_error(SharedString::from(barepdf_i18n::t(
+                    language,
+                    "password.error.too_long",
+                )));
                 window.set_password_required(true);
             }
             return;
@@ -127,6 +130,7 @@ pub(super) fn wire_callbacks(
                 language.resolve(),
             )));
             update_ui_strings(&window, language.resolve());
+            refresh_thumbnail_model(&mut app, &window);
             render_update_ui(&window, &app);
         }
     });
@@ -147,36 +151,33 @@ pub(super) fn wire_callbacks(
 
     let weak = window.as_weak();
     let state_update_consent = state.clone();
+    let update_check_canceller_consent = update_check_canceller.clone();
     let preferences_path_updates = preferences_path.to_path_buf();
-    let update_sender_consent = update_sender.clone();
     window.on_request_change_update_checks(move |enabled| {
         let Some(window) = weak.upgrade() else {
             return;
         };
+        if !enabled {
+            update_check_canceller_consent.cancel_pending_check();
+        }
         {
             let mut app = state_update_consent.borrow_mut();
             app.preferences.update_checks_enabled = Some(enabled);
             persist_preferences(&app.preferences, &preferences_path_updates, Some(&window));
         }
         window.set_update_checks_enabled(enabled);
-        if enabled {
-            queue_update_check(
-                &update_sender_consent,
-                &state_update_consent,
-                &window,
-                &preferences_path_updates,
-            );
-        }
     });
 
     let weak = window.as_weak();
     let state_update_check = state.clone();
     let preferences_path_check = preferences_path.to_path_buf();
     let update_sender_check = update_sender.clone();
+    let update_check_canceller_check = update_check_canceller.clone();
     window.on_request_check_update(move || {
         if let Some(window) = weak.upgrade() {
             queue_update_check(
                 &update_sender_check,
+                &update_check_canceller_check,
                 &state_update_check,
                 &window,
                 &preferences_path_check,
@@ -191,44 +192,39 @@ pub(super) fn wire_callbacks(
             return;
         };
         let mut app = state_update_action.borrow_mut();
-        if app.update.busy {
+        if app.update.is_busy() {
             return;
         }
-        if let (Some(path), Some(update)) = (
-            app.update.verified_path.clone(),
-            app.update.available.clone(),
-        ) {
-            app.update.busy = true;
+        if let Some((path, update)) = app.update.begin_install() {
             app.wake_pump();
-            window.set_update_action_enabled(false);
+            render_update_ui(&window, &app);
             if update_sender
                 .send(UpdateCommand::Install { path, update })
                 .is_err()
             {
-                app.update.busy = false;
-                app.update.state = UpdateUiState::Error;
+                app.update.mark_failed();
                 render_update_ui(&window, &app);
             }
             return;
         }
-        let Some(update) = app.update.available.clone() else {
+        if !is_installed_build() {
+            let Some(release_url) = app.update.release_url().map(str::to_owned) else {
+                return;
+            };
+            if let Err(error) = open_url(&release_url) {
+                diagnostics::warn_redacted(DiagnosticEvent::ReleasePageOpen, &error);
+                app.update.mark_failed();
+                render_update_ui(&window, &app);
+            }
+            return;
+        }
+        let Some(update) = app.update.begin_download() else {
             return;
         };
-        if !is_installed_build() {
-            if let Err(error) = open_url(update.release_url()) {
-                diagnostics::warn_redacted(DiagnosticEvent::ReleasePageOpen, &error);
-                app.update.state = UpdateUiState::Error;
-                render_update_ui(&window, &app);
-            }
-            return;
-        }
-        app.update.busy = true;
         app.wake_pump();
-        app.update.state = UpdateUiState::Downloading;
         render_update_ui(&window, &app);
         if update_sender.send(UpdateCommand::Download(update)).is_err() {
-            app.update.busy = false;
-            app.update.state = UpdateUiState::Error;
+            app.update.mark_failed();
             render_update_ui(&window, &app);
         }
     });
@@ -270,6 +266,9 @@ pub(super) fn wire_callbacks(
     window.on_request_dismiss_banner(move || {
         if let Some(window) = weak.upgrade() {
             window.set_banner_visible(false);
+            window.set_banner_update_action(false);
+            window.set_banner_action_label(SharedString::default());
+            window.set_banner_action_enabled(false);
         }
     });
 
@@ -297,8 +296,13 @@ fn connect_print_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
+        let language = window_language(&window);
         let Some(controller) = controller_print.as_ref() else {
-            show_banner(&window, "Printing is unavailable.", false);
+            show_banner(
+                &window,
+                barepdf_i18n::t(language, "print.unavailable"),
+                false,
+            );
             return;
         };
         let target = state_print
@@ -310,28 +314,40 @@ fn connect_print_callbacks(
                 let title = path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .unwrap_or("BarePDF document")
+                    .unwrap_or(barepdf_i18n::t(language, "print.default_document"))
                     .to_string();
                 (path, title, document.page_count())
             });
         let Some((path, title, page_count)) = target else {
-            show_banner(&window, "Open a PDF before printing.", false);
+            show_banner(
+                &window,
+                barepdf_i18n::t(language, "print.open_document"),
+                false,
+            );
             return;
         };
         let job_id = match controller.borrow_mut().reserve_job() {
             Ok(job_id) => job_id,
             Err(PrintControllerError::Busy) => {
-                show_banner(&window, "Another print job is already active.", false);
+                show_banner(&window, barepdf_i18n::t(language, "print.busy"), false);
                 return;
             }
-            Err(error) => {
-                show_banner(&window, format!("Could not start printing: {error}"), false);
+            Err(_) => {
+                show_banner(
+                    &window,
+                    barepdf_i18n::t(language, "print.start_failed"),
+                    false,
+                );
                 return;
             }
         };
         let Some(hwnd) = native_window_handle(&window) else {
             controller.borrow_mut().release_reservation(job_id);
-            show_banner(&window, "The Windows print dialog is unavailable.", false);
+            show_banner(
+                &window,
+                barepdf_i18n::t(language, "print.dialog_unavailable"),
+                false,
+            );
             return;
         };
         let selection = WindowsPrinterDialog::new(hwnd as _).select(job_id, page_count);
@@ -341,11 +357,11 @@ fn connect_print_callbacks(
                 controller.borrow_mut().release_reservation(job_id);
                 return;
             }
-            Err(error) => {
+            Err(_) => {
                 controller.borrow_mut().release_reservation(job_id);
                 show_banner(
                     &window,
-                    format!("Could not open print dialog: {error}"),
+                    barepdf_i18n::t(language, "print.dialog_failed"),
                     false,
                 );
                 return;
@@ -362,13 +378,16 @@ fn connect_print_callbacks(
             Ok(()) => {
                 window.set_print_active(true);
                 window.set_print_progress(0.0);
-                window.set_print_status(SharedString::from("Preparing print job…"));
+                window.set_print_status(SharedString::from(barepdf_i18n::t(
+                    language,
+                    "print.status.preparing",
+                )));
                 state_print.borrow_mut().wake_pump();
             }
-            Err(error) => {
+            Err(_) => {
                 show_banner(
                     &window,
-                    format!("Could not queue print job: {error}"),
+                    barepdf_i18n::t(language, "print.queue_failed"),
                     false,
                 );
             }
@@ -383,7 +402,10 @@ fn connect_print_callbacks(
         };
         if controller.borrow().cancel() {
             if let Some(window) = weak.upgrade() {
-                window.set_print_status(SharedString::from("Cancelling print job…"));
+                window.set_print_status(SharedString::from(barepdf_i18n::t(
+                    window_language(&window),
+                    "print.status.cancelling",
+                )));
                 state_cancel.borrow_mut().wake_pump();
             }
         }
@@ -402,25 +424,42 @@ pub(super) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
             };
             window.set_print_progress(progress);
             window.set_print_status(SharedString::from(format!(
-                "Printing page {completed} of {total}…"
+                "{} {completed} / {total}…",
+                barepdf_i18n::t(window_language(window), "print.status.progress")
             )));
         }
         PrintEvent::Finished { .. } => {
             window.set_print_active(false);
             window.set_print_progress(1.0);
-            window.set_print_status(SharedString::from("Printing complete."));
+            window.set_print_status(SharedString::from(barepdf_i18n::t(
+                window_language(window),
+                "print.status.complete",
+            )));
         }
         PrintEvent::Cancelled { .. } => {
             window.set_print_active(false);
             window.set_print_progress(0.0);
-            window.set_print_status(SharedString::from("Printing cancelled."));
+            window.set_print_status(SharedString::from(barepdf_i18n::t(
+                window_language(window),
+                "print.status.cancelled",
+            )));
         }
         PrintEvent::Failed { message, .. } => {
             window.set_print_active(false);
             window.set_print_progress(0.0);
-            window.set_print_status(SharedString::from("Printing failed."));
-            show_banner(window, format!("Printing failed: {message}"), false);
+            drop(message);
+            let message = barepdf_i18n::t(window_language(window), "print.status.failed");
+            window.set_print_status(SharedString::from(message));
+            show_banner(window, message, false);
         }
+    }
+}
+
+fn window_language(window: &AppWindow) -> ResolvedLanguage {
+    match window.get_current_language() {
+        1 => Language::English.resolve(),
+        2 => Language::Turkish.resolve(),
+        _ => Language::System.resolve(),
     }
 }
 
@@ -943,9 +982,9 @@ fn connect_selection_callbacks(
         }
         let mut app = state_down.borrow_mut();
         let page = page as u32;
-        if DocumentController::page_index(&app.application, page).is_none() {
+        let Some(page_index) = DocumentController::page_index(&app.application, page) else {
             return;
-        }
+        };
         if let Some(document_id) = app.active_document() {
             if !app.text_geometries.contains_key(document_id, page) {
                 let generation = app.generation;
@@ -955,7 +994,7 @@ fn connect_selection_callbacks(
                     RenderCommand::FetchTextGeometry {
                         document_id,
                         generation,
-                        page_index: PageIndex::from_raw(page),
+                        page_index,
                     },
                 );
             }
@@ -973,7 +1012,6 @@ fn connect_selection_callbacks(
             .active_document()
             .and_then(|document| app.text_geometries.get(document, page).cloned());
         if let Some(geometry) = geometry.as_ref() {
-            let page_index = PageIndex::from_raw(page);
             let character = SelectionEngine::hit_test(geometry, pdf_x, pdf_y);
             app.selection = Some(match click_count {
                 2 => SelectionEngine::select_word(geometry, page_index, character),
@@ -1004,6 +1042,9 @@ fn connect_selection_callbacks(
             return;
         }
         let page = page as u32;
+        let Some(page_index) = DocumentController::page_index(&app.application, page) else {
+            return;
+        };
         let Some(document) = app.active_document() else {
             return;
         };
@@ -1014,7 +1055,7 @@ fn connect_selection_callbacks(
             .map(|geometry| SelectionEngine::hit_test(geometry, pdf_x, pdf_y))
             .unwrap_or(0);
         if let Some(selection) = app.selection.as_mut() {
-            selection.focus = TextPosition::new(PageIndex::from_raw(page), character);
+            selection.focus = TextPosition::new(page_index, character);
         }
         if let Some(window) = weak.upgrade() {
             window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));

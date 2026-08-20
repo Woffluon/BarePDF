@@ -2,6 +2,7 @@
 
 use super::state::AppState;
 use super::ui::{compute_selection_boxes, ensure_layout, visible_page_indices};
+use barepdf_i18n::{t, ResolvedLanguage};
 use barepdf_render::RenderKind;
 use barepdf_ui::{AppWindow, PageItem, TabItem, ThumbnailItem};
 use slint::{Model, ModelRc, SharedString, VecModel};
@@ -112,11 +113,28 @@ fn thumbnail_item(app: &mut AppState, index: u32) -> ThumbnailItem {
     });
     ThumbnailItem {
         page_index: index as i32,
-        page_number: SharedString::from(format!("Page {}", index + 1)),
+        page_number: thumbnail_page_label(app.preferences.language.resolve(), index),
         width: display_width,
         height: display_height,
         bitmap: image.clone().unwrap_or_default(),
         has_bitmap: image.is_some(),
         is_selected: index == app.current_page,
+    }
+}
+
+fn thumbnail_page_label(language: ResolvedLanguage, index: u32) -> SharedString {
+    SharedString::from(format!("{} {}", t(language, "page.thumbnail"), index + 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_page_label_uses_the_selected_language() {
+        assert_eq!(
+            thumbnail_page_label(ResolvedLanguage::Turkish, 1).as_str(),
+            "Sayfa 2"
+        );
     }
 }

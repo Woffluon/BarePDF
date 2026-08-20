@@ -16,12 +16,12 @@
 
 use crate::app_error::AppError;
 use crate::application::{
-    DocumentController, OpenTab, OpenTransition, PrintController, RenderController, UpdateUiState,
+    DocumentController, OpenTab, OpenTransition, PrintController, RenderController,
 };
 use crate::diagnostics::{self, DiagnosticEvent};
 use crate::infrastructure::{
     default_config_path, save_to_file, start_update_worker, try_load_from_file,
-    PreferencesLoadError, UpdateCommand, UpdateEvent, AUTO_CHECK_INTERVAL_SECONDS, CURRENT_VERSION,
+    PreferencesLoadError, CURRENT_VERSION,
 };
 
 use barepdf_core::{
@@ -32,8 +32,7 @@ use barepdf_core::{
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform_windows::{
-    ask_yes_no, install_file_drop, is_installed_build, show_fatal_error, WindowsClipboard,
-    WindowsFileDialogs,
+    ask_yes_no, install_file_drop, show_fatal_error, WindowsClipboard, WindowsFileDialogs,
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderError, RenderEvent, RenderJob, RenderKind, RenderScheduler,
@@ -69,6 +68,9 @@ use super::models::{
     refresh_thumbnail_selection,
 };
 use super::state::{fit_bitmap_to_budget, AppState, FlatOutlineEntry, LayoutKey};
+use super::update_ui::{
+    queue_update_check, render_update_ui, startup_update_check_should_run, unix_timestamp,
+};
 
 pub(crate) fn run() -> Result<(), AppError> {
     let pdf_engine = match PdfiumEngine::new() {
@@ -114,6 +116,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     let clipboard = Arc::new(WindowsClipboard::new());
     let (mut update_worker, update_receiver) = start_update_worker();
     let update_sender = update_worker.command_sender();
+    let update_check_canceller = update_worker.check_canceller();
     let window = AppWindow::new()?;
     window.window().set_size(LogicalSize::new(
         preferences.last_window_width.max(760) as f32,
@@ -140,13 +143,21 @@ pub(crate) fn run() -> Result<(), AppError> {
         dialogs,
         clipboard,
         &preferences_path,
-        (update_sender.clone(), print_controller.clone()),
+        (
+            update_sender.clone(),
+            update_check_canceller.clone(),
+            print_controller.clone(),
+        ),
     );
 
-    if state.borrow().preferences.update_checks_enabled == Some(true)
-        && update_check_is_due(&state.borrow().preferences, unix_timestamp())
-    {
-        queue_update_check(&update_sender, &state, &window, &preferences_path);
+    if startup_update_check_should_run(&state.borrow(), unix_timestamp()) {
+        queue_update_check(
+            &update_sender,
+            &update_check_canceller,
+            &state,
+            &window,
+            &preferences_path,
+        );
     }
 
     if let Some(argument) = env::args_os().nth(1) {
@@ -165,7 +176,7 @@ pub(crate) fn run() -> Result<(), AppError> {
         &scheduler,
         &preferences_path,
         None,
-        (update_sender, update_receiver, print_controller.clone()),
+        (update_receiver, print_controller.clone()),
     );
     let run_result = window.run();
     if let Some(controller) = print_controller {
@@ -205,171 +216,6 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     window.set_current_version(SharedString::from(CURRENT_VERSION));
     window.set_update_checks_enabled(state.preferences.update_checks_enabled == Some(true));
     render_update_ui(window, state);
-}
-
-pub(super) fn queue_update_check(
-    sender: &std::sync::mpsc::Sender<UpdateCommand>,
-    state: &Rc<RefCell<AppState>>,
-    window: &AppWindow,
-    preferences_path: &Path,
-) {
-    let mut app = state.borrow_mut();
-    if app.update.busy {
-        return;
-    }
-    app.update.busy = true;
-    app.wake_pump();
-    app.update.state = UpdateUiState::Checking;
-    render_update_ui(window, &app);
-    if sender.send(UpdateCommand::Check).is_ok() {
-        app.preferences.last_update_check_unix = Some(unix_timestamp());
-        persist_preferences(&app.preferences, preferences_path, Some(window));
-    } else {
-        app.update.busy = false;
-        app.update.state = UpdateUiState::Error;
-        render_update_ui(window, &app);
-    }
-}
-
-pub(super) fn handle_update_event(
-    event: UpdateEvent,
-    window: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    sender: &std::sync::mpsc::Sender<UpdateCommand>,
-) {
-    let mut app = state.borrow_mut();
-    app.update.busy = false;
-    match event {
-        UpdateEvent::UpToDate => {
-            app.update.available = None;
-            app.update.verified_path = None;
-            app.update.state = UpdateUiState::Current;
-        }
-        UpdateEvent::Available(update) => {
-            app.update.available = Some(update.clone());
-            app.update.verified_path = None;
-            if is_installed_build() {
-                app.update.busy = true;
-                app.wake_pump();
-                app.update.state = UpdateUiState::Downloading;
-                if sender.send(UpdateCommand::Download(update)).is_err() {
-                    app.update.busy = false;
-                    app.update.state = UpdateUiState::Error;
-                }
-            } else {
-                app.update.state = UpdateUiState::Available;
-            }
-        }
-        UpdateEvent::Downloaded { path, update } => {
-            app.update.available = Some(update);
-            app.update.verified_path = Some(path);
-            app.update.state = UpdateUiState::Verified;
-        }
-        UpdateEvent::InstallerStarted => {
-            let _ = slint::quit_event_loop();
-        }
-        UpdateEvent::Error(error) => {
-            diagnostics::warn_redacted(DiagnosticEvent::Update, &error);
-            app.update.state = UpdateUiState::Error;
-        }
-    }
-    render_update_ui(window, &app);
-}
-
-pub(super) fn render_update_ui(window: &AppWindow, app: &AppState) {
-    let language = app.preferences.language.resolve();
-    let (status, action, enabled) = match app.update.state {
-        UpdateUiState::Ready => (
-            barepdf_i18n::t(language, "updates.status.ready").to_string(),
-            "",
-            false,
-        ),
-        UpdateUiState::Checking => (
-            barepdf_i18n::t(language, "updates.status.checking").to_string(),
-            "",
-            false,
-        ),
-        UpdateUiState::Current => (
-            barepdf_i18n::t(language, "updates.status.current").to_string(),
-            "",
-            false,
-        ),
-        UpdateUiState::Downloading => (
-            barepdf_i18n::t(language, "updates.status.downloading").to_string(),
-            "",
-            false,
-        ),
-        UpdateUiState::Verified => (
-            barepdf_i18n::t(language, "updates.status.verified").to_string(),
-            barepdf_i18n::t(language, "updates.action.install"),
-            true,
-        ),
-        UpdateUiState::Error => (
-            barepdf_i18n::t(language, "updates.status.error").to_string(),
-            "",
-            false,
-        ),
-        UpdateUiState::Available => {
-            let Some(update) = app.update.available.as_ref() else {
-                return;
-            };
-            let note = update
-                .release_notes()
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .chars()
-                .take(160)
-                .collect::<String>();
-            let status = if note.is_empty() {
-                format!(
-                    "{} v{}",
-                    barepdf_i18n::t(language, "updates.status.available"),
-                    update.version()
-                )
-            } else {
-                format!(
-                    "{} v{} — {}",
-                    barepdf_i18n::t(language, "updates.status.available"),
-                    update.version(),
-                    note
-                )
-            };
-            (
-                status,
-                barepdf_i18n::t(
-                    language,
-                    if is_installed_build() {
-                        "updates.action.download"
-                    } else {
-                        "updates.action.release"
-                    },
-                ),
-                true,
-            )
-        }
-    };
-    window.set_update_status(SharedString::from(status));
-    window.set_update_action_label(SharedString::from(action));
-    window.set_update_action_enabled(enabled);
-}
-
-fn update_check_is_due(preferences: &UserPreferences, now: u64) -> bool {
-    preferences
-        .last_update_check_unix
-        .is_none_or(|last| last > now || now - last >= AUTO_CHECK_INTERVAL_SECONDS)
-}
-
-pub(super) fn automatic_update_check_should_run(app: &AppState, now: u64) -> bool {
-    !app.update.busy
-        && app.preferences.update_checks_enabled == Some(true)
-        && update_check_is_due(&app.preferences, now)
-}
-
-pub(super) fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
 }
 
 pub(super) fn install_native_file_drop(
@@ -539,9 +385,10 @@ pub(super) fn handle_render_event(
                 .unwrap_or("document.pdf");
             window.set_document_title(SharedString::from(file_name));
             window.set_total_pages_str(SharedString::from(page_count.to_string()));
-            window.set_status_text(SharedString::from(format!(
-                "{} ({} pages)",
-                file_name, page_count
+            window.set_status_text(SharedString::from(opened_document_status(
+                app.preferences.language.resolve(),
+                file_name,
+                page_count,
             )));
             refresh_recent_files(&mut app, window);
             refresh_tab_model(&app, window);
@@ -1312,6 +1159,9 @@ pub(super) fn apply_theme(window: &AppWindow, theme: ThemeMode) {
 pub(super) fn show_banner(window: &AppWindow, message: impl Into<SharedString>, can_retry: bool) {
     window.set_banner_text(message.into());
     window.set_banner_can_retry(can_retry);
+    window.set_banner_update_action(false);
+    window.set_banner_action_label(SharedString::default());
+    window.set_banner_action_enabled(false);
     window.set_banner_visible(true);
 }
 
@@ -1416,6 +1266,12 @@ pub(super) fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> 
     )
 }
 
+fn opened_document_status(language: ResolvedLanguage, name: &str, pages: u32) -> String {
+    barepdf_i18n::t(language, "status.opened")
+        .replace("{name}", name)
+        .replace("{pages}", &pages.to_string())
+}
+
 pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) {
     macro_rules! set_text {
         ($setter:ident, $key:literal) => {
@@ -1426,6 +1282,7 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_sidebar, "sidebar.toggle");
     set_text!(set_text_thumbnails, "sidebar.thumbnails");
     set_text!(set_text_outline, "sidebar.outline");
+    set_text!(set_text_new_tab, "tab.new");
     set_text!(set_text_view, "view.mode");
     set_text!(set_text_zoom_in, "zoom.in");
     set_text!(set_text_zoom_out, "zoom.out");
@@ -1449,6 +1306,21 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_update_enabled, "updates.enabled");
     set_text!(set_text_update_disabled, "updates.disabled");
     set_text!(set_text_check_now, "updates.check_now");
+    set_text!(set_text_print, "print.action");
+    set_text!(set_text_cancel_print, "print.cancel");
+    set_text!(set_text_prev_page, "page.previous");
+    set_text!(set_text_next_page, "page.next");
+    set_text!(set_text_password_title, "password.title");
+    set_text!(set_text_password_placeholder, "password.placeholder");
+    set_text!(set_text_password_cancel, "password.cancel");
+    set_text!(set_text_password_unlock, "password.unlock");
+    set_text!(set_text_settings_language, "settings.language");
+    set_text!(set_text_settings_theme, "settings.theme");
+    set_text!(set_text_settings_system, "settings.theme.system");
+    set_text!(set_text_settings_english, "language.english");
+    set_text!(set_text_settings_turkish, "language.turkish");
+    set_text!(set_text_settings_light, "settings.theme.light");
+    set_text!(set_text_settings_dark, "settings.theme.dark");
 }
 
 fn unique_id() -> u64 {
@@ -1469,6 +1341,14 @@ mod tests {
         assert_eq!(validated_page_input("0", 12), None);
         assert_eq!(validated_page_input("13", 12), None);
         assert_eq!(validated_page_input("abc", 12), None);
+    }
+
+    #[test]
+    fn opened_document_status_uses_the_selected_language_template() {
+        assert_eq!(
+            opened_document_status(ResolvedLanguage::Turkish, "örnek.pdf", 2),
+            "örnek.pdf (2 sayfa)"
+        );
     }
 
     #[test]
@@ -1502,31 +1382,6 @@ mod tests {
         assert_eq!(theme_from_index(0), ThemeMode::System);
         assert_eq!(theme_from_index(1), ThemeMode::Light);
         assert_eq!(theme_from_index(2), ThemeMode::Dark);
-    }
-
-    #[test]
-    fn automatic_update_checks_are_limited_to_once_per_day() {
-        let mut preferences = UserPreferences::default();
-        assert!(update_check_is_due(&preferences, 100_000));
-        preferences.last_update_check_unix = Some(100_000);
-        assert!(!update_check_is_due(&preferences, 100_001));
-        assert!(update_check_is_due(&preferences, 99_999));
-        assert!(update_check_is_due(
-            &preferences,
-            100_000 + AUTO_CHECK_INTERVAL_SECONDS
-        ));
-
-        let mut app = AppState::new(preferences);
-        app.preferences.update_checks_enabled = Some(true);
-        assert!(automatic_update_check_should_run(
-            &app,
-            100_000 + AUTO_CHECK_INTERVAL_SECONDS
-        ));
-        app.update.busy = true;
-        assert!(!automatic_update_check_should_run(
-            &app,
-            100_000 + AUTO_CHECK_INTERVAL_SECONDS
-        ));
     }
 
     #[test]

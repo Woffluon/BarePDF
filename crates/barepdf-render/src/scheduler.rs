@@ -1,3 +1,4 @@
+use crate::observability::RenderObservability;
 use crate::protocol::RenderRequestKey;
 use crate::worker::RenderWorker;
 use crate::RenderError;
@@ -8,16 +9,16 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub use crate::protocol::{Priority, RenderCommand, RenderEvent, RenderJob, RenderKind};
 
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
-const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub struct RenderScheduler {
     worker: Mutex<Option<JoinHandle<()>>>,
     shutdown_sender: Sender<()>,
+    done_receiver: Receiver<()>,
     control_cmd_sender: Sender<RenderCommand>,
     visible_cmd_sender: Sender<RenderCommand>,
     low_cmd_sender: Sender<RenderCommand>,
@@ -25,6 +26,7 @@ pub struct RenderScheduler {
     event_receiver: Receiver<RenderEvent>,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
+    observability: RenderObservability,
 }
 
 impl RenderScheduler {
@@ -34,10 +36,12 @@ impl RenderScheduler {
         let (visible_tx, visible_rx) = bounded::<RenderCommand>(32);
         let (low_tx, low_rx) = bounded::<RenderCommand>(128);
         let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
+        let (done_tx, done_rx) = bounded::<()>(1);
         let (critical_event_tx, critical_event_rx) = bounded::<RenderEvent>(32);
         let (event_tx, event_rx) = bounded::<RenderEvent>(128);
         let current_generation = Arc::new(AtomicU64::new(1));
         let pending_renders = Arc::new(Mutex::new(HashSet::new()));
+        let observability = RenderObservability::default();
         let worker = thread::spawn({
             let current_generation = current_generation.clone();
             let pending_renders = pending_renders.clone();
@@ -52,12 +56,14 @@ impl RenderScheduler {
                     event_tx,
                 )
                 .run(&control_rx, &visible_rx, &low_rx);
+                let _ = done_tx.try_send(());
             }
         });
 
         Self {
             worker: Mutex::new(Some(worker)),
             shutdown_sender: shutdown_tx,
+            done_receiver: done_rx,
             control_cmd_sender: control_tx,
             visible_cmd_sender: visible_tx,
             low_cmd_sender: low_tx,
@@ -65,6 +71,7 @@ impl RenderScheduler {
             event_receiver: event_rx,
             current_generation,
             pending_renders,
+            observability,
         }
     }
 
@@ -80,21 +87,19 @@ impl RenderScheduler {
             .worker
             .lock()
             .map_err(|_| RenderError::WorkerTerminated)?;
-        let Some(handle) = worker.as_ref() else {
+        if worker.is_none() {
             return Ok(());
-        };
-        let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
-        while !handle.is_finished() {
-            if Instant::now() >= deadline {
-                return Err(RenderError::WorkerTerminated);
-            }
-            thread::sleep(SHUTDOWN_POLL_INTERVAL);
         }
-        let Some(handle) = worker.take() else {
-            return Ok(());
-        };
-        drop(worker);
-        handle.join().map_err(|_| RenderError::WorkerTerminated)
+        match self.done_receiver.recv_timeout(SHUTDOWN_JOIN_TIMEOUT) {
+            Ok(()) | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                let Some(handle) = worker.take() else {
+                    return Ok(());
+                };
+                drop(worker);
+                handle.join().map_err(|_| RenderError::WorkerTerminated)
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => Err(RenderError::WorkerTerminated),
+        }
     }
 
     #[must_use]
@@ -143,33 +148,31 @@ impl RenderScheduler {
             })
         );
 
-        let result = if control_command {
-            self.control_cmd_sender
-                .try_send(cmd)
-                .map_err(|error| match error {
-                    TrySendError::Full(_) | TrySendError::Disconnected(_) => (),
-                })
+        let (queue, result) = if control_command {
+            ("control", self.control_cmd_sender.try_send(cmd))
         } else if visible_render {
-            self.visible_cmd_sender
-                .try_send(cmd)
-                .map_err(|error| match error {
-                    TrySendError::Full(_) | TrySendError::Disconnected(_) => (),
-                })
+            ("visible", self.visible_cmd_sender.try_send(cmd))
         } else {
-            self.low_cmd_sender
-                .try_send(cmd)
-                .map_err(|error| match error {
-                    TrySendError::Full(_) | TrySendError::Disconnected(_) => (),
-                })
+            ("low", self.low_cmd_sender.try_send(cmd))
         };
 
-        if result.is_err() {
-            if let (Some(key), Ok(mut pending)) = (pending_key, self.pending_renders.lock()) {
-                pending.remove(&key);
+        match result {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                self.observability.queue_full(queue);
+                if let (Some(key), Ok(mut pending)) = (pending_key, self.pending_renders.lock()) {
+                    pending.remove(&key);
+                }
+                false
             }
-            return false;
+            Err(TrySendError::Disconnected(_)) => {
+                self.observability.queue_disconnected(queue);
+                if let (Some(key), Ok(mut pending)) = (pending_key, self.pending_renders.lock()) {
+                    pending.remove(&key);
+                }
+                false
+            }
         }
-        true
     }
 
     /// Returns `Ok(None)` while worker remains live without an event, and
@@ -339,6 +342,7 @@ mod tests {
     #[test]
     fn disconnected_event_channels_report_worker_termination() {
         let (shutdown_sender, _shutdown_receiver) = bounded(1);
+        let (_done_sender, done_receiver) = bounded(1);
         let (control_sender, _control_receiver) = bounded(1);
         let (visible_sender, _visible_receiver) = bounded(1);
         let (low_sender, _low_receiver) = bounded(1);
@@ -349,6 +353,7 @@ mod tests {
         let scheduler = RenderScheduler {
             worker: Mutex::new(None),
             shutdown_sender,
+            done_receiver,
             control_cmd_sender: control_sender,
             visible_cmd_sender: visible_sender,
             low_cmd_sender: low_sender,
@@ -356,6 +361,7 @@ mod tests {
             event_receiver,
             current_generation: Arc::new(AtomicU64::new(1)),
             pending_renders: Arc::new(Mutex::new(HashSet::new())),
+            observability: RenderObservability::default(),
         };
 
         assert!(matches!(scheduler.try_recv_event(), Ok(None)));
@@ -414,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_joins_worker_and_rejects_new_commands() {
+    fn shutdown_joins_after_worker_sends_done_signal_and_rejects_new_commands() {
         let scheduler = scheduler(Duration::ZERO);
         assert!(scheduler.shutdown().is_ok());
         assert!(scheduler.shutdown().is_ok());
@@ -428,6 +434,7 @@ mod tests {
     #[test]
     fn shutdown_unblocks_worker_when_critical_event_channel_is_full() {
         let (shutdown_sender, shutdown_receiver) = bounded(1);
+        let (done_sender, done_receiver) = bounded(1);
         let (control_sender, _control_receiver) = bounded(1);
         let (visible_sender, _visible_receiver) = bounded(1);
         let (low_sender, _low_receiver) = bounded(1);
@@ -448,10 +455,12 @@ mod tests {
                     outline: Vec::new(),
                 },
             );
+            let _ = done_sender.try_send(());
         });
         let scheduler = RenderScheduler {
             worker: Mutex::new(Some(worker)),
             shutdown_sender,
+            done_receiver,
             control_cmd_sender: control_sender,
             visible_cmd_sender: visible_sender,
             low_cmd_sender: low_sender,
@@ -459,6 +468,7 @@ mod tests {
             event_receiver,
             current_generation: Arc::new(AtomicU64::new(1)),
             pending_renders: Arc::new(Mutex::new(HashSet::new())),
+            observability: RenderObservability::default(),
         };
 
         let start = Instant::now();
@@ -469,14 +479,17 @@ mod tests {
     #[test]
     fn worker_panic_is_returned_as_structured_shutdown_error() {
         let (shutdown_sender, _shutdown_receiver) = bounded(1);
+        let (done_sender, done_receiver) = bounded(1);
         let (control_sender, _control_receiver) = bounded(1);
         let (visible_sender, _visible_receiver) = bounded(1);
         let (low_sender, _low_receiver) = bounded(1);
         let (_critical_sender, critical_event_receiver) = bounded(1);
         let (_event_sender, event_receiver) = bounded(1);
+        drop(done_sender);
         let scheduler = RenderScheduler {
             worker: Mutex::new(Some(thread::spawn(|| panic!("worker test panic")))),
             shutdown_sender,
+            done_receiver,
             control_cmd_sender: control_sender,
             visible_cmd_sender: visible_sender,
             low_cmd_sender: low_sender,
@@ -484,6 +497,7 @@ mod tests {
             event_receiver,
             current_generation: Arc::new(AtomicU64::new(1)),
             pending_renders: Arc::new(Mutex::new(HashSet::new())),
+            observability: RenderObservability::default(),
         };
 
         assert!(matches!(

@@ -1,5 +1,6 @@
 use crate::cache::{BitmapCache, CacheKey};
 use crate::error::RenderError;
+use crate::observability::RenderObservability;
 use crate::protocol::{RenderCommand, RenderEvent, RenderJob, RenderRequestKey};
 use crate::queue::receive_command;
 use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId};
@@ -13,15 +14,20 @@ use std::sync::{Arc, Mutex};
 fn emit_lossy_event(
     shutdown_receiver: &Receiver<()>,
     event_sender: &Sender<RenderEvent>,
+    observability: &RenderObservability,
     event: RenderEvent,
 ) -> bool {
     if !matches!(shutdown_receiver.try_recv(), Err(TryRecvError::Empty)) {
         return false;
     }
-    !matches!(
-        event_sender.try_send(event),
-        Err(TrySendError::Disconnected(_))
-    )
+    match event_sender.try_send(event) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            observability.event_dropped();
+            true
+        }
+        Err(TrySendError::Disconnected(_)) => false,
+    }
 }
 
 pub(crate) fn emit_critical(
@@ -47,6 +53,7 @@ pub(crate) struct RenderWorker<B> {
     shutdown_receiver: Receiver<()>,
     critical_event_sender: Sender<RenderEvent>,
     event_sender: Sender<RenderEvent>,
+    observability: RenderObservability,
 }
 
 impl<B: PdfBackend> RenderWorker<B> {
@@ -68,6 +75,7 @@ impl<B: PdfBackend> RenderWorker<B> {
             shutdown_receiver,
             critical_event_sender,
             event_sender,
+            observability: RenderObservability::default(),
         }
     }
 
@@ -177,6 +185,7 @@ impl<B: PdfBackend> RenderWorker<B> {
 
     fn render_page_inner(&mut self, job: &RenderJob) -> bool {
         if job.generation != self.current_generation.load(Ordering::Acquire) {
+            self.observability.stale_work("generation");
             return true;
         }
         let cache_key = CacheKey {
@@ -187,12 +196,16 @@ impl<B: PdfBackend> RenderWorker<B> {
             rotation: job.rotation,
         };
         if let Some(bitmap) = self.cache.get(&cache_key) {
+            self.observability.cache_hit();
             return self.emit_rendered(job, bitmap);
         }
+        self.observability.cache_miss();
         let Some((document_id, document)) = self.active_doc.as_ref() else {
+            self.observability.stale_work("no_active_document");
             return true;
         };
         if *document_id != job.document_id {
+            self.observability.stale_work("document_replaced");
             return true;
         }
         match document.render_page(
@@ -221,6 +234,7 @@ impl<B: PdfBackend> RenderWorker<B> {
         emit_lossy_event(
             &self.shutdown_receiver,
             &self.event_sender,
+            &self.observability,
             RenderEvent::PageRendered {
                 request_id: job.request_id,
                 generation: job.generation,
@@ -248,12 +262,15 @@ impl<B: PdfBackend> RenderWorker<B> {
         page_index: PageIndex,
     ) -> bool {
         if generation != self.current_generation.load(Ordering::Acquire) {
+            self.observability.stale_work("generation");
             return true;
         }
         let Some((active_document_id, document)) = self.active_doc.as_ref() else {
+            self.observability.stale_work("no_active_document");
             return true;
         };
         if *active_document_id != document_id {
+            self.observability.stale_work("document_replaced");
             return true;
         }
         match document.extract_text(page_index).and_then(|text| {
@@ -264,6 +281,7 @@ impl<B: PdfBackend> RenderWorker<B> {
             Ok((text, spans)) => emit_lossy_event(
                 &self.shutdown_receiver,
                 &self.event_sender,
+                &self.observability,
                 RenderEvent::TextExtracted {
                     document_id,
                     generation,
@@ -292,18 +310,22 @@ impl<B: PdfBackend> RenderWorker<B> {
         page_index: PageIndex,
     ) -> bool {
         if generation != self.current_generation.load(Ordering::Acquire) {
+            self.observability.stale_work("generation");
             return true;
         }
         let Some((active_document_id, document)) = self.active_doc.as_ref() else {
+            self.observability.stale_work("no_active_document");
             return true;
         };
         if *active_document_id != document_id {
+            self.observability.stale_work("document_replaced");
             return true;
         }
         match document.get_page_text_geometry(page_index) {
             Ok(geometry) => emit_lossy_event(
                 &self.shutdown_receiver,
                 &self.event_sender,
+                &self.observability,
                 RenderEvent::TextGeometryFetched {
                     document_id,
                     generation,
@@ -317,9 +339,11 @@ impl<B: PdfBackend> RenderWorker<B> {
 
     fn fetch_outline(&self, document_id: DocumentId) -> bool {
         let Some((active_document_id, document)) = self.active_doc.as_ref() else {
+            self.observability.stale_work("no_active_document");
             return true;
         };
         if *active_document_id != document_id {
+            self.observability.stale_work("document_replaced");
             return true;
         }
         match document.get_outline() {
@@ -337,9 +361,11 @@ impl<B: PdfBackend> RenderWorker<B> {
 
     fn fetch_page_dimensions(&self, document_id: DocumentId, start: u32, count: u32) -> bool {
         let Some((active_document_id, document)) = self.active_doc.as_ref() else {
+            self.observability.stale_work("no_active_document");
             return true;
         };
         if *active_document_id != document_id {
+            self.observability.stale_work("document_replaced");
             return true;
         }
         let dimensions = document.page_count().and_then(|page_count| {
