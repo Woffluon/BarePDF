@@ -523,7 +523,7 @@ name = "barepdf-i18n"
 version = "1.5.0"
 dependencies = [
  "serde",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -551,7 +551,7 @@ dependencies = [
  "barepdf-platform",
  "raw-window-handle",
  "rfd",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4063,7 +4063,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
