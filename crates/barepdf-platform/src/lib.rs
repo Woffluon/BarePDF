@@ -9,6 +9,16 @@ pub use error::PlatformError;
 
 pub trait FileDialogs: Send + Sync {
     fn pick_file(&self) -> Option<PathBuf>;
+    fn pick_multiple_files(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    fn save_file(&self, default_name: &str) -> Option<PathBuf> {
+        let _ = default_name;
+        None
+    }
+    fn pick_directory(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 pub trait ClipboardAccess: Send + Sync {

@@ -335,6 +335,350 @@ slint::slint! {
         }
     }
 
+    component ToolsModal inherits Rectangle {
+        in-out property <int> current-tool: -1;
+        in property <[string]> merge-files: [];
+        in-out property <int> selected-merge-index: -1;
+        in-out property <string> page-range-input: "";
+        in-out property <int> split-mode: 0;
+        in-out property <int> rotation: 1;
+        in property <string> error-text: "";
+        in property <bool> is-working: false;
+        in property <string> active-doc-title: "";
+        in property <string> active-doc-pages: "";
+        in property <bool> has-document: false;
+
+        in property <string> title: "";
+        in property <string> text-merge: "";
+        in property <string> text-merge-desc: "";
+        in property <string> text-split: "";
+        in property <string> text-split-desc: "";
+        in property <string> text-delete: "";
+        in property <string> text-delete-desc: "";
+        in property <string> text-rotate: "";
+        in property <string> text-rotate-desc: "";
+        in property <string> btn-add-files: "";
+        in property <string> btn-move-up: "";
+        in property <string> btn-move-down: "";
+        in property <string> btn-remove: "";
+        in property <string> btn-clear: "";
+        in property <string> btn-cancel: "";
+        in property <string> btn-save: "";
+        in property <string> btn-execute: "";
+        in property <string> label-pages: "";
+        in property <string> label-split-mode: "";
+        in property <string> split-extract: "";
+        in property <string> split-separate: "";
+        in property <string> label-rotation: "";
+        in property <string> rotation-90: "";
+        in property <string> rotation-180: "";
+        in property <string> rotation-270: "";
+
+        callback select-tool(int);
+        callback close();
+        callback merge-add-files();
+        callback merge-select-file(int);
+        callback merge-move-up(int);
+        callback merge-move-down(int);
+        callback merge-remove(int);
+        callback merge-clear();
+        callback merge-submit();
+        callback split-submit(string, int);
+        callback delete-submit(string);
+        callback rotate-submit(string, int);
+
+        background: #0000008a;
+        forward-focus: modal-focus;
+        TouchArea { clicked => { } }
+
+        modal-focus := FocusScope {
+            width: root.current-tool == -1 ? 520px : 560px;
+            height: root.current-tool == -1 ? 380px : (root.current-tool == 0 ? 460px : 360px);
+            key-pressed(event) => {
+                if (event.text == "\u{001b}") {
+                    if root.current-tool != -1 {
+                        root.select-tool(-1);
+                    } else {
+                        root.close();
+                    }
+                    return accept;
+                }
+                return reject;
+            }
+
+            Rectangle {
+                background: ThemeTokens.panel;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+                drop-shadow-blur: 20px;
+                drop-shadow-color: #00000055;
+
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        height: 28px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if root.current-tool != -1 : TextButton {
+                                text: "←";
+                                clicked => { root.select-tool(-1); }
+                            }
+                            Text {
+                                text: root.current-tool == -1 ? root.title :
+                                      root.current-tool == 0 ? root.text-merge :
+                                      root.current-tool == 1 ? root.text-split :
+                                      root.current-tool == 2 ? root.text-delete : root.text-rotate;
+                                color: ThemeTokens.text;
+                                font-size: 18px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+                        IconButton {
+                            icon: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                            tooltip: root.btn-cancel;
+                            clicked => { root.close(); }
+                        }
+                    }
+
+                    if root.error-text != "" : Text {
+                        text: root.error-text;
+                        color: ThemeTokens.danger;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    if root.current-tool == -1 : VerticalLayout {
+                        spacing: 10px;
+                        Rectangle {
+                            height: 62px;
+                            border-radius: 8px;
+                            background: m-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            m-touch := TouchArea { clicked => { root.select-tool(0); } }
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; alignment: space-between;
+                                VerticalLayout {
+                                    alignment: center; spacing: 3px;
+                                    Text { text: root.text-merge; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
+                                    Text { text: root.text-merge-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+                                }
+                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
+                            }
+                        }
+                        Rectangle {
+                            height: 62px;
+                            border-radius: 8px;
+                            background: s-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            opacity: root.has-document ? 1.0 : 0.45;
+                            s-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(1); } }
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; alignment: space-between;
+                                VerticalLayout {
+                                    alignment: center; spacing: 3px;
+                                    Text { text: root.text-split; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
+                                    Text { text: root.text-split-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+                                }
+                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
+                            }
+                        }
+                        Rectangle {
+                            height: 62px;
+                            border-radius: 8px;
+                            background: d-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            opacity: root.has-document ? 1.0 : 0.45;
+                            d-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(2); } }
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; alignment: space-between;
+                                VerticalLayout {
+                                    alignment: center; spacing: 3px;
+                                    Text { text: root.text-delete; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
+                                    Text { text: root.text-delete-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+                                }
+                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
+                            }
+                        }
+                        Rectangle {
+                            height: 62px;
+                            border-radius: 8px;
+                            background: r-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            opacity: root.has-document ? 1.0 : 0.45;
+                            r-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(3); } }
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; alignment: space-between;
+                                VerticalLayout {
+                                    alignment: center; spacing: 3px;
+                                    Text { text: root.text-rotate; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
+                                    Text { text: root.text-rotate-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+                                }
+                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 0 : VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            TextButton { text: root.btn-add-files; primary: true; clicked => { root.merge-add-files(); } }
+                            TextButton { text: root.btn-move-up; enabled: root.selected-merge-index > 0; clicked => { root.merge-move-up(root.selected-merge-index); } }
+                            TextButton { text: root.btn-move-down; enabled: root.selected-merge-index >= 0 && root.selected-merge-index < root.merge-files.length - 1; clicked => { root.merge-move-down(root.selected-merge-index); } }
+                            TextButton { text: root.btn-remove; enabled: root.selected-merge-index >= 0; clicked => { root.merge-remove(root.selected-merge-index); } }
+                            TextButton { text: root.btn-clear; enabled: root.merge-files.length > 0; clicked => { root.merge-clear(); } }
+                        }
+                        Rectangle {
+                            height: 240px;
+                            border-radius: ThemeTokens.control-radius;
+                            background: ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            if root.merge-files.length == 0 : Text {
+                                text: root.text-merge-desc;
+                                color: ThemeTokens.text-muted;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.merge-files.length > 0 : ListView {
+                                for file-path[fidx] in root.merge-files : Rectangle {
+                                    height: 32px;
+                                    background: root.selected-merge-index == fidx ? ThemeTokens.selection : (f-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                                    f-touch := TouchArea { clicked => { root.merge-select-file(fidx); } }
+                                    HorizontalLayout {
+                                        padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                        Text { text: (fidx + 1) + "."; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
+                                        Text { text: file-path; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: root.merge-files.length >= 2 && !root.is-working;
+                                clicked => { root.merge-submit(); }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 1 : VerticalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            color: ThemeTokens.text-muted;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                        Text { text: root.label-split-mode; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            TextButton { text: root.split-extract; active: root.split-mode == 0; clicked => { root.split-mode = 0; } }
+                            TextButton { text: root.split-separate; active: root.split-mode == 1; clicked => { root.split-mode = 1; } }
+                        }
+                        if root.split-mode == 0 : VerticalLayout {
+                            spacing: 6px;
+                            Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            range-edit := LineEdit {
+                                text <=> root.page-range-input;
+                                placeholder-text: "1-3, 5, 8-10";
+                                accepted => { root.split-submit(root.page-range-input, root.split-mode); }
+                            }
+                        }
+                        Rectangle { height: 8px; }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working && (root.split-mode == 1 || root.page-range-input != "");
+                                clicked => { root.split-submit(root.page-range-input, root.split-mode); }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 2 : VerticalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            color: ThemeTokens.text-muted;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                        Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        del-edit := LineEdit {
+                            text <=> root.page-range-input;
+                            placeholder-text: "2, 4-6, 10";
+                            accepted => { root.delete-submit(root.page-range-input); }
+                        }
+                        Rectangle { height: 16px; }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working && root.page-range-input != "";
+                                clicked => { root.delete-submit(root.page-range-input); }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 3 : VerticalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            color: ThemeTokens.text-muted;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                        Text { text: root.label-pages + " (empty for all pages)"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        rot-edit := LineEdit {
+                            text <=> root.page-range-input;
+                            placeholder-text: "All pages or e.g. 1, 3-5";
+                        }
+                        Text { text: root.label-rotation; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            TextButton { text: root.rotation-90; active: root.rotation == 1; clicked => { root.rotation = 1; } }
+                            TextButton { text: root.rotation-180; active: root.rotation == 2; clicked => { root.rotation = 2; } }
+                            TextButton { text: root.rotation-270; active: root.rotation == 3; clicked => { root.rotation = 3; } }
+                        }
+                        Rectangle { height: 8px; }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working;
+                                clicked => { root.rotate-submit(root.page-range-input, root.rotation); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     export component AppWindow inherits Window {
         title: root.document-title != "" ? root.document-title + " — BarePDF" : "BarePDF";
         icon: @image-url("../../../assets/logo.svg");
@@ -398,6 +742,15 @@ slint::slint! {
         in property <bool> print-active: false;
         in property <float> print-progress: 0;
         in property <string> print-status: "";
+        in-out property <bool> tools-open: false;
+        in-out property <int> current-tool: -1;
+        in-out property <[string]> merge-files: [];
+        in-out property <int> selected-merge-index: -1;
+        in-out property <string> tools-page-range: "";
+        in-out property <int> tools-split-mode: 0;
+        in-out property <int> tools-rotation: 1;
+        in property <string> tools-error: "";
+        in property <bool> tools-working: false;
 
         in property <string> text-open: "Open PDF";
         in property <string> text-sidebar: "Sidebar";
@@ -443,6 +796,32 @@ slint::slint! {
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
         in property <string> text-cancel-print: "Cancel";
+        in property <string> text-tools: "PDF Tools";
+        in property <string> text-tools-tooltip: "PDF Operations and Tools";
+        in property <string> text-tools-merge: "Merge PDFs";
+        in property <string> text-tools-merge-desc: "Combine multiple PDF documents into a single file.";
+        in property <string> text-tools-split: "Split / Extract Pages";
+        in property <string> text-tools-split-desc: "Extract specific page ranges or split every page into separate files.";
+        in property <string> text-tools-delete: "Delete Pages";
+        in property <string> text-tools-delete-desc: "Remove selected pages and create a new PDF document.";
+        in property <string> text-tools-rotate: "Rotate Pages";
+        in property <string> text-tools-rotate-desc: "Rotate pages by 90°, 180°, or 270° and save the result.";
+        in property <string> text-tools-btn-add-files: "Add Files…";
+        in property <string> text-tools-btn-move-up: "Move Up";
+        in property <string> text-tools-btn-move-down: "Move Down";
+        in property <string> text-tools-btn-remove: "Remove";
+        in property <string> text-tools-btn-clear: "Clear All";
+        in property <string> text-tools-btn-cancel: "Cancel";
+        in property <string> text-tools-btn-save: "Save Result…";
+        in property <string> text-tools-btn-execute: "Process";
+        in property <string> text-tools-label-pages: "Pages (e.g. 1-3, 5, 8-10):";
+        in property <string> text-tools-label-split-mode: "Split Mode:";
+        in property <string> text-tools-split-extract: "Extract page range to single file";
+        in property <string> text-tools-split-separate: "Split every page into separate files";
+        in property <string> text-tools-label-rotation: "Rotation:";
+        in property <string> text-tools-rotation-90: "90° Clockwise";
+        in property <string> text-tools-rotation-180: "180°";
+        in property <string> text-tools-rotation-270: "90° Counter-Clockwise";
 
         callback request-open-file();
         callback request-next-page();
@@ -481,6 +860,19 @@ slint::slint! {
         callback request-new-tab();
         callback request-print();
         callback request-cancel-print();
+        callback request-toggle-tools();
+        callback request-open-tool(int);
+        callback request-close-tools();
+        callback request-merge-add-files();
+        callback request-merge-select-file(int);
+        callback request-merge-move-up(int);
+        callback request-merge-move-down(int);
+        callback request-merge-remove-file(int);
+        callback request-merge-clear();
+        callback request-merge-execute();
+        callback request-split-execute(string, int);
+        callback request-delete-pages-execute(string);
+        callback request-rotate-pages-execute(string, int);
         callback pointer-down(int, length, length, int);
         callback pointer-move(int, length, length);
         callback pointer-up(int, length, length);
@@ -488,6 +880,14 @@ slint::slint! {
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
+                    if (root.tools-open) {
+                        if (root.current-tool != -1) {
+                            root.current-tool = -1;
+                        } else {
+                            root.tools-open = false;
+                        }
+                        return accept;
+                    }
                     if (root.context-menu-open) { root.context-menu-open = false; return accept; }
                     if (root.settings-open) { root.settings-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
@@ -657,6 +1057,13 @@ slint::slint! {
                         enabled: root.has-document && !root.print-active;
                         clicked => { root.request-print(); }
                     }
+                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+                        label: root.text-tools; tooltip: root.text-tools-tooltip; show-label: root.width >= 1260px;
+                        active: root.tools-open;
+                        clicked => { root.request-toggle-tools(); }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
@@ -668,11 +1075,11 @@ slint::slint! {
                         tooltip: root.text-presentation; enabled: root.has-document;
                         clicked => { root.request-presentation-mode(); }
                     }
-                        settings-button := IconButton {
-                            icon: @image-url("../../../assets/icons/settings_20_regular.svg");
-                            tooltip: root.text-settings; active: root.settings-open;
-                            clicked => { root.settings-open = !root.settings-open; }
-                        }
+                    settings-button := IconButton {
+                        icon: @image-url("../../../assets/icons/settings_20_regular.svg");
+                        tooltip: root.text-settings; active: root.settings-open;
+                        clicked => { root.settings-open = !root.settings-open; }
+                    }
                     }
                 }
             }
@@ -1003,6 +1410,59 @@ slint::slint! {
                                 Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 10px; wrap: word-wrap; }
                             }
                         }
+                    }
+
+                    if root.tools-open : ToolsModal {
+                        current-tool <=> root.current-tool;
+                        merge-files: root.merge-files;
+                        selected-merge-index <=> root.selected-merge-index;
+                        page-range-input <=> root.tools-page-range;
+                        split-mode <=> root.tools-split-mode;
+                        rotation <=> root.tools-rotation;
+                        error-text: root.tools-error;
+                        is-working: root.tools-working;
+                        active-doc-title: root.document-title;
+                        active-doc-pages: root.total-pages-str;
+                        has-document: root.has-document;
+
+                        title: root.text-tools;
+                        text-merge: root.text-tools-merge;
+                        text-merge-desc: root.text-tools-merge-desc;
+                        text-split: root.text-tools-split;
+                        text-split-desc: root.text-tools-split-desc;
+                        text-delete: root.text-tools-delete;
+                        text-delete-desc: root.text-tools-delete-desc;
+                        text-rotate: root.text-tools-rotate;
+                        text-rotate-desc: root.text-tools-rotate-desc;
+                        btn-add-files: root.text-tools-btn-add-files;
+                        btn-move-up: root.text-tools-btn-move-up;
+                        btn-move-down: root.text-tools-btn-move-down;
+                        btn-remove: root.text-tools-btn-remove;
+                        btn-clear: root.text-tools-btn-clear;
+                        btn-cancel: root.text-tools-btn-cancel;
+                        btn-save: root.text-tools-btn-save;
+                        btn-execute: root.text-tools-btn-execute;
+                        label-pages: root.text-tools-label-pages;
+                        label-split-mode: root.text-tools-label-split-mode;
+                        split-extract: root.text-tools-split-extract;
+                        split-separate: root.text-tools-split-separate;
+                        label-rotation: root.text-tools-label-rotation;
+                        rotation-90: root.text-tools-rotation-90;
+                        rotation-180: root.text-tools-rotation-180;
+                        rotation-270: root.text-tools-rotation-270;
+
+                        select-tool(tool-id) => { root.request-open-tool(tool-id); }
+                        close => { root.request-close-tools(); }
+                        merge-add-files => { root.request-merge-add-files(); }
+                        merge-select-file(idx) => { root.request-merge-select-file(idx); }
+                        merge-move-up(idx) => { root.request-merge-move-up(idx); }
+                        merge-move-down(idx) => { root.request-merge-move-down(idx); }
+                        merge-remove(idx) => { root.request-merge-remove-file(idx); }
+                        merge-clear => { root.request-merge-clear(); }
+                        merge-submit => { root.request-merge-execute(); }
+                        split-submit(range, mode) => { root.request-split-execute(range, mode); }
+                        delete-submit(range) => { root.request-delete-pages-execute(range); }
+                        rotate-submit(range, rot) => { root.request-rotate-pages-execute(range, rot); }
                     }
                 }
             }

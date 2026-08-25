@@ -20,6 +20,7 @@ use slint::{Image, Rgba8Pixel, Timer};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -258,6 +259,7 @@ pub(super) struct AppState {
     pub(super) page_images: UiImageCache,
     pub(super) thumbnail_images: UiImageCache,
     pub(super) update: UpdateController,
+    pub(super) tools_merge_files: Vec<PathBuf>,
     pump_timer: Option<Rc<Timer>>,
     pump_active_until: Option<Instant>,
 }
@@ -305,6 +307,7 @@ impl AppState {
             page_images: UiImageCache::new(PAGE_IMAGE_BUDGET),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             update: UpdateController::default(),
+            tools_merge_files: Vec::new(),
             pump_timer: None,
             pump_active_until: None,
         }

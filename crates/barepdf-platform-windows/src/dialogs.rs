@@ -30,4 +30,22 @@ impl FileDialogs for WindowsFileDialogs {
             .add_filter("PDF Document", &["pdf"])
             .pick_file()
     }
+
+    fn pick_multiple_files(&self) -> Vec<PathBuf> {
+        FileDialog::new()
+            .add_filter("PDF Document", &["pdf"])
+            .pick_files()
+            .unwrap_or_default()
+    }
+
+    fn save_file(&self, default_name: &str) -> Option<PathBuf> {
+        FileDialog::new()
+            .add_filter("PDF Document", &["pdf"])
+            .set_file_name(default_name)
+            .save_file()
+    }
+
+    fn pick_directory(&self) -> Option<PathBuf> {
+        FileDialog::new().pick_folder()
+    }
 }

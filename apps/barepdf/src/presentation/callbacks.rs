@@ -19,10 +19,13 @@ use crate::diagnostics::{self, DiagnosticEvent};
 use crate::infrastructure::{PrintEvent, UpdateCheckCanceller, UpdateCommand};
 
 use barepdf_core::{
-    selection::SelectionEngine, DocumentId, PageIndex, TextPosition, TextSelection, ViewingMode,
-    WindowMode, ZoomFactor, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
+    page_range::{PageRangeError, PageRangeSelection},
+    selection::SelectionEngine,
+    DocumentId, PageIndex, Rotation, TextPosition, TextSelection, ViewingMode, WindowMode,
+    ZoomFactor, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
+use barepdf_pdf::PdfOperations;
 use barepdf_platform::printing::PrinterDialog;
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
@@ -65,8 +68,9 @@ pub(super) fn wire_callbacks(
     let weak = window.as_weak();
     let state_open = state.clone();
     let scheduler_open = scheduler.clone();
+    let dialogs_open = dialogs.clone();
     window.on_request_open_file(move || {
-        if let (Some(path), Some(window)) = (dialogs.pick_file(), weak.upgrade()) {
+        if let (Some(path), Some(window)) = (dialogs_open.pick_file(), weak.upgrade()) {
             begin_open(path, None, &state_open, &scheduler_open, &window);
         }
     });
@@ -77,6 +81,7 @@ pub(super) fn wire_callbacks(
     connect_selection_callbacks(window, state, scheduler, clipboard);
     connect_tab_callbacks(window, state, scheduler);
     connect_print_callbacks(window, state, print_controller);
+    connect_tools_callbacks(window, state, scheduler, dialogs);
 
     let weak = window.as_weak();
     let state_password = state.clone();
@@ -1107,6 +1112,515 @@ fn connect_selection_callbacks(
         app.is_selecting = false;
         if let Some(window) = weak.upgrade() {
             window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
+        }
+    });
+}
+
+fn connect_tools_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    dialogs: Arc<WindowsFileDialogs>,
+) {
+    let weak = window.as_weak();
+    window.on_request_toggle_tools(move || {
+        if let Some(window) = weak.upgrade() {
+            let next_open = !window.get_tools_open();
+            window.set_tools_open(next_open);
+            if next_open {
+                window.set_current_tool(-1);
+                window.set_tools_error(SharedString::new());
+                window.set_tools_working(false);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_open_tool = state.clone();
+    window.on_request_open_tool(move |tool_id| {
+        if let Some(window) = weak.upgrade() {
+            window.set_current_tool(tool_id);
+            window.set_tools_error(SharedString::new());
+            window.set_tools_working(false);
+
+            if tool_id == 0 {
+                let files = state_open_tool.borrow().tools_merge_files.clone();
+                let file_names = files
+                    .iter()
+                    .map(|p| {
+                        SharedString::from(
+                            p.file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_else(|| p.display().to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                window.set_merge_files(ModelRc::new(VecModel::from(file_names)));
+                window.set_selected_merge_index(-1);
+            } else if tool_id == 1 || tool_id == 2 || tool_id == 3 {
+                let app = state_open_tool.borrow();
+                let has_doc = app.application.ready_document().is_some();
+                if has_doc {
+                    let page_num = app.current_page + 1;
+                    window.set_tools_page_range(SharedString::from(page_num.to_string()));
+                } else {
+                    window.set_tools_page_range(SharedString::new());
+                }
+                window.set_tools_split_mode(0);
+                window.set_tools_rotation(1);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_request_close_tools(move || {
+        if let Some(window) = weak.upgrade() {
+            window.set_tools_open(false);
+            window.set_current_tool(-1);
+            window.set_tools_error(SharedString::new());
+            window.set_tools_working(false);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_merge_add = state.clone();
+    let dialogs_merge_add = dialogs.clone();
+    window.on_request_merge_add_files(move || {
+        let picked = dialogs_merge_add.pick_multiple_files();
+        if !picked.is_empty() {
+            let mut app = state_merge_add.borrow_mut();
+            app.tools_merge_files.extend(picked);
+            let file_names = app
+                .tools_merge_files
+                .iter()
+                .map(|p| {
+                    SharedString::from(
+                        p.file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.display().to_string()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let Some(window) = weak.upgrade() {
+                window.set_merge_files(ModelRc::new(VecModel::from(file_names)));
+                window.set_tools_error(SharedString::new());
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_request_merge_select_file(move |idx| {
+        if let Some(window) = weak.upgrade() {
+            window.set_selected_merge_index(idx);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_move_up = state.clone();
+    window.on_request_merge_move_up(move |idx| {
+        if idx > 0 {
+            let idx = idx as usize;
+            let mut app = state_move_up.borrow_mut();
+            if idx < app.tools_merge_files.len() {
+                app.tools_merge_files.swap(idx, idx - 1);
+                let file_names = app
+                    .tools_merge_files
+                    .iter()
+                    .map(|p| {
+                        SharedString::from(
+                            p.file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_else(|| p.display().to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(window) = weak.upgrade() {
+                    window.set_merge_files(ModelRc::new(VecModel::from(file_names)));
+                    window.set_selected_merge_index((idx - 1) as i32);
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_move_down = state.clone();
+    window.on_request_merge_move_down(move |idx| {
+        if idx >= 0 {
+            let idx = idx as usize;
+            let mut app = state_move_down.borrow_mut();
+            if idx + 1 < app.tools_merge_files.len() {
+                app.tools_merge_files.swap(idx, idx + 1);
+                let file_names = app
+                    .tools_merge_files
+                    .iter()
+                    .map(|p| {
+                        SharedString::from(
+                            p.file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_else(|| p.display().to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(window) = weak.upgrade() {
+                    window.set_merge_files(ModelRc::new(VecModel::from(file_names)));
+                    window.set_selected_merge_index((idx + 1) as i32);
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_remove = state.clone();
+    window.on_request_merge_remove_file(move |idx| {
+        if idx >= 0 {
+            let idx = idx as usize;
+            let mut app = state_remove.borrow_mut();
+            if idx < app.tools_merge_files.len() {
+                app.tools_merge_files.remove(idx);
+                let file_names = app
+                    .tools_merge_files
+                    .iter()
+                    .map(|p| {
+                        SharedString::from(
+                            p.file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_else(|| p.display().to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let new_selected = if app.tools_merge_files.is_empty() {
+                    -1
+                } else if idx >= app.tools_merge_files.len() {
+                    (app.tools_merge_files.len() - 1) as i32
+                } else {
+                    idx as i32
+                };
+                if let Some(window) = weak.upgrade() {
+                    window.set_merge_files(ModelRc::new(VecModel::from(file_names)));
+                    window.set_selected_merge_index(new_selected);
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_clear = state.clone();
+    window.on_request_merge_clear(move || {
+        state_clear.borrow_mut().tools_merge_files.clear();
+        if let Some(window) = weak.upgrade() {
+            window.set_merge_files(ModelRc::new(VecModel::default()));
+            window.set_selected_merge_index(-1);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_merge_exec = state.clone();
+    let scheduler_merge = scheduler.clone();
+    let dialogs_merge_exec = dialogs.clone();
+    window.on_request_merge_execute(move || {
+        let files = state_merge_exec.borrow().tools_merge_files.clone();
+        let language = state_merge_exec.borrow().preferences.language.resolve();
+        if files.len() < 2 {
+            if let Some(window) = weak.upgrade() {
+                window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                    language,
+                    "tools.error.no_files",
+                )));
+            }
+            return;
+        }
+
+        let Some(output_path) = dialogs_merge_exec.save_file("merged.pdf") else {
+            return;
+        };
+
+        match PdfOperations::merge_files(&files, &output_path) {
+            Ok(()) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_open(false);
+                    window.set_current_tool(-1);
+                    show_banner(
+                        &window,
+                        barepdf_i18n::t(language, "tools.status.success"),
+                        false,
+                    );
+                    begin_open(
+                        output_path,
+                        None,
+                        &state_merge_exec,
+                        &scheduler_merge,
+                        &window,
+                    );
+                }
+            }
+            Err(e) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(e.to_string()));
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_split_exec = state.clone();
+    let scheduler_split = scheduler.clone();
+    let dialogs_split_exec = dialogs.clone();
+    window.on_request_split_execute(move |range_str, mode| {
+        let (source_path, total_pages, language) = {
+            let app = state_split_exec.borrow();
+            let lang = app.preferences.language.resolve();
+            let Some(doc) = app.application.ready_document() else {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                        lang,
+                        "tools.error.no_files",
+                    )));
+                }
+                return;
+            };
+            (doc.path().to_path_buf(), doc.page_count(), lang)
+        };
+
+        if mode == 0 {
+            let pages = match PageRangeSelection::parse(range_str.as_str(), total_pages) {
+                Ok(pages) => pages,
+                Err(err) => {
+                    if let Some(window) = weak.upgrade() {
+                        let err_msg = match err {
+                            PageRangeError::EmptyInput => {
+                                barepdf_i18n::t(language, "tools.error.no_pages")
+                            }
+                            _ => barepdf_i18n::t(language, "tools.error.invalid_range"),
+                        };
+                        window.set_tools_error(SharedString::from(format!("{err_msg} ({err})")));
+                    }
+                    return;
+                }
+            };
+
+            let default_name = format!(
+                "{}_extracted.pdf",
+                source_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "document".to_string())
+            );
+            let Some(output_path) = dialogs_split_exec.save_file(&default_name) else {
+                return;
+            };
+
+            match PdfOperations::extract_pages(&source_path, &pages, &output_path) {
+                Ok(()) => {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tools_open(false);
+                        window.set_current_tool(-1);
+                        show_banner(
+                            &window,
+                            barepdf_i18n::t(language, "tools.status.success"),
+                            false,
+                        );
+                        begin_open(
+                            output_path,
+                            None,
+                            &state_split_exec,
+                            &scheduler_split,
+                            &window,
+                        );
+                    }
+                }
+                Err(e) => {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tools_error(SharedString::from(e.to_string()));
+                    }
+                }
+            }
+        } else {
+            let Some(output_dir) = dialogs_split_exec.pick_directory() else {
+                return;
+            };
+
+            let base_name = source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string());
+
+            match PdfOperations::split_into_single_pages(&source_path, &output_dir, &base_name) {
+                Ok(paths) => {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tools_open(false);
+                        window.set_current_tool(-1);
+                        let msg = format!(
+                            "{} ({} {})",
+                            barepdf_i18n::t(language, "tools.status.success"),
+                            paths.len(),
+                            barepdf_i18n::t(language, "sidebar.thumbnails")
+                        );
+                        show_banner(&window, msg, false);
+                    }
+                }
+                Err(e) => {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tools_error(SharedString::from(e.to_string()));
+                    }
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_del_exec = state.clone();
+    let scheduler_del = scheduler.clone();
+    let dialogs_del_exec = dialogs.clone();
+    window.on_request_delete_pages_execute(move |range_str| {
+        let (source_path, total_pages, language) = {
+            let app = state_del_exec.borrow();
+            let lang = app.preferences.language.resolve();
+            let Some(doc) = app.application.ready_document() else {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                        lang,
+                        "tools.error.no_files",
+                    )));
+                }
+                return;
+            };
+            (doc.path().to_path_buf(), doc.page_count(), lang)
+        };
+
+        let pages_to_remove = match PageRangeSelection::parse(range_str.as_str(), total_pages) {
+            Ok(pages) => pages,
+            Err(err) => {
+                if let Some(window) = weak.upgrade() {
+                    let err_msg = match err {
+                        PageRangeError::EmptyInput => {
+                            barepdf_i18n::t(language, "tools.error.no_pages")
+                        }
+                        _ => barepdf_i18n::t(language, "tools.error.invalid_range"),
+                    };
+                    window.set_tools_error(SharedString::from(format!("{err_msg} ({err})")));
+                }
+                return;
+            }
+        };
+
+        let default_name = format!(
+            "{}_modified.pdf",
+            source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string())
+        );
+        let Some(output_path) = dialogs_del_exec.save_file(&default_name) else {
+            return;
+        };
+
+        match PdfOperations::delete_pages(&source_path, &pages_to_remove, &output_path) {
+            Ok(()) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_open(false);
+                    window.set_current_tool(-1);
+                    show_banner(
+                        &window,
+                        barepdf_i18n::t(language, "tools.status.success"),
+                        false,
+                    );
+                    begin_open(output_path, None, &state_del_exec, &scheduler_del, &window);
+                }
+            }
+            Err(e) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(e.to_string()));
+                }
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_rot_exec = state.clone();
+    let scheduler_rot = scheduler.clone();
+    let dialogs_rot_exec = dialogs;
+    window.on_request_rotate_pages_execute(move |range_str, rot_val| {
+        let (source_path, total_pages, language) = {
+            let app = state_rot_exec.borrow();
+            let lang = app.preferences.language.resolve();
+            let Some(doc) = app.application.ready_document() else {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                        lang,
+                        "tools.error.no_files",
+                    )));
+                }
+                return;
+            };
+            (doc.path().to_path_buf(), doc.page_count(), lang)
+        };
+
+        let target_rot = match rot_val {
+            1 => Rotation::Degrees90,
+            2 => Rotation::Degrees180,
+            3 => Rotation::Degrees270,
+            _ => Rotation::Degrees90,
+        };
+
+        let target_pages = if range_str.trim().is_empty()
+            || range_str.trim() == "all"
+            || range_str.trim() == "*"
+        {
+            (0..total_pages.get())
+                .filter_map(|i| PageIndex::new(i, total_pages))
+                .collect::<Vec<_>>()
+        } else {
+            match PageRangeSelection::parse(range_str.as_str(), total_pages) {
+                Ok(pages) => pages,
+                Err(err) => {
+                    if let Some(window) = weak.upgrade() {
+                        let err_msg = match err {
+                            PageRangeError::EmptyInput => {
+                                barepdf_i18n::t(language, "tools.error.no_pages")
+                            }
+                            _ => barepdf_i18n::t(language, "tools.error.invalid_range"),
+                        };
+                        window.set_tools_error(SharedString::from(format!("{err_msg} ({err})")));
+                    }
+                    return;
+                }
+            }
+        };
+
+        let rotations = target_pages
+            .into_iter()
+            .map(|p| (p, target_rot))
+            .collect::<Vec<_>>();
+
+        let default_name = format!(
+            "{}_rotated.pdf",
+            source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string())
+        );
+        let Some(output_path) = dialogs_rot_exec.save_file(&default_name) else {
+            return;
+        };
+
+        match PdfOperations::rotate_pages(&source_path, &rotations, &output_path) {
+            Ok(()) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_open(false);
+                    window.set_current_tool(-1);
+                    show_banner(
+                        &window,
+                        barepdf_i18n::t(language, "tools.status.success"),
+                        false,
+                    );
+                    begin_open(output_path, None, &state_rot_exec, &scheduler_rot, &window);
+                }
+            }
+            Err(e) => {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(e.to_string()));
+                }
+            }
         }
     });
 }

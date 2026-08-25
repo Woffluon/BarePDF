@@ -60,7 +60,9 @@ $RECYCLE.BIN/
 # IDE & Editor Configurations
 # ------------------------------------------
 # Visual Studio Code
+.codegraph
 /analizler/
+mimari_plan
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

@@ -136,6 +136,7 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("page.next", "Next page");
     m.insert("page.thumbnail", "Page");
     add_english_print_strings(&mut m);
+    add_english_tool_strings(&mut m);
     m.insert("context.copy", "Copy");
     m.insert("context.select_all", "Select All");
     m.insert("status.ready", "Ready");
@@ -233,6 +234,7 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("page.next", "Sonraki sayfa");
     m.insert("page.thumbnail", "Sayfa");
     add_turkish_print_strings(&mut m);
+    add_turkish_tool_strings(&mut m);
     m.insert("context.copy", "Kopyala");
     m.insert("context.select_all", "Tümünü Seç");
     m.insert("status.ready", "Hazır");
@@ -273,6 +275,65 @@ fn add_english_print_strings(m: &mut HashMap<&'static str, &'static str>) {
     ]);
 }
 
+fn add_english_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
+    m.extend([
+        ("tools.title", "PDF Tools"),
+        ("tools.tooltip", "PDF Operations and Tools"),
+        ("tools.merge", "Merge PDFs"),
+        (
+            "tools.merge.desc",
+            "Combine multiple PDF documents into a single file.",
+        ),
+        ("tools.split", "Split / Extract Pages"),
+        (
+            "tools.split.desc",
+            "Extract specific page ranges or split every page into separate files.",
+        ),
+        ("tools.delete_pages", "Delete Pages"),
+        (
+            "tools.delete_pages.desc",
+            "Remove selected pages and create a new PDF document.",
+        ),
+        ("tools.rotate", "Rotate Pages"),
+        (
+            "tools.rotate.desc",
+            "Rotate pages by 90°, 180°, or 270° and save the result.",
+        ),
+        ("tools.btn.add_files", "Add Files…"),
+        ("tools.btn.move_up", "Move Up"),
+        ("tools.btn.move_down", "Move Down"),
+        ("tools.btn.remove", "Remove"),
+        ("tools.btn.clear", "Clear All"),
+        ("tools.btn.cancel", "Cancel"),
+        ("tools.btn.save", "Save Result…"),
+        ("tools.btn.execute", "Process"),
+        ("tools.label.pages", "Pages (e.g. 1-3, 5, 8-10):"),
+        ("tools.label.split_mode", "Split Mode:"),
+        (
+            "tools.split_mode.extract",
+            "Extract page range to single file",
+        ),
+        (
+            "tools.split_mode.separate",
+            "Split every page into separate files",
+        ),
+        ("tools.label.rotation", "Rotation:"),
+        ("tools.rotation.90", "90° Clockwise"),
+        ("tools.rotation.180", "180°"),
+        ("tools.rotation.270", "90° Counter-Clockwise"),
+        ("tools.status.working", "Processing PDF operation…"),
+        ("tools.status.success", "Operation completed successfully."),
+        ("tools.status.failed", "Operation failed."),
+        (
+            "tools.error.no_files",
+            "Please select at least one PDF file.",
+        ),
+        ("tools.error.no_pages", "Please specify pages to process."),
+        ("tools.error.invalid_range", "Invalid page range entered."),
+        ("tools.prompt.open_result", "Open in New Tab"),
+    ]);
+}
+
 fn add_turkish_print_strings(m: &mut HashMap<&'static str, &'static str>) {
     m.extend([
         ("print.unavailable", "Yazdırma kullanılamıyor."),
@@ -294,6 +355,71 @@ fn add_turkish_print_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("print.status.complete", "Yazdırma tamamlandı."),
         ("print.status.cancelled", "Yazdırma iptal edildi."),
         ("print.status.failed", "Yazdırma başarısız oldu."),
+    ]);
+}
+
+fn add_turkish_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
+    m.extend([
+        ("tools.title", "PDF Araçları"),
+        ("tools.tooltip", "PDF İşlemleri ve Araçları"),
+        ("tools.merge", "PDF Birleştir"),
+        (
+            "tools.merge.desc",
+            "Birden fazla PDF belgesini tek bir dosyada birleştirin.",
+        ),
+        ("tools.split", "Sayfa Ayıkla / Böl"),
+        (
+            "tools.split.desc",
+            "Belirli sayfa aralıklarını ayıklayın veya tüm sayfaları ayrı dosyalara bölün.",
+        ),
+        ("tools.delete_pages", "Sayfa Sil"),
+        (
+            "tools.delete_pages.desc",
+            "Seçilen sayfaları çıkarıp yeni bir PDF belgesi oluşturun.",
+        ),
+        ("tools.rotate", "Sayfa Döndür"),
+        (
+            "tools.rotate.desc",
+            "Sayfaları 90°, 180° veya 270° döndürüp kaydedin.",
+        ),
+        ("tools.btn.add_files", "Dosya Ekle…"),
+        ("tools.btn.move_up", "Yukarı Taşı"),
+        ("tools.btn.move_down", "Aşağı Taşı"),
+        ("tools.btn.remove", "Kaldır"),
+        ("tools.btn.clear", "Tümünü Temizle"),
+        ("tools.btn.cancel", "İptal"),
+        ("tools.btn.save", "Sonucu Kaydet…"),
+        ("tools.btn.execute", "İşlemi Uygula"),
+        ("tools.label.pages", "Sayfalar (örn. 1-3, 5, 8-10):"),
+        ("tools.label.split_mode", "Bölme Modu:"),
+        (
+            "tools.split_mode.extract",
+            "Sayfa aralığını tek dosyaya çıkart",
+        ),
+        (
+            "tools.split_mode.separate",
+            "Tüm sayfaları ayrı dosyalara böl",
+        ),
+        ("tools.label.rotation", "Döndürme Açısı:"),
+        ("tools.rotation.90", "90° Saat Yönünde"),
+        ("tools.rotation.180", "180°"),
+        ("tools.rotation.270", "90° Saatin Tersi Yönünde"),
+        ("tools.status.working", "PDF işlemi gerçekleştiriliyor…"),
+        ("tools.status.success", "İşlem başarıyla tamamlandı."),
+        ("tools.status.failed", "İşlem başarısız oldu."),
+        (
+            "tools.error.no_files",
+            "Lütfen en az bir PDF dosyası seçin.",
+        ),
+        (
+            "tools.error.no_pages",
+            "Lütfen işlenecek sayfaları belirtin.",
+        ),
+        (
+            "tools.error.invalid_range",
+            "Geçersiz sayfa aralığı girildi.",
+        ),
+        ("tools.prompt.open_result", "Yeni Sekmede Aç"),
     ]);
 }
 
@@ -361,6 +487,10 @@ mod tests {
         assert_eq!(t(ResolvedLanguage::Turkish, "tab.new"), "Yeni sekme");
         assert_eq!(t(ResolvedLanguage::Turkish, "print.action"), "Yazdır");
         assert_eq!(t(ResolvedLanguage::Turkish, "page.thumbnail"), "Sayfa");
+        assert_eq!(t(ResolvedLanguage::English, "tools.title"), "PDF Tools");
+        assert_eq!(t(ResolvedLanguage::Turkish, "tools.title"), "PDF Araçları");
+        assert_eq!(t(ResolvedLanguage::English, "tools.merge"), "Merge PDFs");
+        assert_eq!(t(ResolvedLanguage::Turkish, "tools.merge"), "PDF Birleştir");
         assert_eq!(t(ResolvedLanguage::Turkish, "nonexistent"), "");
     }
 }

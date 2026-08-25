@@ -1341,6 +1341,32 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_turkish, "language.turkish");
     set_text!(set_text_settings_light, "settings.theme.light");
     set_text!(set_text_settings_dark, "settings.theme.dark");
+    set_text!(set_text_tools, "tools.title");
+    set_text!(set_text_tools_tooltip, "tools.tooltip");
+    set_text!(set_text_tools_merge, "tools.merge");
+    set_text!(set_text_tools_merge_desc, "tools.merge.desc");
+    set_text!(set_text_tools_split, "tools.split");
+    set_text!(set_text_tools_split_desc, "tools.split.desc");
+    set_text!(set_text_tools_delete, "tools.delete_pages");
+    set_text!(set_text_tools_delete_desc, "tools.delete_pages.desc");
+    set_text!(set_text_tools_rotate, "tools.rotate");
+    set_text!(set_text_tools_rotate_desc, "tools.rotate.desc");
+    set_text!(set_text_tools_btn_add_files, "tools.btn.add_files");
+    set_text!(set_text_tools_btn_move_up, "tools.btn.move_up");
+    set_text!(set_text_tools_btn_move_down, "tools.btn.move_down");
+    set_text!(set_text_tools_btn_remove, "tools.btn.remove");
+    set_text!(set_text_tools_btn_clear, "tools.btn.clear");
+    set_text!(set_text_tools_btn_cancel, "tools.btn.cancel");
+    set_text!(set_text_tools_btn_save, "tools.btn.save");
+    set_text!(set_text_tools_btn_execute, "tools.btn.execute");
+    set_text!(set_text_tools_label_pages, "tools.label.pages");
+    set_text!(set_text_tools_label_split_mode, "tools.label.split_mode");
+    set_text!(set_text_tools_split_extract, "tools.split_mode.extract");
+    set_text!(set_text_tools_split_separate, "tools.split_mode.separate");
+    set_text!(set_text_tools_label_rotation, "tools.label.rotation");
+    set_text!(set_text_tools_rotation_90, "tools.rotation.90");
+    set_text!(set_text_tools_rotation_180, "tools.rotation.180");
+    set_text!(set_text_tools_rotation_270, "tools.rotation.270");
 }
 
 fn unique_id() -> u64 {
