@@ -17,14 +17,30 @@ pub(crate) fn process_pdfium() -> Result<&'static Pdfium, PdfError> {
         return Ok(pdfium);
     }
 
-    let library_path = std::env::current_exe()
-        .map_err(|error| {
-            PdfError::PlatformError(format!("Cannot locate application executable: {error}"))
-        })?
+    let exe = std::env::current_exe().map_err(|error| {
+        PdfError::PlatformError(format!("Cannot locate application executable: {error}"))
+    })?;
+    let dll_name = Pdfium::pdfium_platform_library_name();
+    let library_path = exe
         .parent()
-        .map(|directory| directory.join(Pdfium::pdfium_platform_library_name()))
+        .map(|directory| directory.join(&dll_name))
+        .filter(|path| path.exists())
+        .or_else(|| {
+            exe.parent()
+                .and_then(|d| d.parent())
+                .map(|directory| directory.join(&dll_name))
+                .filter(|path| path.exists())
+        })
+        .or_else(|| {
+            let target_release = std::path::PathBuf::from("target/release").join(&dll_name);
+            target_release.exists().then_some(target_release)
+        })
+        .or_else(|| {
+            let target_debug = std::path::PathBuf::from("target/debug").join(&dll_name);
+            target_debug.exists().then_some(target_debug)
+        })
         .ok_or_else(|| {
-            PdfError::PlatformError("Application executable has no parent directory".into())
+            PdfError::PlatformError("Cannot locate sibling PDFium library: file not found".into())
         })?
         .canonicalize()
         .map_err(|error| {

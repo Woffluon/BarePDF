@@ -89,6 +89,13 @@ jobs:
       - name: Production Panic Policy
         run: cargo clippy --workspace --lib --bins --all-features --locked -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable
 
+      - name: Fetch verified PDFium runtime
+        shell: powershell
+        run: |
+          powershell -File packaging/windows/scripts/fetch-pdfium.ps1 -Destination target/debug/pdfium.dll
+          New-Item -ItemType Directory -Path target/debug/deps -Force | Out-Null
+          Copy-Item target/debug/pdfium.dll -Destination target/debug/deps/pdfium.dll -Force
+
       - name: Unit & Integration Tests
         run: cargo test --workspace --all-features --locked
 
