@@ -52,8 +52,7 @@ impl SecretPassword {
     }
 
     fn expose(&self) -> &str {
-        std::str::from_utf8(&self.bytes)
-            .expect("SecretPassword is constructed from a valid UTF-8 String")
+        std::str::from_utf8(&self.bytes).unwrap_or_default()
     }
 
     fn clear(&mut self) {

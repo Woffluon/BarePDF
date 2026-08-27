@@ -1605,12 +1605,10 @@ fn queue_tool_operation(
             }
             let key = next_tool_job_key(&mut app);
             let request = ToolRequest::new(key, operation);
-            let cancellation = app
-                .tool_worker
-                .as_ref()
-                .expect("tool worker is initialized")
-                .submit(request)
-                .map_err(|error| error.to_string())?;
+            let Some(worker) = app.tool_worker.as_ref() else {
+                return Err("PDF tool worker is unavailable".to_owned());
+            };
+            let cancellation = worker.submit(request).map_err(|error| error.to_string())?;
             app.active_tool_job = Some(super::state::ActiveToolJob { key, cancellation });
             app.tool_password_source = None;
             app.wake_pump();

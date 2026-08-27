@@ -484,7 +484,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "barepdf"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "barepdf-core",
  "barepdf-i18n",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-core"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "barepdf-i18n",
  "serde",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-i18n"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "serde",
  "windows-sys 0.59.0",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-pdf"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "barepdf-core",
  "pdfium-render",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "barepdf-core",
  "thiserror 2.0.19",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform-windows"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "arboard",
  "barepdf-core",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-render"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "barepdf-core",
  "barepdf-pdf",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-thumbnail"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "pdfium-render",
  "windows 0.58.0",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-ui"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "slint",
 ]

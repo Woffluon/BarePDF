@@ -104,8 +104,7 @@ impl JobPassword {
     }
 
     fn expose(&self) -> &str {
-        std::str::from_utf8(&self.bytes)
-            .expect("JobPassword is constructed from a valid UTF-8 String")
+        std::str::from_utf8(&self.bytes).unwrap_or_default()
     }
 }
 
@@ -322,13 +321,13 @@ pub fn convert_pdf(
     let staging = StagingDirectory::create(&request.output_parent, &output_stem)?;
     let (file_names, warnings) = match request.format {
         ConversionFormat::Text | ConversionFormat::Markdown => {
-            convert_text(&*document, &request, staging.path())?
+            convert_text(&*document, &request, staging.path()?)?
         }
         ConversionFormat::Png | ConversionFormat::Jpeg => convert_images(
             &*document,
             image_encoder.ok_or(ConversionError::ImageEncoderUnavailable)?,
             &request,
-            staging.path(),
+            staging.path()?,
         )?,
     };
     check_cancel(&request.cancellation)?;
@@ -376,7 +375,11 @@ fn convert_text(
     let (file_name, contents) = match request.format {
         ConversionFormat::Text => (PathBuf::from("converted.txt"), text::plain_text(&pages)),
         ConversionFormat::Markdown => (PathBuf::from("converted.md"), text::markdown(&pages)),
-        ConversionFormat::Png | ConversionFormat::Jpeg => unreachable!("text formats only"),
+        ConversionFormat::Png | ConversionFormat::Jpeg => {
+            return Err(ConversionError::InvalidPageSelection(
+                "image format routed to text conversion".into(),
+            ));
+        }
     };
     write_new_file(&staging.join(&file_name), contents.as_bytes())?;
     let warnings = if blank_pages.is_empty() {
@@ -401,7 +404,11 @@ fn convert_images(
                 quality: JPEG_QUALITY,
             },
         ),
-        ConversionFormat::Text | ConversionFormat::Markdown => unreachable!("image formats only"),
+        ConversionFormat::Text | ConversionFormat::Markdown => {
+            return Err(ConversionError::InvalidPageSelection(
+                "text format routed to image conversion".into(),
+            ));
+        }
     };
     let dpi = request.dpi.get();
     let mut file_names = Vec::with_capacity(request.pages.len());
@@ -552,10 +559,13 @@ impl StagingDirectory {
         ))
     }
 
-    fn path(&self) -> &Path {
-        self.path
-            .as_deref()
-            .expect("staging path exists until publication")
+    fn path(&self) -> Result<&Path, ConversionError> {
+        self.path.as_deref().ok_or_else(|| {
+            io_failure(
+                "conversion staging directory is unavailable",
+                io::Error::new(io::ErrorKind::NotFound, "staging directory is unavailable"),
+            )
+        })
     }
 
     fn publish(mut self) -> Result<PathBuf, ConversionError> {
@@ -569,10 +579,12 @@ impl StagingDirectory {
             if destination.exists() {
                 continue;
             }
-            let staging = self
-                .path
-                .as_ref()
-                .expect("staging path exists until publication");
+            let Some(staging) = self.path.as_ref() else {
+                return Err(io_failure(
+                    "conversion staging directory is unavailable",
+                    io::Error::new(io::ErrorKind::NotFound, "staging directory is unavailable"),
+                ));
+            };
             match fs::rename(staging, &destination) {
                 Ok(()) => {
                     self.path = None;
