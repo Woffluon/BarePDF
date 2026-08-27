@@ -143,7 +143,11 @@ jobs:
 
       - name: Validate Installer & Registry Configuration
         shell: powershell
-        run: powershell -File packaging/windows/scripts/validate-installer.ps1
+        run: |
+          $advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+          New-Item -Path $advanced -Force | Out-Null
+          Set-ItemProperty -Path $advanced -Name IconsOnly -Type DWord -Value 0
+          powershell -File packaging/windows/scripts/validate-installer.ps1
 
       - name: Generate Checksums
         shell: powershell
