@@ -212,6 +212,9 @@ jobs:
         if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: |
+          $advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+          New-Item -Path $advanced -Force | Out-Null
+          Set-ItemProperty -Path $advanced -Name IconsOnly -Type DWord -Value 0
           powershell -File packaging/windows/scripts/validate-installer.ps1
           powershell -File packaging/windows/scripts/generate-checksums.ps1
 
