@@ -11,6 +11,43 @@ pub struct WindowsPrinterDialog {
     target_dpi: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrintOrientation {
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+impl PrintOrientation {
+    fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Portrait,
+            2 => Self::Landscape,
+            _ => Self::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PrintDialogOptions {
+    range: PrintRange,
+    orientation: PrintOrientation,
+}
+
+impl PrintDialogOptions {
+    pub(crate) const fn new(range: PrintRange, orientation: PrintOrientation) -> Self {
+        Self { range, orientation }
+    }
+
+    pub(crate) const fn range(self) -> PrintRange {
+        self.range
+    }
+
+    pub(crate) const fn orientation(self) -> PrintOrientation {
+        self.orientation
+    }
+}
+
 impl WindowsPrinterDialog {
     pub const DEFAULT_DPI: u16 = 300;
     pub const MAX_DPI: u16 = 600;
@@ -36,6 +73,27 @@ impl WindowsPrinterDialog {
         self.target_dpi = dpi;
         Ok(self)
     }
+
+    /// Shows the native dialog with the in-app preview choices selected initially.
+    /// The native dialog remains authoritative and may change either choice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the native dialog fails or returns invalid settings.
+    pub fn select_with_defaults(
+        &mut self,
+        job_id: PrintJobId,
+        page_count: PageCount,
+        range: PrintRange,
+        orientation_index: i32,
+    ) -> Result<Option<PrintSelection<WindowsPrinterSink>>, PrintError> {
+        let options =
+            PrintDialogOptions::new(range, PrintOrientation::from_index(orientation_index));
+        let Some(selection) = ffi::show_print_dialog(self.owner, page_count.get(), options)? else {
+            return Ok(None);
+        };
+        selection_from_dialog(selection, job_id, page_count, self.target_dpi).map(Some)
+    }
 }
 
 impl PrinterDialog for WindowsPrinterDialog {
@@ -46,10 +104,7 @@ impl PrinterDialog for WindowsPrinterDialog {
         job_id: PrintJobId,
         page_count: PageCount,
     ) -> Result<Option<PrintSelection<Self::Sink>>, PrintError> {
-        let Some(selection) = ffi::show_print_dialog(self.owner, page_count.get())? else {
-            return Ok(None);
-        };
-        selection_from_dialog(selection, job_id, page_count, self.target_dpi).map(Some)
+        self.select_with_defaults(job_id, page_count, PrintRange::all(page_count), 0)
     }
 }
 
@@ -123,8 +178,9 @@ impl PrinterSink for WindowsPrinterSink {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowsPrinterDialog;
-    use barepdf_platform::printing::PrintError;
+    use super::{PrintDialogOptions, PrintOrientation, WindowsPrinterDialog};
+    use barepdf_core::{PageCount, PageIndex};
+    use barepdf_platform::printing::{PrintError, PrintRange};
 
     #[test]
     fn target_dpi_defaults_to_three_hundred_and_is_capped() {
@@ -141,5 +197,17 @@ mod tests {
             WindowsPrinterDialog::new(std::ptr::null_mut()).with_target_dpi(601),
             Err(PrintError::InvalidDpi(601))
         ));
+    }
+
+    #[test]
+    fn preview_options_preserve_initial_range_and_orientation() {
+        let page_count = PageCount::new(8).expect("test page count");
+        let range = PrintRange::new(PageIndex::from_raw(1), PageIndex::from_raw(5), page_count)
+            .expect("test range");
+
+        let options = PrintDialogOptions::new(range, PrintOrientation::Landscape);
+
+        assert_eq!(options.range(), range);
+        assert_eq!(options.orientation(), PrintOrientation::Landscape);
     }
 }

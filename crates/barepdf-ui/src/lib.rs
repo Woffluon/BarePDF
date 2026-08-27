@@ -283,6 +283,161 @@ slint::slint! {
         }
     }
 
+    component ToolChoice inherits Rectangle {
+        in property <string> title;
+        in property <string> description;
+        in property <bool> enabled: true;
+        callback selected();
+
+        height: 52px;
+        border-radius: ThemeTokens.control-radius;
+        background: !root.enabled ? ThemeTokens.control.with-alpha(0.62)
+            : choice-touch.pressed ? ThemeTokens.control-pressed
+            : choice-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
+        border-width: 1px;
+        border-color: choice-focus.has-focus ? ThemeTokens.focus : ThemeTokens.border;
+        accessible-role: button;
+        accessible-label: root.title + ": " + root.description;
+        accessible-enabled: root.enabled;
+        choice-touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { choice-focus.focus(); root.selected(); }
+        }
+        choice-focus := FocusScope {
+            x: 0px;
+            width: 0px;
+            enabled <=> root.enabled;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") { root.selected(); return accept; }
+                return reject;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 15px;
+            padding-right: 15px;
+            spacing: 12px;
+            VerticalLayout {
+                vertical-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.title; color: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 13px; font-weight: 650; overflow: elide; }
+                Text { text: root.description; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+            }
+        }
+        if choice-focus.has-focus && root.enabled : Rectangle {
+            border-width: ThemeTokens.focus-width;
+            border-color: ThemeTokens.focus;
+            border-radius: root.border-radius;
+        }
+    }
+
+    component PrintPreview inherits Rectangle {
+        in-out property <int> page: 0;
+        in-out property <string> range: "";
+        in-out property <int> orientation: 0;
+        in property <image> image;
+        in property <bool> has-image: false;
+        in property <string> total-pages: "0";
+        in property <string> text-title: "";
+        in property <string> text-cancel-tooltip: "";
+        in property <string> text-empty: "";
+        in property <string> text-page: "";
+        in property <string> text-previous: "";
+        in property <string> text-next: "";
+        in property <string> text-page-range: "";
+        in property <string> text-range-placeholder: "";
+        in property <string> text-range-accessible: "";
+        in property <string> text-orientation: "";
+        in property <string> text-orientation-auto: "";
+        in property <string> text-orientation-portrait: "";
+        in property <string> text-orientation-landscape: "";
+        in property <string> text-cancel: "";
+        in property <string> text-continue: "";
+        callback previous();
+        callback next();
+        callback range-changed(string);
+        callback orientation-changed(int);
+        callback confirm();
+        callback cancel();
+
+        background: #0000008a;
+        forward-focus: dialog-focus;
+        TouchArea { clicked => { } }
+        dialog-focus := FocusScope {
+            width: Math.min(parent.width - 32px, 620px);
+            height: Math.min(parent.height - 32px, 540px);
+            key-pressed(event) => {
+                if (event.text == "\u{001b}") { root.cancel(); return accept; }
+                return reject;
+            }
+            Rectangle {
+                background: ThemeTokens.panel;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+                drop-shadow-blur: 18px;
+                drop-shadow-color: #00000048;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    HorizontalLayout {
+                        height: 28px;
+                        Text { text: root.text-title; color: ThemeTokens.text; font-size: 18px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                        IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-cancel-tooltip; clicked => { root.cancel(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 18px;
+                        Rectangle {
+                            width: Math.min(320px, parent.width * 0.56);
+                            background: ThemeTokens.canvas;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            Rectangle {
+                                width: Math.min(parent.width - 28px, 248px);
+                                height: Math.min(parent.height - 28px, 338px);
+                                background: white;
+                                border-width: 1px;
+                                border-color: #00000020;
+                                if root.has-image : Image { source: root.image; width: 100%; height: 100%; image-fit: contain; }
+                                if !root.has-image : Text { text: root.text-empty; color: #626972; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 9px;
+                            Text { text: root.text-page + " " + (root.page + 1) + " / " + root.total-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-previous; enabled: root.page > 0; clicked => { root.previous(); } }
+                                TextButton { text: root.text-next; enabled: root.page + 1 < root.total-pages.to-float(); clicked => { root.next(); } }
+                            }
+                            Text { text: root.text-page-range; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                            LineEdit {
+                                text <=> root.range;
+                                placeholder-text: root.text-range-placeholder;
+                                accessible-label: root.text-range-accessible;
+                                accepted => { root.range-changed(root.range); }
+                                changed text => { root.range-changed(self.text); }
+                            }
+                            Text { text: root.text-orientation; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                            HorizontalLayout {
+                                spacing: 5px;
+                                TextButton { text: root.text-orientation-auto; active: root.orientation == 0; clicked => { root.orientation = 0; root.orientation-changed(0); } }
+                                TextButton { text: root.text-orientation-portrait; active: root.orientation == 1; clicked => { root.orientation = 1; root.orientation-changed(1); } }
+                                TextButton { text: root.text-orientation-landscape; active: root.orientation == 2; clicked => { root.orientation = 2; root.orientation-changed(2); } }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.text-cancel; clicked => { root.cancel(); } }
+                        TextButton { text: root.text-continue; primary: true; clicked => { root.confirm(); } }
+                    }
+                }
+            }
+        }
+    }
+
     component PasswordPopover inherits Rectangle {
         in-out property <string> password-input: "";
         in property <string> file-name: "";
@@ -335,13 +490,72 @@ slint::slint! {
         }
     }
 
+    component ToolDropZone inherits Rectangle {
+        in property <string> label: "Drop PDF files here";
+        callback dropped(data-transfer);
+
+        height: 38px;
+        border-radius: ThemeTokens.control-radius;
+        background: drop-target.has-drag ? ThemeTokens.accent.with-alpha(0.12) : ThemeTokens.control;
+        border-width: drop-target.has-drag ? 2px : 1px;
+        border-color: drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.border;
+        drop-target := DropArea {
+            can-drop(event) => { return DragAction.copy; }
+            dropped(event) => { root.dropped(event.data); return DragAction.copy; }
+        }
+        Text { text: root.label; color: ThemeTokens.text-muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+
+    component PageSelectionCard inherits Rectangle {
+        in property <ThumbnailItem> item;
+        callback selected(bool, bool);
+
+        width: 58px;
+        height: 66px;
+        border-radius: ThemeTokens.control-radius;
+        background: card-focus.has-focus ? ThemeTokens.selection
+            : card-touch.has-hover ? ThemeTokens.control-hover
+            : item.is-selected ? ThemeTokens.selection : ThemeTokens.control;
+        border-width: card-focus.has-focus ? ThemeTokens.focus-width : (item.is-selected ? 2px : 1px);
+        border-color: card-focus.has-focus ? ThemeTokens.focus : (item.is-selected ? ThemeTokens.accent : ThemeTokens.border);
+        accessible-role: button;
+        accessible-label: "Page " + item.page-number + (item.is-selected ? ", selected. " : ". ") + "Use Control or Shift with Enter to extend selection.";
+        card-touch := TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    card-focus.focus();
+                    root.selected(event.modifiers.control, event.modifiers.shift);
+                }
+            }
+        }
+        card-focus := FocusScope {
+            x: 0px; width: 0px;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") { root.selected(event.modifiers.control, event.modifiers.shift); return accept; }
+                return reject;
+            }
+        }
+        Rectangle {
+            x: (parent.width - 28px) / 2; y: 5px; width: 28px; height: 38px;
+            background: white; border-width: 1px; border-color: #00000020;
+            if root.item.has-bitmap : Image { source: root.item.bitmap; width: 100%; height: 100%; image-fit: contain; }
+        }
+        Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page-number; color: ThemeTokens.text-muted; font-size: 9px; horizontal-alignment: center; overflow: elide; }
+    }
+
     component ToolsModal inherits Rectangle {
         in-out property <int> current-tool: -1;
         in property <[string]> merge-files: [];
+        in property <[image]> merge-first-page-images: [];
+        in property <[ThumbnailItem]> page-thumbnails: [];
         in-out property <int> selected-merge-index: -1;
+        in-out property <int> merge-drag-index: -1;
         in-out property <string> page-range-input: "";
         in-out property <int> split-mode: 0;
         in-out property <int> rotation: 1;
+        in-out property <int> convert-format: 0;
+        in-out property <int> convert-dpi: 150;
+        in-out property <int> convert-jpeg-quality: 90;
         in property <string> error-text: "";
         in property <bool> is-working: false;
         in property <string> active-doc-title: "";
@@ -357,6 +571,23 @@ slint::slint! {
         in property <string> text-delete-desc: "";
         in property <string> text-rotate: "";
         in property <string> text-rotate-desc: "";
+        in property <string> text-convert: "";
+        in property <string> text-convert-desc: "";
+        in property <string> text-drop-merge: "";
+        in property <string> text-drop-split: "";
+        in property <string> text-drop-delete: "";
+        in property <string> text-drop-rotate: "";
+        in property <string> text-drop-convert: "";
+        in property <string> text-pages-unit: "";
+        in property <string> text-pages-empty-hint: "";
+        in property <string> text-split-placeholder: "";
+        in property <string> text-delete-placeholder: "";
+        in property <string> text-rotate-placeholder: "";
+        in property <string> text-format: "";
+        in property <string> text-resolution: "";
+        in property <string> text-jpeg-quality: "";
+        in property <string> text-merge-drag-hint: "";
+        in property <string> text-merge-dragged-hint: "";
         in property <string> btn-add-files: "";
         in property <string> btn-move-up: "";
         in property <string> btn-move-down: "";
@@ -380,20 +611,24 @@ slint::slint! {
         callback merge-select-file(int);
         callback merge-move-up(int);
         callback merge-move-down(int);
+        callback merge-reorder(int, int);
         callback merge-remove(int);
         callback merge-clear();
         callback merge-submit();
         callback split-submit(string, int);
         callback delete-submit(string);
         callback rotate-submit(string, int);
+        callback convert-submit(int, int, int, string);
+        callback drop-files(data-transfer, int);
+        callback select-page(int, bool, bool);
 
         background: #0000008a;
         forward-focus: modal-focus;
         TouchArea { clicked => { } }
 
         modal-focus := FocusScope {
-            width: root.current-tool == -1 ? 520px : 560px;
-            height: root.current-tool == -1 ? 380px : (root.current-tool == 0 ? 460px : 360px);
+            width: Math.min(parent.width - 32px, root.current-tool == -1 ? 520px : 560px);
+            height: Math.min(parent.height - 32px, root.current-tool == -1 ? 410px : (root.current-tool == 0 ? 500px : 420px));
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
                     if root.current-tool != -1 {
@@ -431,7 +666,8 @@ slint::slint! {
                                 text: root.current-tool == -1 ? root.title :
                                       root.current-tool == 0 ? root.text-merge :
                                       root.current-tool == 1 ? root.text-split :
-                                      root.current-tool == 2 ? root.text-delete : root.text-rotate;
+                                      root.current-tool == 2 ? root.text-delete :
+                                      root.current-tool == 3 ? root.text-rotate : root.text-convert;
                                 color: ThemeTokens.text;
                                 font-size: 18px;
                                 font-weight: 700;
@@ -454,81 +690,16 @@ slint::slint! {
 
                     if root.current-tool == -1 : VerticalLayout {
                         spacing: 10px;
-                        Rectangle {
-                            height: 62px;
-                            border-radius: 8px;
-                            background: m-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
-                            border-width: 1px;
-                            border-color: ThemeTokens.border;
-                            m-touch := TouchArea { clicked => { root.select-tool(0); } }
-                            HorizontalLayout {
-                                padding-left: 16px; padding-right: 16px; alignment: space-between;
-                                VerticalLayout {
-                                    alignment: center; spacing: 3px;
-                                    Text { text: root.text-merge; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
-                                    Text { text: root.text-merge-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
-                                }
-                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
-                            }
-                        }
-                        Rectangle {
-                            height: 62px;
-                            border-radius: 8px;
-                            background: s-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
-                            border-width: 1px;
-                            border-color: ThemeTokens.border;
-                            opacity: root.has-document ? 1.0 : 0.45;
-                            s-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(1); } }
-                            HorizontalLayout {
-                                padding-left: 16px; padding-right: 16px; alignment: space-between;
-                                VerticalLayout {
-                                    alignment: center; spacing: 3px;
-                                    Text { text: root.text-split; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
-                                    Text { text: root.text-split-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
-                                }
-                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
-                            }
-                        }
-                        Rectangle {
-                            height: 62px;
-                            border-radius: 8px;
-                            background: d-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
-                            border-width: 1px;
-                            border-color: ThemeTokens.border;
-                            opacity: root.has-document ? 1.0 : 0.45;
-                            d-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(2); } }
-                            HorizontalLayout {
-                                padding-left: 16px; padding-right: 16px; alignment: space-between;
-                                VerticalLayout {
-                                    alignment: center; spacing: 3px;
-                                    Text { text: root.text-delete; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
-                                    Text { text: root.text-delete-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
-                                }
-                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
-                            }
-                        }
-                        Rectangle {
-                            height: 62px;
-                            border-radius: 8px;
-                            background: r-touch.has-hover && root.has-document ? ThemeTokens.control-hover : ThemeTokens.control;
-                            border-width: 1px;
-                            border-color: ThemeTokens.border;
-                            opacity: root.has-document ? 1.0 : 0.45;
-                            r-touch := TouchArea { enabled: root.has-document; clicked => { root.select-tool(3); } }
-                            HorizontalLayout {
-                                padding-left: 16px; padding-right: 16px; alignment: space-between;
-                                VerticalLayout {
-                                    alignment: center; spacing: 3px;
-                                    Text { text: root.text-rotate; color: ThemeTokens.text; font-size: 14px; font-weight: 650; }
-                                    Text { text: root.text-rotate-desc; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
-                                }
-                                Text { text: "→"; color: ThemeTokens.text-muted; font-size: 16px; vertical-alignment: center; }
-                            }
-                        }
+                        ToolChoice { title: root.text-merge; description: root.text-merge-desc; selected => { root.select-tool(0); } }
+                        ToolChoice { title: root.text-split; description: root.text-split-desc; selected => { root.select-tool(1); } }
+                        ToolChoice { title: root.text-delete; description: root.text-delete-desc; selected => { root.select-tool(2); } }
+                        ToolChoice { title: root.text-rotate; description: root.text-rotate-desc; selected => { root.select-tool(3); } }
+                        ToolChoice { title: root.text-convert; description: root.text-convert-desc; selected => { root.select-tool(4); } }
                     }
 
                     if root.current-tool == 0 : VerticalLayout {
                         spacing: 10px;
+                        ToolDropZone { label: root.text-drop-merge; dropped(data) => { root.drop-files(data, 0); } }
                         HorizontalLayout {
                             spacing: 8px;
                             TextButton { text: root.btn-add-files; primary: true; clicked => { root.merge-add-files(); } }
@@ -552,13 +723,51 @@ slint::slint! {
                             }
                             if root.merge-files.length > 0 : ListView {
                                 for file-path[fidx] in root.merge-files : Rectangle {
-                                    height: 32px;
-                                    background: root.selected-merge-index == fidx ? ThemeTokens.selection : (f-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-                                    f-touch := TouchArea { clicked => { root.merge-select-file(fidx); } }
+                                    height: 64px;
+                                    background: root.merge-drag-index == fidx ? ThemeTokens.accent.with-alpha(0.18)
+                                        : root.selected-merge-index == fidx ? ThemeTokens.selection
+                                        : (f-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                                    border-width: focus-row.has-focus ? ThemeTokens.focus-width : (root.merge-drag-index >= 0 && root.merge-drag-index != fidx ? 1px : 0px);
+                                    border-color: focus-row.has-focus ? ThemeTokens.focus : ThemeTokens.accent;
+                                    f-touch := TouchArea {
+                                        clicked => { focus-row.focus(); root.merge-select-file(fidx); }
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                                focus-row.focus();
+                                                root.merge-select-file(fidx);
+                                                root.merge-drag-index = fidx;
+                                            }
+                                            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                                if (root.merge-drag-index >= 0 && root.merge-drag-index != fidx) {
+                                                    root.merge-reorder(root.merge-drag-index, fidx);
+                                                }
+                                                root.merge-drag-index = -1;
+                                            }
+                                        }
+                                    }
+                                    focus-row := FocusScope {
+                                        x: 0px; width: 0px;
+                                        key-pressed(event) => {
+                                            if (event.text == " " || event.text == "\n") { root.merge-select-file(fidx); return accept; }
+                                            if (event.text == Key.UpArrow && fidx > 0) { root.merge-move-up(fidx); return accept; }
+                                            if (event.text == Key.DownArrow && fidx + 1 < root.merge-files.length) { root.merge-move-down(fidx); return accept; }
+                                            return reject;
+                                        }
+                                    }
+                                    accessible-role: button;
+                                    accessible-label: "Merge item " + (fidx + 1) + ": " + file-path + ". Drag to a card or use Up or Down arrow to reorder.";
                                     HorizontalLayout {
                                         padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                        Rectangle {
+                                            width: 34px; height: 46px; background: white; border-width: 1px; border-color: #00000020;
+                                            if root.merge-first-page-images.length > fidx : Image { source: root.merge-first-page-images[fidx]; width: 100%; height: 100%; image-fit: contain; }
+                                            if root.merge-first-page-images.length <= fidx : Text { text: "1"; color: #626972; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                                        }
                                         Text { text: (fidx + 1) + "."; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
-                                        Text { text: file-path; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                        VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
+                                            Text { text: file-path; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                                            Text { text: root.merge-drag-index == fidx ? root.text-merge-dragged-hint : root.text-merge-drag-hint; color: ThemeTokens.text-muted; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                                        }
                                     }
                                 }
                             }
@@ -578,8 +787,9 @@ slint::slint! {
 
                     if root.current-tool == 1 : VerticalLayout {
                         spacing: 12px;
+                        ToolDropZone { label: root.text-drop-split; dropped(data) => { root.drop-files(data, 1); } }
                         Text {
-                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
                             color: ThemeTokens.text-muted;
                             font-size: 12px;
                             overflow: elide;
@@ -593,9 +803,15 @@ slint::slint! {
                         if root.split-mode == 0 : VerticalLayout {
                             spacing: 6px;
                             Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            Flickable {
+                                height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                                HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                    for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                                }
+                            }
                             range-edit := LineEdit {
                                 text <=> root.page-range-input;
-                                placeholder-text: "1-3, 5, 8-10";
+                                placeholder-text: root.text-split-placeholder;
                                 accepted => { root.split-submit(root.page-range-input, root.split-mode); }
                             }
                         }
@@ -615,16 +831,23 @@ slint::slint! {
 
                     if root.current-tool == 2 : VerticalLayout {
                         spacing: 12px;
+                        ToolDropZone { label: root.text-drop-delete; dropped(data) => { root.drop-files(data, 2); } }
                         Text {
-                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
                             color: ThemeTokens.text-muted;
                             font-size: 12px;
                             overflow: elide;
                         }
                         Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                            }
+                        }
                         del-edit := LineEdit {
                             text <=> root.page-range-input;
-                            placeholder-text: "2, 4-6, 10";
+                            placeholder-text: root.text-delete-placeholder;
                             accepted => { root.delete-submit(root.page-range-input); }
                         }
                         Rectangle { height: 16px; }
@@ -643,16 +866,23 @@ slint::slint! {
 
                     if root.current-tool == 3 : VerticalLayout {
                         spacing: 12px;
+                        ToolDropZone { label: root.text-drop-rotate; dropped(data) => { root.drop-files(data, 3); } }
                         Text {
-                            text: root.active-doc-title + " (" + root.active-doc-pages + " pages)";
+                            text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
                             color: ThemeTokens.text-muted;
                             font-size: 12px;
                             overflow: elide;
                         }
-                        Text { text: root.label-pages + " (empty for all pages)"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        Text { text: root.label-pages + " (" + root.text-pages-empty-hint + ")"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                            }
+                        }
                         rot-edit := LineEdit {
                             text <=> root.page-range-input;
-                            placeholder-text: "All pages or e.g. 1, 3-5";
+                            placeholder-text: root.text-rotate-placeholder;
                         }
                         Text { text: root.label-rotation; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
                         HorizontalLayout {
@@ -674,13 +904,50 @@ slint::slint! {
                             }
                         }
                     }
+
+                    if root.current-tool == 4 : VerticalLayout {
+                        spacing: 12px;
+                        ToolDropZone { label: root.text-drop-convert; dropped(data) => { root.drop-files(data, 4); } }
+                        Text { text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")"; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                            }
+                        }
+                        Text { text: root.text-format; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 5px;
+                            TextButton { text: "TXT"; active: root.convert-format == 0; clicked => { root.convert-format = 0; } }
+                            TextButton { text: "MD"; active: root.convert-format == 1; clicked => { root.convert-format = 1; } }
+                            TextButton { text: "PNG"; active: root.convert-format == 2; clicked => { root.convert-format = 2; } }
+                            TextButton { text: "JPEG"; active: root.convert-format == 3; clicked => { root.convert-format = 3; } }
+                        }
+                        if root.convert-format >= 2 : HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: root.text-resolution; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            TextButton { text: "150 DPI"; active: root.convert-dpi == 150; clicked => { root.convert-dpi = 150; } }
+                            TextButton { text: "300 DPI"; active: root.convert-dpi == 300; clicked => { root.convert-dpi = 300; } }
+                        }
+                        if root.convert-format == 3 : HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: root.text-jpeg-quality; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            TextButton { text: "90"; active: root.convert-jpeg-quality == 90; clicked => { root.convert-jpeg-quality = 90; } }
+                        }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton { text: root.btn-save; primary: true; enabled: !root.is-working; clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); } }
+                        }
+                    }
                 }
             }
         }
     }
 
     export component AppWindow inherits Window {
-        title: root.document-title != "" ? root.document-title + " — BarePDF" : "BarePDF";
+        title: root.document-title != "" ? root.document-title + " - BarePDF" : "BarePDF";
         icon: @image-url("../../../assets/logo.svg");
         preferred-width: 1200px;
         preferred-height: 860px;
@@ -717,6 +984,7 @@ slint::slint! {
         in-out property <bool> password-required: false;
         in property <string> password-error: "";
         in-out property <bool> settings-open: false;
+        in-out property <bool> toolbar-more-open: false;
         in-out property <bool> context-menu-open: false;
         in-out property <length> context-menu-x: 0px;
         in-out property <length> context-menu-y: 0px;
@@ -742,15 +1010,30 @@ slint::slint! {
         in property <bool> print-active: false;
         in property <float> print-progress: 0;
         in property <string> print-status: "";
+        in-out property <bool> print-preview-open: false;
+        in-out property <int> print-preview-page: 0;
+        in-out property <string> print-preview-range: "";
+        in-out property <int> print-preview-orientation: 0;
+        in property <image> print-preview-image;
+        in property <bool> print-preview-has-image: false;
         in-out property <bool> tools-open: false;
         in-out property <int> current-tool: -1;
         in-out property <[string]> merge-files: [];
+        in property <[image]> merge-first-page-images: [];
         in-out property <int> selected-merge-index: -1;
+        in-out property <int> merge-drag-index: -1;
         in-out property <string> tools-page-range: "";
+        in-out property <string> page-selection-range: "";
         in-out property <int> tools-split-mode: 0;
         in-out property <int> tools-rotation: 1;
+        in-out property <int> tools-convert-format: 0;
+        in-out property <int> tools-convert-dpi: 150;
+        in-out property <int> tools-convert-jpeg-quality: 90;
         in property <string> tools-error: "";
         in property <bool> tools-working: false;
+        in-out property <bool> tool-password-prompt-open: false;
+        in property <string> tool-password-error: "";
+        in-out property <string> tool-password-input: "";
 
         in property <string> text-open: "Open PDF";
         in property <string> text-sidebar: "Sidebar";
@@ -796,6 +1079,19 @@ slint::slint! {
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
         in property <string> text-cancel-print: "Cancel";
+        in property <string> text-toolbar-more: "More";
+        in property <string> text-print-preview-title: "Print preview";
+        in property <string> text-print-preview-cancel-tooltip: "Cancel print preview";
+        in property <string> text-print-preview-empty: "Page preview";
+        in property <string> text-print-preview-page: "Page";
+        in property <string> text-print-preview-page-range: "Page range";
+        in property <string> text-print-preview-range-placeholder: "All pages or 1-3";
+        in property <string> text-print-preview-range-accessible: "Print page range";
+        in property <string> text-print-preview-orientation: "Orientation";
+        in property <string> text-print-preview-orientation-auto: "Auto";
+        in property <string> text-print-preview-orientation-portrait: "Portrait";
+        in property <string> text-print-preview-orientation-landscape: "Landscape";
+        in property <string> text-print-preview-continue: "Continue";
         in property <string> text-tools: "PDF Tools";
         in property <string> text-tools-tooltip: "PDF Operations and Tools";
         in property <string> text-tools-merge: "Merge PDFs";
@@ -822,6 +1118,23 @@ slint::slint! {
         in property <string> text-tools-rotation-90: "90° Clockwise";
         in property <string> text-tools-rotation-180: "180°";
         in property <string> text-tools-rotation-270: "90° Counter-Clockwise";
+        in property <string> text-tools-convert: "Convert PDF";
+        in property <string> text-tools-convert-desc: "Export pages or text in a format that suits your workflow.";
+        in property <string> text-tools-drop-merge: "Drop PDFs to add to the merge";
+        in property <string> text-tools-drop-split: "Drop a PDF to split";
+        in property <string> text-tools-drop-delete: "Drop a PDF to delete pages";
+        in property <string> text-tools-drop-rotate: "Drop a PDF to rotate pages";
+        in property <string> text-tools-drop-convert: "Drop a PDF to convert";
+        in property <string> text-tools-pages-unit: "pages";
+        in property <string> text-tools-pages-empty-hint: "empty for all pages";
+        in property <string> text-tools-split-placeholder: "1-3, 5, 8-10";
+        in property <string> text-tools-delete-placeholder: "2, 4-6, 10";
+        in property <string> text-tools-rotate-placeholder: "All pages or e.g. 1, 3-5";
+        in property <string> text-tools-format: "Format";
+        in property <string> text-tools-resolution: "Resolution";
+        in property <string> text-tools-jpeg-quality: "JPEG quality";
+        in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
+        in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
 
         callback request-open-file();
         callback request-next-page();
@@ -843,6 +1156,7 @@ slint::slint! {
         callback request-exit-special-mode();
         callback request-unlock-password(string);
         callback request-select-page(int);
+        callback request-select-page-range(int, bool, bool);
         callback request-toggle-view-mode();
         callback request-change-language(int);
         callback request-change-theme(int);
@@ -859,6 +1173,11 @@ slint::slint! {
         callback request-close-tab(int);
         callback request-new-tab();
         callback request-print();
+        callback request-print-preview-page(int);
+        callback request-print-preview-range(string);
+        callback request-print-preview-orientation(int);
+        callback request-confirm-print();
+        callback request-close-print-preview();
         callback request-cancel-print();
         callback request-toggle-tools();
         callback request-open-tool(int);
@@ -867,19 +1186,31 @@ slint::slint! {
         callback request-merge-select-file(int);
         callback request-merge-move-up(int);
         callback request-merge-move-down(int);
+        callback request-merge-reorder(int, int);
         callback request-merge-remove-file(int);
         callback request-merge-clear();
         callback request-merge-execute();
         callback request-split-execute(string, int);
         callback request-delete-pages-execute(string);
         callback request-rotate-pages-execute(string, int);
+        callback request-convert-execute(int, int, int, string);
+        callback request-tool-drop(data-transfer, int);
+        callback request-submit-tool-password(string);
+        callback request-cancel-tool-password();
         callback pointer-down(int, length, length, int);
         callback pointer-move(int, length, length);
         callback pointer-up(int, length, length);
 
+        changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
+        changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
+        changed tool-password-prompt-open => {
+            if (!root.tool-password-prompt-open) { root.tool-password-input = ""; }
+        }
+
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
+                    if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
                     if (root.tools-open) {
                         if (root.current-tool != -1) {
                             root.current-tool = -1;
@@ -888,6 +1219,7 @@ slint::slint! {
                         }
                         return accept;
                     }
+                    if (root.toolbar-more-open) { root.toolbar-more-open = false; return accept; }
                     if (root.context-menu-open) { root.context-menu-open = false; return accept; }
                     if (root.settings-open) { root.settings-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
@@ -1037,23 +1369,24 @@ slint::slint! {
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
                         label: root.view-mode-label; tooltip: root.text-view; show-label: root.width >= 1120px;
-                        enabled: root.has-document; clicked => { root.request-toggle-view-mode(); }
+                        enabled: root.has-document; visible: root.width >= 1040px; clicked => { root.request-toggle-view-mode(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
                         label: root.text-fit-width; tooltip: root.text-fit-width; show-label: root.width >= 1040px;
                         active: root.zoom-mode == 1;
-                        enabled: root.has-document; clicked => { root.request-fit-width(); }
+                        enabled: root.has-document; visible: root.width >= 1040px; clicked => { root.request-fit-width(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
                         label: root.text-fit-page; tooltip: root.text-fit-page; show-label: root.width >= 1180px;
                         active: root.zoom-mode == 2;
-                        enabled: root.has-document; clicked => { root.request-fit-page(); }
+                        enabled: root.has-document; visible: root.width >= 1120px; clicked => { root.request-fit-page(); }
                     }
                     Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     TextButton {
                         text: root.text-print;
+                        visible: root.width >= 1040px;
                         enabled: root.has-document && !root.print-active;
                         clicked => { root.request-print(); }
                     }
@@ -1062,17 +1395,21 @@ slint::slint! {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
                         label: root.text-tools; tooltip: root.text-tools-tooltip; show-label: root.width >= 1260px;
                         active: root.tools-open;
+                        visible: root.width >= 1040px;
                         clicked => { root.request-toggle-tools(); }
                     }
+                    if root.width < 1040px : TextButton { text: root.text-toolbar-more; active: root.toolbar-more-open; clicked => { root.toolbar-more-open = !root.toolbar-more-open; } }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
                         tooltip: root.text-fullscreen; enabled: root.has-document;
+                        visible: root.width >= 900px;
                         clicked => { root.request-toggle-fullscreen(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
                         tooltip: root.text-presentation; enabled: root.has-document;
+                        visible: root.width >= 960px;
                         clicked => { root.request-presentation-mode(); }
                     }
                     settings-button := IconButton {
@@ -1366,6 +1703,26 @@ slint::slint! {
                         cancel => { password-popup.password-input = ""; root.password-required = false; }
                     }
 
+                    if root.toolbar-more-open : Rectangle {
+                        x: Math.max(8px, parent.width - 242px); y: 8px; width: 234px; height: 188px;
+                        background: ThemeTokens.panel; border-radius: 8px; border-width: 1px; border-color: ThemeTokens.border;
+                        drop-shadow-blur: 12px; drop-shadow-color: #00000040;
+                        FocusScope {
+                            key-pressed(event) => {
+                                if (event.text == "\u{001b}") { root.toolbar-more-open = false; return accept; }
+                                return reject;
+                            }
+                            VerticalLayout {
+                                padding: 10px; spacing: 5px;
+                                TextButton { text: root.text-view; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-toggle-view-mode(); } }
+                                TextButton { text: root.text-fit-width; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-fit-width(); } }
+                                TextButton { text: root.text-fit-page; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-fit-page(); } }
+                                TextButton { text: root.text-print; enabled: root.has-document && !root.print-active; clicked => { root.toolbar-more-open = false; root.request-print(); } }
+                                TextButton { text: root.text-tools; clicked => { root.toolbar-more-open = false; root.request-toggle-tools(); } }
+                            }
+                        }
+                    }
+
                     if root.settings-open : Rectangle {
                         background: #00000001;
                         TouchArea { clicked => { root.settings-open = false; } }
@@ -1415,10 +1772,16 @@ slint::slint! {
                     if root.tools-open : ToolsModal {
                         current-tool <=> root.current-tool;
                         merge-files: root.merge-files;
+                        merge-first-page-images: root.merge-first-page-images;
+                        page-thumbnails: root.thumbnail-items;
                         selected-merge-index <=> root.selected-merge-index;
-                        page-range-input <=> root.tools-page-range;
+                        merge-drag-index <=> root.merge-drag-index;
+                        page-range-input <=> root.page-selection-range;
                         split-mode <=> root.tools-split-mode;
                         rotation <=> root.tools-rotation;
+                        convert-format <=> root.tools-convert-format;
+                        convert-dpi <=> root.tools-convert-dpi;
+                        convert-jpeg-quality <=> root.tools-convert-jpeg-quality;
                         error-text: root.tools-error;
                         is-working: root.tools-working;
                         active-doc-title: root.document-title;
@@ -1450,6 +1813,23 @@ slint::slint! {
                         rotation-90: root.text-tools-rotation-90;
                         rotation-180: root.text-tools-rotation-180;
                         rotation-270: root.text-tools-rotation-270;
+                        text-convert: root.text-tools-convert;
+                        text-convert-desc: root.text-tools-convert-desc;
+                        text-drop-merge: root.text-tools-drop-merge;
+                        text-drop-split: root.text-tools-drop-split;
+                        text-drop-delete: root.text-tools-drop-delete;
+                        text-drop-rotate: root.text-tools-drop-rotate;
+                        text-drop-convert: root.text-tools-drop-convert;
+                        text-pages-unit: root.text-tools-pages-unit;
+                        text-pages-empty-hint: root.text-tools-pages-empty-hint;
+                        text-split-placeholder: root.text-tools-split-placeholder;
+                        text-delete-placeholder: root.text-tools-delete-placeholder;
+                        text-rotate-placeholder: root.text-tools-rotate-placeholder;
+                        text-format: root.text-tools-format;
+                        text-resolution: root.text-tools-resolution;
+                        text-jpeg-quality: root.text-tools-jpeg-quality;
+                        text-merge-drag-hint: root.text-tools-merge-drag-hint;
+                        text-merge-dragged-hint: root.text-tools-merge-dragged-hint;
 
                         select-tool(tool-id) => { root.request-open-tool(tool-id); }
                         close => { root.request-close-tools(); }
@@ -1457,12 +1837,64 @@ slint::slint! {
                         merge-select-file(idx) => { root.request-merge-select-file(idx); }
                         merge-move-up(idx) => { root.request-merge-move-up(idx); }
                         merge-move-down(idx) => { root.request-merge-move-down(idx); }
+                        merge-reorder(from, to) => { root.request-merge-reorder(from, to); }
                         merge-remove(idx) => { root.request-merge-remove-file(idx); }
                         merge-clear => { root.request-merge-clear(); }
                         merge-submit => { root.request-merge-execute(); }
                         split-submit(range, mode) => { root.request-split-execute(range, mode); }
                         delete-submit(range) => { root.request-delete-pages-execute(range); }
                         rotate-submit(range, rot) => { root.request-rotate-pages-execute(range, rot); }
+                        convert-submit(format, dpi, quality, range) => { root.request-convert-execute(format, dpi, quality, range); }
+                        drop-files(data, tool-id) => { root.request-tool-drop(data, tool-id); }
+                        select-page(page, ctrl, shift) => { root.request-select-page-range(page, ctrl, shift); }
+                    }
+                    if root.print-preview-open : PrintPreview {
+                        page <=> root.print-preview-page;
+                        range <=> root.print-preview-range;
+                        orientation <=> root.print-preview-orientation;
+                        image: root.print-preview-image;
+                        has-image: root.print-preview-has-image;
+                        total-pages: root.total-pages-str;
+                        text-title: root.text-print-preview-title;
+                        text-cancel-tooltip: root.text-print-preview-cancel-tooltip;
+                        text-empty: root.text-print-preview-empty;
+                        text-page: root.text-print-preview-page;
+                        text-previous: root.text-prev-page;
+                        text-next: root.text-next-page;
+                        text-page-range: root.text-print-preview-page-range;
+                        text-range-placeholder: root.text-print-preview-range-placeholder;
+                        text-range-accessible: root.text-print-preview-range-accessible;
+                        text-orientation: root.text-print-preview-orientation;
+                        text-orientation-auto: root.text-print-preview-orientation-auto;
+                        text-orientation-portrait: root.text-print-preview-orientation-portrait;
+                        text-orientation-landscape: root.text-print-preview-orientation-landscape;
+                        text-cancel: root.text-cancel-print;
+                        text-continue: root.text-print-preview-continue;
+                        previous => { root.request-print-preview-page(root.print-preview-page - 1); }
+                        next => { root.request-print-preview-page(root.print-preview-page + 1); }
+                        range-changed(value) => { root.request-print-preview-range(value); }
+                        orientation-changed(value) => { root.request-print-preview-orientation(value); }
+                        confirm => { root.request-confirm-print(); }
+                        cancel => { root.request-close-print-preview(); }
+                    }
+                    if root.tool-password-prompt-open : tool-password-popup := PasswordPopover {
+                        password-input <=> root.tool-password-input;
+                        file-name: root.document-title;
+                        error-text: root.tool-password-error;
+                        title: root.text-password-title;
+                        placeholder: root.text-password-placeholder;
+                        cancel-label: root.text-password-cancel;
+                        unlock-label: root.text-password-unlock;
+                        submit(password) => {
+                            root.tool-password-input = "";
+                            tool-password-popup.password-input = "";
+                            root.request-submit-tool-password(password);
+                        }
+                        cancel => {
+                            root.tool-password-input = "";
+                            tool-password-popup.password-input = "";
+                            root.request-cancel-tool-password();
+                        }
                     }
                 }
             }

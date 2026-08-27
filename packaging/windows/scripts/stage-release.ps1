@@ -11,7 +11,13 @@ if (-not $CargoPath) {
     $CargoPath = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
 }
 & $CargoPath build --workspace --exclude barepdf-thumbnail --release --locked
+if ($LASTEXITCODE -ne 0) {
+    throw "Release workspace build failed with exit code $LASTEXITCODE"
+}
 & $CargoPath build --package barepdf-thumbnail --profile release-unwind --locked
+if ($LASTEXITCODE -ne 0) {
+    throw "Thumbnail provider build failed with exit code $LASTEXITCODE"
+}
 
 $StagedDir = Join-Path $RepoRoot "target\release\staged"
 if (Test-Path $StagedDir) {

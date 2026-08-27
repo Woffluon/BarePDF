@@ -55,13 +55,15 @@ pub(super) const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
 pub(super) const PAGE_IMAGE_BUDGET: usize = 16 * 1024 * 1024;
 pub(super) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
 const THUMB_ROW_HEIGHT: f32 = 188.0;
+const THUMBNAIL_PREFETCH_ROWS: u32 = 2;
 const PAGE_GAP: f32 = 14.0;
 pub(super) const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
 const PRESENTATION_MAX_RENDER_EDGE: u32 = 2560;
 pub(super) const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
 
 use super::callbacks::{
-    clear_document_transients, close_worker_document, restore_active_view, snapshot_active_view,
+    clear_document_transients, close_worker_document, consume_print_preview_render,
+    requeue_print_preview_for_generation, restore_active_view, snapshot_active_view,
 };
 use super::models::{
     refresh_page_model, refresh_tab_model, refresh_thumbnail_model, refresh_thumbnail_row,
@@ -285,8 +287,7 @@ pub(super) fn process_view_changes(
         let pages = visible_page_indices(&app, window);
         if pages != app.visible_page_indices {
             app.generation = scheduler.bump_generation();
-            render_visible_pages(&mut app, scheduler, window);
-            request_visible_thumbnails(&mut app, scheduler, window);
+            refresh_generation_bound_views(&mut app, scheduler, window);
         } else if previous_page != page {
             if let Some(document_id) = app.active_document() {
                 if !app.text_geometries.contains_key(document_id, page) {
@@ -399,13 +400,27 @@ pub(super) fn handle_render_event(
             set_scroll_position(&mut app, window, restored_view.scroll_y);
         }
         RenderEvent::PageRendered {
+            request_id,
             generation,
             document_id,
             page_index,
             kind,
             bitmap,
-            ..
         } => {
+            if let Some(accepted) =
+                consume_print_preview_render(request_id, document_id, generation, page_index)
+            {
+                if accepted {
+                    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                        bitmap.pixels(),
+                        bitmap.width(),
+                        bitmap.height(),
+                    );
+                    window.set_print_preview_image(Image::from_rgba8(buffer));
+                    window.set_print_preview_has_image(true);
+                }
+                return;
+            }
             let mut app = state.borrow_mut();
             if !RenderController::accepts(
                 &app.application,
@@ -505,9 +520,13 @@ pub(super) fn handle_render_event(
                 (-window.get_current_scroll_y()).max(0.0),
                 app.viewport_height as f32,
             );
-            for (offset, dimensions) in dimensions.iter().copied().enumerate() {
+            let mut changed_pages = Vec::new();
+            for (offset, new_dimensions) in dimensions.iter().copied().enumerate() {
                 if let Some(slot) = app.page_dimensions.get_mut(start as usize + offset) {
-                    *slot = dimensions;
+                    if *slot != new_dimensions {
+                        changed_pages.push(start.saturating_add(offset as u32));
+                        *slot = new_dimensions;
+                    }
                 }
             }
             app.dimensions_revision += 1;
@@ -520,12 +539,17 @@ pub(super) fn handle_render_event(
             for index in start..start.saturating_add(dimensions.len() as u32) {
                 refresh_thumbnail_row(&mut app, window, index);
             }
+            if let Some(document_id) = app.active_document() {
+                for index in changed_pages {
+                    app.thumbnail_images.remove_page(document_id, index);
+                }
+            }
             app.next_dimensions_start = start + dimensions.len() as u32;
             if app.current_page.saturating_add(16) >= app.next_dimensions_start {
                 request_next_dimensions_batch(&mut app, scheduler);
             }
             app.generation = scheduler.bump_generation();
-            render_visible_pages(&mut app, scheduler, window);
+            refresh_generation_bound_views(&mut app, scheduler, window);
         }
         RenderEvent::Error {
             document_id,
@@ -697,9 +721,8 @@ pub(super) fn navigate_to_page_inner(
     app.generation = scheduler.bump_generation();
     window.set_current_page_str(SharedString::from((app.current_page + 1).to_string()));
     request_next_dimensions_batch(app, scheduler);
-    render_visible_pages(app, scheduler, window);
+    refresh_generation_bound_views(app, scheduler, window);
     refresh_thumbnail_selection(app, window, previous_page);
-    request_visible_thumbnails(app, scheduler, window);
 }
 
 pub(super) fn invalidate_layout_and_render(
@@ -725,10 +748,35 @@ pub(super) fn invalidate_layout_and_render(
     if clear_images {
         if let Some(document) = app.active_document() {
             app.page_images.remove_document(document);
+            app.thumbnail_images.remove_document(document);
         }
     }
     app.generation = scheduler.bump_generation();
-    render_visible_pages(app, scheduler, window);
+    refresh_generation_bound_views(app, scheduler, window);
+}
+
+fn refresh_generation_bound_views(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+) {
+    run_generation_refreshes(
+        app,
+        |app| render_visible_pages(app, scheduler, window),
+        |app| request_visible_thumbnails(app, scheduler, window),
+        |app| requeue_print_preview_for_generation(app, scheduler, window),
+    );
+}
+
+fn run_generation_refreshes<T>(
+    target: &mut T,
+    refresh_pages: impl FnOnce(&mut T),
+    refresh_thumbnails: impl FnOnce(&mut T),
+    refresh_print_preview: impl FnOnce(&mut T),
+) {
+    refresh_pages(target);
+    refresh_thumbnails(target);
+    refresh_print_preview(target);
 }
 
 pub(super) fn ensure_layout(app: &mut AppState) {
@@ -893,12 +941,18 @@ pub(super) fn request_visible_thumbnails(
     let Some(document_id) = app.active_document() else {
         return;
     };
-    let first_visible = ((-window.get_thumbnail_scroll_y()).max(0.0) / THUMB_ROW_HEIGHT) as u32;
-    let visible_count =
-        (window.get_thumbnail_viewport_height().max(1.0) / THUMB_ROW_HEIGHT).ceil() as u32;
-    let start = first_visible.saturating_sub(4);
-    let end = (first_visible + visible_count + 4).min(app.page_count());
-    for index in start..end {
+    let page_indices = thumbnail_render_window(
+        app.page_count(),
+        window.get_thumbnail_scroll_y(),
+        window.get_thumbnail_viewport_height(),
+    );
+    for index in page_indices {
+        if app
+            .thumbnail_images
+            .contains_key(document_id, index, RenderKind::Thumbnail)
+        {
+            continue;
+        }
         let (width, height) = app
             .page_dimensions
             .get(index as usize)
@@ -922,6 +976,18 @@ pub(super) fn request_visible_thumbnails(
             }),
         );
     }
+}
+
+fn thumbnail_render_window(
+    page_count: u32,
+    scroll_y: f32,
+    viewport_height: f32,
+) -> std::ops::Range<u32> {
+    let first_visible = ((-scroll_y).max(0.0) / THUMB_ROW_HEIGHT) as u32;
+    let visible_count = (viewport_height.max(1.0) / THUMB_ROW_HEIGHT).ceil() as u32;
+    let start = first_visible.saturating_sub(THUMBNAIL_PREFETCH_ROWS);
+    let end = (first_visible + visible_count + THUMBNAIL_PREFETCH_ROWS).min(page_count);
+    start..end
 }
 
 fn start_deferred_document_work(
@@ -1328,6 +1394,43 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_check_now, "updates.check_now");
     set_text!(set_text_print, "print.action");
     set_text!(set_text_cancel_print, "print.cancel");
+    set_text!(set_text_toolbar_more, "toolbar.more");
+    set_text!(set_text_print_preview_title, "print.preview.title");
+    set_text!(
+        set_text_print_preview_cancel_tooltip,
+        "print.preview.cancel_tooltip"
+    );
+    set_text!(set_text_print_preview_empty, "print.preview.empty");
+    set_text!(set_text_print_preview_page, "print.preview.page");
+    set_text!(
+        set_text_print_preview_page_range,
+        "print.preview.page_range"
+    );
+    set_text!(
+        set_text_print_preview_range_placeholder,
+        "print.preview.range_placeholder"
+    );
+    set_text!(
+        set_text_print_preview_range_accessible,
+        "print.preview.range_accessible"
+    );
+    set_text!(
+        set_text_print_preview_orientation,
+        "print.preview.orientation"
+    );
+    set_text!(
+        set_text_print_preview_orientation_auto,
+        "print.preview.orientation.auto"
+    );
+    set_text!(
+        set_text_print_preview_orientation_portrait,
+        "print.preview.orientation.portrait"
+    );
+    set_text!(
+        set_text_print_preview_orientation_landscape,
+        "print.preview.orientation.landscape"
+    );
+    set_text!(set_text_print_preview_continue, "print.preview.continue");
     set_text!(set_text_prev_page, "page.previous");
     set_text!(set_text_next_page, "page.next");
     set_text!(set_text_password_title, "password.title");
@@ -1367,6 +1470,35 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_tools_rotation_90, "tools.rotation.90");
     set_text!(set_text_tools_rotation_180, "tools.rotation.180");
     set_text!(set_text_tools_rotation_270, "tools.rotation.270");
+    set_text!(set_text_tools_convert, "tools.convert");
+    set_text!(set_text_tools_convert_desc, "tools.convert.desc");
+    set_text!(set_text_tools_drop_merge, "tools.drop.merge");
+    set_text!(set_text_tools_drop_split, "tools.drop.split");
+    set_text!(set_text_tools_drop_delete, "tools.drop.delete");
+    set_text!(set_text_tools_drop_rotate, "tools.drop.rotate");
+    set_text!(set_text_tools_drop_convert, "tools.drop.convert");
+    set_text!(set_text_tools_pages_unit, "tools.pages.unit");
+    set_text!(set_text_tools_pages_empty_hint, "tools.pages.empty_hint");
+    set_text!(
+        set_text_tools_split_placeholder,
+        "tools.range.split_placeholder"
+    );
+    set_text!(
+        set_text_tools_delete_placeholder,
+        "tools.range.delete_placeholder"
+    );
+    set_text!(
+        set_text_tools_rotate_placeholder,
+        "tools.range.rotate_placeholder"
+    );
+    set_text!(set_text_tools_format, "tools.format");
+    set_text!(set_text_tools_resolution, "tools.resolution");
+    set_text!(set_text_tools_jpeg_quality, "tools.jpeg_quality");
+    set_text!(set_text_tools_merge_drag_hint, "tools.merge.drag_hint");
+    set_text!(
+        set_text_tools_merge_dragged_hint,
+        "tools.merge.dragged_hint"
+    );
 }
 
 fn unique_id() -> u64 {
@@ -1379,6 +1511,28 @@ fn unique_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generation_refresh_requeues_each_visible_surface_once() {
+        let mut calls = [0_u8; 3];
+
+        run_generation_refreshes(
+            &mut calls,
+            |calls| calls[0] += 1,
+            |calls| calls[1] += 1,
+            |calls| calls[2] += 1,
+        );
+
+        assert_eq!(calls, [1, 1, 1]);
+    }
+
+    #[test]
+    fn initial_thumbnail_window_includes_the_first_page_without_scroll() {
+        let pages = thumbnail_render_window(12, 0.0, THUMB_ROW_HEIGHT);
+
+        assert_eq!(pages.start, 0);
+        assert!(pages.contains(&0));
+    }
 
     #[test]
     fn page_input_is_one_based_and_bounded() {

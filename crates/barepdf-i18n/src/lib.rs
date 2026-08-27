@@ -266,6 +266,19 @@ fn add_english_print_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("print.default_document", "BarePDF document"),
         ("print.action", "Print"),
         ("print.cancel", "Cancel"),
+        ("toolbar.more", "More"),
+        ("print.preview.title", "Print preview"),
+        ("print.preview.cancel_tooltip", "Cancel print preview"),
+        ("print.preview.empty", "Page preview"),
+        ("print.preview.page", "Page"),
+        ("print.preview.page_range", "Page range"),
+        ("print.preview.range_placeholder", "All pages or 1-3"),
+        ("print.preview.range_accessible", "Print page range"),
+        ("print.preview.orientation", "Orientation"),
+        ("print.preview.orientation.auto", "Auto"),
+        ("print.preview.orientation.portrait", "Portrait"),
+        ("print.preview.orientation.landscape", "Landscape"),
+        ("print.preview.continue", "Continue"),
         ("print.status.preparing", "Preparing print job…"),
         ("print.status.cancelling", "Cancelling print job…"),
         ("print.status.progress", "Printing page"),
@@ -321,9 +334,46 @@ fn add_english_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("tools.rotation.90", "90° Clockwise"),
         ("tools.rotation.180", "180°"),
         ("tools.rotation.270", "90° Counter-Clockwise"),
+        ("tools.convert", "Convert PDF"),
+        (
+            "tools.convert.desc",
+            "Export pages or text in a format that suits your workflow.",
+        ),
+        ("tools.drop.merge", "Drop PDFs to add to the merge"),
+        ("tools.drop.split", "Drop a PDF to split"),
+        ("tools.drop.delete", "Drop a PDF to delete pages"),
+        ("tools.drop.rotate", "Drop a PDF to rotate pages"),
+        ("tools.drop.convert", "Drop a PDF to convert"),
+        ("tools.pages.unit", "pages"),
+        ("tools.pages.empty_hint", "empty for all pages"),
+        ("tools.range.split_placeholder", "1-3, 5, 8-10"),
+        ("tools.range.delete_placeholder", "2, 4-6, 10"),
+        ("tools.range.rotate_placeholder", "All pages or e.g. 1, 3-5"),
+        ("tools.format", "Format"),
+        ("tools.resolution", "Resolution"),
+        ("tools.jpeg_quality", "JPEG quality"),
+        (
+            "tools.merge.drag_hint",
+            "First page • drag or ↑ / ↓ to reorder",
+        ),
+        ("tools.merge.dragged_hint", "Release on a card to move"),
         ("tools.status.working", "Processing PDF operation…"),
         ("tools.status.success", "Operation completed successfully."),
         ("tools.status.failed", "Operation failed."),
+        ("tools.error.busy", "A PDF tool is already running."),
+        ("tools.error.drop_pdf", "Drop one or more PDF files."),
+        (
+            "tools.error.single_source",
+            "Choose one PDF source for this tool.",
+        ),
+        ("tools.error.source", "Choose a PDF source first."),
+        ("tools.error.format", "Choose a conversion format."),
+        ("tools.error.resolution", "Choose 150 or 300 DPI."),
+        (
+            "tools.password.incorrect",
+            "The password is incorrect. Try again.",
+        ),
+        ("tools.password.required", "This PDF is password protected."),
         (
             "tools.error.no_files",
             "Please select at least one PDF file.",
@@ -349,6 +399,25 @@ fn add_turkish_print_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("print.default_document", "BarePDF belgesi"),
         ("print.action", "Yazdır"),
         ("print.cancel", "İptal"),
+        ("toolbar.more", "Diğer"),
+        ("print.preview.title", "Yazdırma önizlemesi"),
+        (
+            "print.preview.cancel_tooltip",
+            "Yazdırma önizlemesini iptal et",
+        ),
+        ("print.preview.empty", "Sayfa önizlemesi"),
+        ("print.preview.page", "Sayfa"),
+        ("print.preview.page_range", "Sayfa aralığı"),
+        ("print.preview.range_placeholder", "Tüm sayfalar veya 1-3"),
+        (
+            "print.preview.range_accessible",
+            "Yazdırılacak sayfa aralığı",
+        ),
+        ("print.preview.orientation", "Yönlendirme"),
+        ("print.preview.orientation.auto", "Otomatik"),
+        ("print.preview.orientation.portrait", "Dikey"),
+        ("print.preview.orientation.landscape", "Yatay"),
+        ("print.preview.continue", "Devam Et"),
         ("print.status.preparing", "Yazdırma işi hazırlanıyor…"),
         ("print.status.cancelling", "Yazdırma işi iptal ediliyor…"),
         ("print.status.progress", "Sayfa yazdırılıyor"),
@@ -404,9 +473,55 @@ fn add_turkish_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("tools.rotation.90", "90° Saat Yönünde"),
         ("tools.rotation.180", "180°"),
         ("tools.rotation.270", "90° Saatin Tersi Yönünde"),
+        ("tools.convert", "PDF Dönüştür"),
+        (
+            "tools.convert.desc",
+            "Sayfaları veya metni iş akışınıza uygun bir biçimde dışa aktarın.",
+        ),
+        (
+            "tools.drop.merge",
+            "Birleştirmeye eklemek için PDF'leri bırakın",
+        ),
+        ("tools.drop.split", "Bölmek için bir PDF bırakın"),
+        ("tools.drop.delete", "Sayfaları silmek için bir PDF bırakın"),
+        (
+            "tools.drop.rotate",
+            "Sayfaları döndürmek için bir PDF bırakın",
+        ),
+        ("tools.drop.convert", "Dönüştürmek için bir PDF bırakın"),
+        ("tools.pages.unit", "sayfa"),
+        ("tools.pages.empty_hint", "tüm sayfalar için boş bırakın"),
+        ("tools.range.split_placeholder", "1-3, 5, 8-10"),
+        ("tools.range.delete_placeholder", "2, 4-6, 10"),
+        (
+            "tools.range.rotate_placeholder",
+            "Tüm sayfalar veya örn. 1, 3-5",
+        ),
+        ("tools.format", "Biçim"),
+        ("tools.resolution", "Çözünürlük"),
+        ("tools.jpeg_quality", "JPEG kalitesi"),
+        (
+            "tools.merge.drag_hint",
+            "İlk sayfa • sürükleyip bırakarak yeniden sıralayın",
+        ),
+        (
+            "tools.merge.dragged_hint",
+            "Taşımak için bir kartın üzerine bırakın",
+        ),
         ("tools.status.working", "PDF işlemi gerçekleştiriliyor…"),
         ("tools.status.success", "İşlem başarıyla tamamlandı."),
         ("tools.status.failed", "İşlem başarısız oldu."),
+        ("tools.error.busy", "Bir PDF aracı zaten çalışıyor."),
+        ("tools.error.drop_pdf", "Bir veya daha fazla PDF bırakın."),
+        (
+            "tools.error.single_source",
+            "Bu araç için tek bir PDF kaynağı seçin.",
+        ),
+        ("tools.error.source", "Önce bir PDF kaynağı seçin."),
+        ("tools.error.format", "Bir dönüştürme biçimi seçin."),
+        ("tools.error.resolution", "150 veya 300 DPI seçin."),
+        ("tools.password.incorrect", "Parola yanlış. Tekrar deneyin."),
+        ("tools.password.required", "Bu PDF parola korumalı."),
         (
             "tools.error.no_files",
             "Lütfen en az bir PDF dosyası seçin.",
@@ -492,5 +607,61 @@ mod tests {
         assert_eq!(t(ResolvedLanguage::English, "tools.merge"), "Merge PDFs");
         assert_eq!(t(ResolvedLanguage::Turkish, "tools.merge"), "PDF Birleştir");
         assert_eq!(t(ResolvedLanguage::Turkish, "nonexistent"), "");
+    }
+
+    #[test]
+    fn print_preview_and_conversion_strings_are_localized() {
+        let keys = [
+            "toolbar.more",
+            "print.preview.title",
+            "print.preview.cancel_tooltip",
+            "print.preview.empty",
+            "print.preview.page",
+            "print.preview.page_range",
+            "print.preview.range_placeholder",
+            "print.preview.range_accessible",
+            "print.preview.orientation",
+            "print.preview.orientation.auto",
+            "print.preview.orientation.portrait",
+            "print.preview.orientation.landscape",
+            "print.preview.continue",
+            "tools.convert",
+            "tools.convert.desc",
+            "tools.drop.merge",
+            "tools.drop.split",
+            "tools.drop.delete",
+            "tools.drop.rotate",
+            "tools.drop.convert",
+            "tools.pages.unit",
+            "tools.pages.empty_hint",
+            "tools.range.split_placeholder",
+            "tools.range.delete_placeholder",
+            "tools.range.rotate_placeholder",
+            "tools.format",
+            "tools.resolution",
+            "tools.jpeg_quality",
+            "tools.merge.drag_hint",
+            "tools.merge.dragged_hint",
+        ];
+
+        for key in keys {
+            assert!(
+                !t(ResolvedLanguage::English, key).is_empty(),
+                "Missing English translation for key: {key}"
+            );
+            assert!(
+                !t(ResolvedLanguage::Turkish, key).is_empty(),
+                "Missing Turkish translation for key: {key}"
+            );
+        }
+
+        assert_eq!(
+            t(ResolvedLanguage::English, "print.preview.range_placeholder"),
+            "All pages or 1-3"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "print.preview.range_placeholder"),
+            "Tüm sayfalar veya 1-3"
+        );
     }
 }

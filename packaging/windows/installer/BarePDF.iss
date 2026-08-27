@@ -5,6 +5,9 @@
 #ifndef MyAppVersion
   #error MyAppVersion must be supplied by build-installer.ps1
 #endif
+#ifndef MyAppId
+  #define MyAppId "{{B3A82379-88F4-4D4D-A815-998A4476B66C}}"
+#endif
 #define MyAppPublisher "BarePDF Contributors"
 #define MyAppURL "https://github.com/woffluon/barepdf"
 #define MyAppExeName "BarePDF.exe"
@@ -12,7 +15,7 @@
 #define MyThumbnailCLSID "{{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}"
 
 [Setup]
-AppId={{B3A82379-88F4-4D4D-A815-998A4476B66C}}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
@@ -26,6 +29,8 @@ DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\..\..\target\release\installer
 OutputBaseFilename=BarePDF-Setup-x64-v{#MyAppVersion}
 Compression=lzma2/max
@@ -63,18 +68,20 @@ Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\shell\open\command"; ValueType
 Root: HKCU; Subkey: "Software\Classes\{#MyProgID}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
 
 ; Thumbnail Provider Shell Extension Registration ({E357FCCD-A995-4576-B01F-234630154E96} is Win32 IThumbnailProvider Handler GUID)
-Root: HKCU; Subkey: "Software\Classes\{#MyProgID}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
+Root: HKCU64; Subkey: "Software\Classes\{#MyProgID}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
 
 ; COM Class Registration for BarePDF Thumbnail Provider
-Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}"; ValueType: string; ValueName: ""; ValueData: "BarePDF Thumbnail Provider"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\BarePDF.Thumbnail.dll"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"; Flags: uninsdeletekey
+; Remove only the legacy 32-bit registration left by pre-x64-mode installers.
+Root: HKCU32; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}"; Flags: deletekey
+Root: HKCU64; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}"; ValueType: string; ValueName: ""; ValueData: "BarePDF Thumbnail Provider"; Flags: uninsdeletekey
+Root: HKCU64; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\BarePDF.Thumbnail.dll"; Flags: uninsdeletekey
+Root: HKCU64; Subkey: "Software\Classes\CLSID\{#MyThumbnailCLSID}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"; Flags: uninsdeletekey
 
 ; Open With integration & Applications registration
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: "TypeOverlay"; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
+Root: HKCU64; Subkey: "Software\Classes\Applications\{#MyAppExeName}\ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueName: ""; ValueData: "{#MyThumbnailCLSID}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "{#MyProgID}"; ValueData: ""; Flags: uninsdeletevalue
 

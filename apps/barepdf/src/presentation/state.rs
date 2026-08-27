@@ -9,10 +9,12 @@ use super::ui::{
     normalize_viewing_mode, PAGE_IMAGE_BUDGET, TEXT_GEOMETRY_BUDGET, THUMB_IMAGE_BUDGET,
 };
 use crate::application::{Application, DocumentController, UpdateController};
+use crate::infrastructure::{ToolJobKey, ToolWorker};
 use barepdf_core::{
     ContinuousLayout, DocumentId, PageTextGeometry, Rotation, TextSelection, UserPreferences,
     ViewingMode, WindowMode, ZoomFactor, ZoomMode,
 };
+use barepdf_pdf::conversion::CancellationToken;
 use barepdf_pdf::OutlineNode;
 use barepdf_render::RenderKind;
 use lru::LruCache;
@@ -217,6 +219,19 @@ impl UiImageCache {
             }
         }
     }
+
+    pub(super) fn remove_page(&mut self, document: DocumentId, page: u32) {
+        let keys = self
+            .entries
+            .iter()
+            .filter_map(|(key, _)| (key.0 == document && key.1 == page).then_some(*key))
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(removed) = self.entries.pop(&key) {
+                self.bytes = self.bytes.saturating_sub(removed.bytes);
+            }
+        }
+    }
 }
 
 pub(super) struct AppState {
@@ -260,6 +275,13 @@ pub(super) struct AppState {
     pub(super) thumbnail_images: UiImageCache,
     pub(super) update: UpdateController,
     pub(super) tools_merge_files: Vec<PathBuf>,
+    pub(super) tools_source_path: Option<PathBuf>,
+    pub(super) tool_password_source: Option<PathBuf>,
+    pub(super) tool_source_token: u64,
+    pub(super) next_tool_job_id: u64,
+    pub(super) active_tool_job: Option<ActiveToolJob>,
+    pub(super) tool_worker: Option<ToolWorker>,
+    pub(super) tool_event_timer: Option<Rc<Timer>>,
     pump_timer: Option<Rc<Timer>>,
     pump_active_until: Option<Instant>,
 }
@@ -308,6 +330,13 @@ impl AppState {
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             update: UpdateController::default(),
             tools_merge_files: Vec::new(),
+            tools_source_path: None,
+            tool_password_source: None,
+            tool_source_token: 1,
+            next_tool_job_id: 1,
+            active_tool_job: None,
+            tool_worker: None,
+            tool_event_timer: None,
             pump_timer: None,
             pump_active_until: None,
         }
@@ -355,6 +384,11 @@ impl AppState {
                 .pump_active_until
                 .is_some_and(|deadline| now < deadline)
     }
+}
+
+pub(super) struct ActiveToolJob {
+    pub(super) key: ToolJobKey,
+    pub(super) cancellation: CancellationToken,
 }
 
 pub(super) fn fit_bitmap_to_budget(width: u32, height: u32, budget: usize) -> (u32, u32) {
@@ -437,5 +471,18 @@ mod tests {
         assert!(cache.contains_key(first, 0));
         assert!(!cache.contains_key(second, 0));
         assert!(cache.get(second, 0).is_none());
+    }
+
+    #[test]
+    fn thumbnail_cache_can_invalidate_one_page_without_evicting_siblings() {
+        let mut cache = UiImageCache::new(32);
+        let first = DocumentId::new(1);
+        cache.insert(first, 0, RenderKind::Thumbnail, Image::default(), 4);
+        cache.insert(first, 1, RenderKind::Thumbnail, Image::default(), 4);
+
+        cache.remove_page(first, 0);
+
+        assert!(!cache.contains_key(first, 0, RenderKind::Thumbnail));
+        assert!(cache.contains_key(first, 1, RenderKind::Thumbnail));
     }
 }

@@ -13,6 +13,7 @@ use std::time::Duration;
 const COMMAND_CAPACITY: usize = 1;
 const EVENT_CAPACITY: usize = 1;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 const POINTS_PER_INCH: f64 = 72.0;
 const MAX_TARGET_DPI: u16 = 600;
 const MAX_PRINT_BITMAP_BYTES: u64 = 256 * 1024 * 1024;
@@ -91,6 +92,7 @@ pub(crate) struct PrintWorker {
     shutdown: Arc<AtomicBool>,
     done_receiver: Receiver<()>,
     handle: Option<JoinHandle<()>>,
+    shutdown_timed_out: bool,
 }
 
 impl PrintWorker {
@@ -129,6 +131,7 @@ impl PrintWorker {
             shutdown,
             done_receiver,
             handle: Some(handle),
+            shutdown_timed_out: false,
         })
     }
 
@@ -161,14 +164,22 @@ impl PrintWorker {
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.try_send(PrintCommand::Shutdown);
         }
-        match self.done_receiver.recv_timeout(SHUTDOWN_TIMEOUT) {
+        let wait_timeout = if self.shutdown_timed_out {
+            SHUTDOWN_RETRY_TIMEOUT
+        } else {
+            SHUTDOWN_TIMEOUT
+        };
+        match self.done_receiver.recv_timeout(wait_timeout) {
             Ok(()) => self
                 .handle
                 .take()
                 .ok_or(PrintWorkerError::Disconnected)?
                 .join()
                 .map_err(|_| PrintWorkerError::Panicked),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(PrintWorkerError::ShutdownTimeout),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.shutdown_timed_out = true;
+                Err(PrintWorkerError::ShutdownTimeout)
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let Some(handle) = self.handle.take() else {
                     return Ok(());

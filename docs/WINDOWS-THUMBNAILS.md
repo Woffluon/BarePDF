@@ -18,12 +18,14 @@ The thumbnail provider is a lightweight Windows COM DLL crate (`crates/barepdf-t
 - **Threading Model**: `Apartment` (STA)
 
 ### Registry Keys
-1. **ProgID Shell Extension**:
+1. **Native 64-bit ProgID Shell Extension**:
    `HKCU\Software\Classes\BarePDF.Document.1\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}` -> `{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}`
 2. **Native TypeOverlay Branding**:
    `HKCU\Software\Classes\BarePDF.Document.1\TypeOverlay` -> `"{app}\BarePDF.exe,0"`
-3. **COM Class Registration**:
+3. **Native 64-bit COM Class Registration**:
    `HKCU\Software\Classes\CLSID\{4F7B3E21-9C8D-4E15-A2B0-8E9D6F3C1A5B}\InprocServer32` -> `"{app}\BarePDF.Thumbnail.dll"`
+
+The installer runs in x64-compatible 64-bit mode so native Explorer resolves the AMD64 in-process server. During upgrade it deletes only BarePDF's legacy private CLSID from the 32-bit HKCU registry view; uninstall removes the native COM and ShellEx registrations.
 
 ## Native TypeOverlay Mechanism
 
@@ -44,4 +46,8 @@ Windows Shell automatically overlays the BarePDF application icon in the lower-r
 2. Build release workspace: `cargo build --workspace --release`.
 3. Run release staging script: `powershell -File packaging/windows/scripts/stage-release.ps1`.
 4. Compile Inno Setup installer: `powershell -File packaging/windows/scripts/build-installer.ps1`.
-5. Install and verify PDF thumbnails on Windows Desktop and File Explorer.
+5. On an account with existing BarePDF registration, install-directory, or shortcut state, compile the isolated test package without changing user installation state: `powershell -File packaging/windows/scripts/validate-installer.ps1 -CompileOnly`.
+6. On a clean disposable Windows account or CI runner, run `powershell -File packaging/windows/scripts/validate-installer.ps1` to verify the native 64-bit `InprocServer32` path, `ThreadingModel=Apartment`, ShellEx mappings, installed thumbnail/PDFium DLLs, legacy 32-bit CLSID removal, and uninstall cleanup.
+7. Confirm Explorer's **Always show icons, never thumbnails** option is off (`IconsOnly=0`), then install and inspect PDF file thumbnails on Windows Desktop and File Explorer.
+
+Explorer's Alt+P preview pane uses `IPreviewHandler` and is outside this thumbnail provider's scope.

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 use barepdf_core::{PageIndex, PdfError, Rotation};
-use barepdf_pdf::{PdfOperations, PdfiumEngine};
+use barepdf_pdf::{PdfOperationInput, PdfOperations, PdfiumEngine};
 use pdfium_render::prelude::*;
 
 /// Helper to create a test PDF with `count` pages, where each page `i` (0-indexed)
@@ -19,6 +19,36 @@ fn create_test_pdf(path: &Path, count: usize) {
             .expect("create page");
     }
     doc.save_to_file(path).expect("save pdf");
+}
+
+fn create_encrypted_test_pdf(path: &Path) {
+    const PDF: &str = "JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPDhjOGU0MjU5ZDc+Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9UeXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9UeXBlIC9QYWdlCi9SZXNvdXJjZXMgPDwKPj4KL01lZGlhQm94IFsgMC4wIDAuMCA3MiA3MiBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCjUgMCBvYmoKPDwKL1YgMgovUiAzCi9MZW5ndGggMTI4Ci9QIDQyOTQ5NjcyOTIKL0ZpbHRlciAvU3RhbmRhcmQKL08gPDBjYzhjMzkyODQ4YzY0NTA5YTc1Zjk2ZjkwOTQ0MDk4NTZiNWJmYTRlMjA2ZDM5ZjNkYTQ3NjZkMzVhNDQzZTA+Ci9VIDwwMWQ5M2FhOGRhODk2ZDdmNmFkYjJlNmVhYTNlZjlmMDI4YmY0ZTVlNGU3NThhNDE2NDAwNGU1NmZmZmEwMTA4Pgo+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNTkgMDAwMDAgbiAKMDAwMDAwMDExOCAwMDAwMCBuIAowMDAwMDAwMTY3IDAwMDAwIG4gCjAwMDAwMDAyNTkgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA2Ci9Sb290IDMgMCBSCi9JbmZvIDEgMCBSCi9JRCBbIDw2NDY2NjM2MTY2MzUzNDMyMzczOTMwMzMzMjMwMzY2NDY0MzEzMTM0MzQzMTY0MzA2MjM1NjI2MTM5MzYzMTYyPiA8NjQ2NjM2MTY2MzUzNDMyMzczOTMwMzMzMjMwMzY2NDY0MzEzMTM0MzQzMTY0MzA2MjM1NjI2MTM5MzYzMTYyPiBdCi9FbmNyeXB0IDUgMCBSCj4+CnN0YXJ0eHJlZgo0NzQKJSVFT0YK";
+    std::fs::write(path, decode_base64(PDF)).expect("write encrypted PDF fixture");
+}
+
+fn decode_base64(value: &str) -> Vec<u8> {
+    let mut output = Vec::with_capacity(value.len() * 3 / 4);
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u8;
+    for byte in value.bytes() {
+        let chunk = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => continue,
+        };
+        accumulator = (accumulator << 6) | u32::from(chunk);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((accumulator >> bits) as u8);
+            accumulator &= (1_u32 << bits) - 1;
+        }
+    }
+    output
 }
 
 /// Helper to inspect page count, dimensions, and rotations of a saved PDF.
@@ -129,6 +159,25 @@ fn test_merge_files_non_existent_input_fails() {
         result,
         Err(PdfError::FileNotFound(_)) | Err(PdfError::FileAccess { .. })
     ));
+}
+
+#[test]
+fn password_aware_merge_accepts_borrowed_per_input_credentials() {
+    let dir = tempdir().expect("tempdir");
+    let encrypted = dir.path().join("encrypted.pdf");
+    let plain = dir.path().join("plain.pdf");
+    let output = dir.path().join("merged-password-aware.pdf");
+    create_encrypted_test_pdf(&encrypted);
+    create_test_pdf(&plain, 2);
+    let inputs = [
+        PdfOperationInput::new(&encrypted, Some("right-password")),
+        PdfOperationInput::new(&plain, None),
+    ];
+
+    PdfOperations::merge_files_with_passwords(&inputs, &output)
+        .expect("password-aware merge unlocks only the encrypted input");
+
+    assert_eq!(inspect_pdf(&output).0, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,4 +614,118 @@ fn test_reorder_pages_non_existent_source_fails() {
 
     let result = PdfOperations::reorder_pages(&src, &[idx(0)], &output);
     assert!(result.is_err());
+}
+
+#[test]
+fn password_aware_single_input_operations_accept_borrowed_job_credentials() {
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("source.pdf");
+    create_test_pdf(&source, 2);
+    let password = Some("ephemeral job password");
+
+    let extracted = dir.path().join("extracted-password-aware.pdf");
+    PdfOperations::extract_pages_with_password(&source, &[idx(0)], &extracted, password)
+        .expect("password-aware extraction succeeds");
+
+    let split_dir = dir.path().join("split-password-aware");
+    std::fs::create_dir(&split_dir).expect("create split directory");
+    let split =
+        PdfOperations::split_into_single_pages_with_password(&source, &split_dir, "page", password)
+            .expect("password-aware split succeeds");
+
+    let deleted = dir.path().join("deleted-password-aware.pdf");
+    PdfOperations::delete_pages_with_password(&source, &[idx(1)], &deleted, password)
+        .expect("password-aware deletion succeeds");
+
+    let rotated = dir.path().join("rotated-password-aware.pdf");
+    PdfOperations::rotate_pages_with_password(
+        &source,
+        &[(idx(0), Rotation::Degrees90)],
+        &rotated,
+        password,
+    )
+    .expect("password-aware rotation succeeds");
+
+    let reordered = dir.path().join("reordered-password-aware.pdf");
+    PdfOperations::reorder_pages_with_password(&source, &[idx(1), idx(0)], &reordered, password)
+        .expect("password-aware reorder succeeds");
+
+    assert_eq!(inspect_pdf(&extracted).0, 1);
+    assert_eq!(split.len(), 2);
+    assert_eq!(inspect_pdf(&deleted).0, 1);
+    assert_eq!(inspect_pdf(&rotated).2[0], PdfPageRenderRotation::Degrees90);
+    assert_eq!(inspect_pdf(&reordered).1[0].0, 200.0);
+}
+
+#[test]
+fn wrong_job_password_is_distinct_and_leaves_no_partial_tool_outputs() {
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("encrypted.pdf");
+    create_encrypted_test_pdf(&source);
+    let wrong_password = Some("wrong-password");
+
+    let extracted = dir.path().join("wrong-extracted.pdf");
+    let error =
+        PdfOperations::extract_pages_with_password(&source, &[idx(0)], &extracted, wrong_password)
+            .expect_err("wrong extraction password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert!(!extracted.exists());
+
+    let split_dir = dir.path().join("wrong-split");
+    std::fs::create_dir(&split_dir).expect("create split directory");
+    let error = PdfOperations::split_into_single_pages_with_password(
+        &source,
+        &split_dir,
+        "page",
+        wrong_password,
+    )
+    .expect_err("wrong split password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert_eq!(
+        std::fs::read_dir(&split_dir)
+            .expect("read split dir")
+            .count(),
+        0
+    );
+
+    let deleted = dir.path().join("wrong-deleted.pdf");
+    let error = PdfOperations::delete_pages_with_password(&source, &[], &deleted, wrong_password)
+        .expect_err("wrong delete password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert!(!deleted.exists());
+
+    let rotated = dir.path().join("wrong-rotated.pdf");
+    let error = PdfOperations::rotate_pages_with_password(
+        &source,
+        &[(idx(0), Rotation::Degrees90)],
+        &rotated,
+        wrong_password,
+    )
+    .expect_err("wrong rotate password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert!(!rotated.exists());
+
+    let reordered = dir.path().join("wrong-reordered.pdf");
+    let error =
+        PdfOperations::reorder_pages_with_password(&source, &[idx(0)], &reordered, wrong_password)
+            .expect_err("wrong reorder password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert!(!reordered.exists());
+
+    let merged = dir.path().join("wrong-merged.pdf");
+    let inputs = [PdfOperationInput::new(&source, wrong_password)];
+    let error = PdfOperations::merge_files_with_passwords(&inputs, &merged)
+        .expect_err("wrong merge password fails");
+    assert!(matches!(error, PdfError::IncorrectPassword));
+    assert!(!merged.exists());
+
+    let unlocked = dir.path().join("unlocked.pdf");
+    PdfOperations::extract_pages_with_password(
+        &source,
+        &[idx(0)],
+        &unlocked,
+        Some("right-password"),
+    )
+    .expect("fixture unlocks with the correct password");
+    assert_eq!(inspect_pdf(&unlocked).0, 1);
 }

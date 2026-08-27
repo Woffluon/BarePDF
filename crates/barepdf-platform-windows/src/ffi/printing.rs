@@ -1,15 +1,18 @@
+use crate::printing::{PrintDialogOptions, PrintOrientation};
 use barepdf_platform::printing::{PrintError, PrintPage};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HGLOBAL, HWND};
 use windows_sys::Win32::Graphics::Gdi::{
-    DeleteDC, GetDeviceCaps, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-    GDI_ERROR, HDC, HORZRES, RGBQUAD, SRCCOPY, VERTRES,
+    DeleteDC, GetDeviceCaps, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEVMODEW,
+    DIB_RGB_COLORS, DMORIENT_LANDSCAPE, DMORIENT_PORTRAIT, DM_ORIENTATION, GDI_ERROR, HDC, HORZRES,
+    RGBQUAD, SRCCOPY, VERTRES,
 };
 use windows_sys::Win32::Storage::Xps::{AbortDoc, EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::Controls::Dialogs::{
     CommDlgExtendedError, PrintDlgW, PD_ALLPAGES, PD_NOSELECTION, PD_PAGENUMS, PD_RETURNDC,
-    PRINTDLGW,
+    PD_RETURNDEFAULT, PRINTDLGW,
 };
 
 pub(crate) struct DialogPrinter {
@@ -18,6 +21,34 @@ pub(crate) struct DialogPrinter {
     pub(crate) to_page: u16,
     pub(crate) copies: u16,
     pub(crate) page_numbers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DialogInitialValues {
+    from_page: u16,
+    to_page: u16,
+    page_numbers: bool,
+    orientation: Option<PrintOrientation>,
+}
+
+fn dialog_initial_values(page_count: u32, options: PrintDialogOptions) -> DialogInitialValues {
+    let maximum = u16::try_from(page_count).unwrap_or(u16::MAX).max(1);
+    let from_page = u16::try_from(options.range().first().get().saturating_add(1))
+        .unwrap_or(maximum)
+        .clamp(1, maximum);
+    let to_page = u16::try_from(options.range().last().get().saturating_add(1))
+        .unwrap_or(maximum)
+        .clamp(from_page, maximum);
+    let orientation = match options.orientation() {
+        PrintOrientation::Auto => None,
+        orientation => Some(orientation),
+    };
+    DialogInitialValues {
+        from_page,
+        to_page,
+        page_numbers: from_page != 1 || to_page != maximum,
+        orientation,
+    }
 }
 
 struct DialogAllocations {
@@ -42,6 +73,7 @@ impl Drop for DialogAllocations {
 pub(crate) fn show_print_dialog(
     owner: HWND,
     page_count: u32,
+    options: PrintDialogOptions,
 ) -> Result<Option<DialogPrinter>, PrintError> {
     // SAFETY: PRINTDLGW is a plain C aggregate for which Windows specifies zero initialization
     // before required fields are assigned below. Every pointer field stays null.
@@ -52,12 +84,38 @@ pub(crate) fn show_print_dialog(
             code: 0,
         })?;
     dialog.hwndOwner = owner;
-    dialog.Flags = PD_ALLPAGES | PD_NOSELECTION | PD_RETURNDC;
+    let initial = dialog_initial_values(page_count, options);
+    dialog.Flags = PD_NOSELECTION | PD_RETURNDC;
+    if initial.page_numbers {
+        dialog.Flags |= PD_PAGENUMS;
+    } else {
+        dialog.Flags |= PD_ALLPAGES;
+    }
     dialog.nMinPage = 1;
     dialog.nMaxPage = u16::try_from(page_count).unwrap_or(u16::MAX);
-    dialog.nFromPage = 1;
-    dialog.nToPage = dialog.nMaxPage;
+    dialog.nFromPage = initial.from_page;
+    dialog.nToPage = initial.to_page;
     dialog.nCopies = 1;
+
+    if let Some(orientation) = initial.orientation {
+        let mut defaults = dialog;
+        defaults.Flags = PD_RETURNDEFAULT;
+        defaults.hwndOwner = std::ptr::null_mut();
+        // SAFETY: The structure is initialized and both required input handles are null. This call
+        // does not show UI and returns movable global-memory handles for the default printer.
+        if unsafe { PrintDlgW(&raw mut defaults) } != 0 {
+            dialog.hDevMode = defaults.hDevMode;
+            dialog.hDevNames = defaults.hDevNames;
+            apply_orientation(dialog.hDevMode, orientation);
+        } else {
+            // A missing default printer is not treated as cancellation here; the visible dialog may
+            // still let the user choose a printer. A real common-dialog error still fails closed.
+            let code = unsafe { CommDlgExtendedError() };
+            if code != 0 {
+                return Err(PrintError::Dialog(code));
+            }
+        }
+    }
 
     // SAFETY: `dialog` has the documented size and initialized scalar fields; optional handles and
     // callback/template pointers are null. The owner HWND may be null or a live UI-owned window.
@@ -91,6 +149,28 @@ pub(crate) fn show_print_dialog(
     };
     drop(allocations);
     Ok(Some(result))
+}
+
+fn apply_orientation(dev_mode: HGLOBAL, orientation: PrintOrientation) {
+    if dev_mode.is_null() {
+        return;
+    }
+    let orientation = match orientation {
+        PrintOrientation::Portrait => i16::try_from(DMORIENT_PORTRAIT).unwrap_or(1),
+        PrintOrientation::Landscape => i16::try_from(DMORIENT_LANDSCAPE).unwrap_or(2),
+        PrintOrientation::Auto => return,
+    };
+    // SAFETY: PrintDlgW returned a movable global-memory handle containing DEVMODEW. The pointer is
+    // used only while locked and no other thread can access this private dialog setup structure.
+    let pointer = unsafe { GlobalLock(dev_mode) }.cast::<DEVMODEW>();
+    if pointer.is_null() {
+        return;
+    }
+    unsafe {
+        (*pointer).dmFields |= DM_ORIENTATION;
+        (*pointer).Anonymous1.Anonymous1.dmOrientation = orientation;
+        let _ = GlobalUnlock(dev_mode);
+    }
 }
 
 pub(crate) struct PrinterDevice(HDC);
@@ -314,11 +394,42 @@ fn wide_null(value: &OsStr) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::fit_dimensions;
+    use super::{dialog_initial_values, fit_dimensions};
+    use crate::printing::{PrintDialogOptions, PrintOrientation};
+    use barepdf_core::{PageCount, PageIndex};
+    use barepdf_platform::printing::PrintRange;
 
     #[test]
     fn page_fit_preserves_aspect_ratio_in_both_driver_orientations() {
         assert_eq!(fit_dimensions(600, 800, 2400, 3000), Ok((2250, 3000)));
         assert_eq!(fit_dimensions(800, 600, 3000, 2400), Ok((3000, 2250)));
+    }
+
+    #[test]
+    fn dialog_initial_values_select_preview_range_and_landscape() {
+        let page_count = PageCount::new(10).expect("test page count");
+        let range = PrintRange::new(PageIndex::from_raw(1), PageIndex::from_raw(6), page_count)
+            .expect("test range");
+        let values = dialog_initial_values(
+            page_count.get(),
+            PrintDialogOptions::new(range, PrintOrientation::Landscape),
+        );
+
+        assert_eq!((values.from_page, values.to_page), (2, 7));
+        assert!(values.page_numbers);
+        assert_eq!(values.orientation, Some(PrintOrientation::Landscape));
+    }
+
+    #[test]
+    fn dialog_initial_values_keep_all_pages_and_driver_orientation_by_default() {
+        let page_count = PageCount::new(10).expect("test page count");
+        let values = dialog_initial_values(
+            page_count.get(),
+            PrintDialogOptions::new(PrintRange::all(page_count), PrintOrientation::Auto),
+        );
+
+        assert_eq!((values.from_page, values.to_page), (1, 10));
+        assert!(!values.page_numbers);
+        assert_eq!(values.orientation, None);
     }
 }

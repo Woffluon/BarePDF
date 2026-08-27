@@ -22,6 +22,19 @@ if ($Mismatches.Count -gt 0) {
 
 $IssPath = Join-Path $RepoRoot "packaging\windows\installer\BarePDF.iss"
 $IssContent = [System.IO.File]::ReadAllText($IssPath)
+function Assert-InstallerContains {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Text,
+        [Parameter(Mandatory)]
+        [string]$Requirement
+    )
+
+    if (-not $IssContent.Contains($Text)) {
+        throw "BarePDF.iss must $Requirement"
+    }
+}
+
 if ($IssContent -match '#define\s+MyAppVersion\s+"') {
     throw "BarePDF.iss must not hardcode MyAppVersion"
 }
@@ -30,6 +43,34 @@ if ($IssContent -notmatch '(?m)^#ifndef\s+MyAppVersion\s*$') {
 }
 if ($IssContent -notmatch '(?m)^VersionInfoVersion=\{#MyAppVersion\}\s*$') {
     throw "BarePDF.iss must bind installer file metadata to MyAppVersion"
+}
+
+Assert-InstallerContains -Text "ArchitecturesAllowed=x64compatible" -Requirement "allow only x64-compatible Windows architectures"
+Assert-InstallerContains -Text "ArchitecturesInstallIn64BitMode=x64compatible" -Requirement "run in native 64-bit install mode"
+
+$ThumbnailClsidKey = 'Software\Classes\CLSID\{#MyThumbnailCLSID}'
+$ThumbnailHandlerKey = 'ShellEx\{{E357FCCD-A995-4576-B01F-234630154E96}'
+$LegacyCleanup = "Root: HKCU32; Subkey: `"$ThumbnailClsidKey`"; Flags: deletekey"
+$ExpectedThumbnailEntries = @(
+    "Root: HKCU64; Subkey: `"Software\Classes\{#MyProgID}\$ThumbnailHandlerKey`"; ValueType: string; ValueName: `"`"; ValueData: `"{#MyThumbnailCLSID}`"; Flags: uninsdeletekey",
+    $LegacyCleanup,
+    "Root: HKCU64; Subkey: `"$ThumbnailClsidKey`"; ValueType: string; ValueName: `"`"; ValueData: `"BarePDF Thumbnail Provider`"; Flags: uninsdeletekey",
+    "Root: HKCU64; Subkey: `"$ThumbnailClsidKey\InprocServer32`"; ValueType: string; ValueName: `"`"; ValueData: `"{app}\BarePDF.Thumbnail.dll`"; Flags: uninsdeletekey",
+    "Root: HKCU64; Subkey: `"$ThumbnailClsidKey\InprocServer32`"; ValueType: string; ValueName: `"ThreadingModel`"; ValueData: `"Apartment`"; Flags: uninsdeletekey",
+    "Root: HKCU64; Subkey: `"Software\Classes\Applications\{#MyAppExeName}\$ThumbnailHandlerKey`"; ValueType: string; ValueName: `"`"; ValueData: `"{#MyThumbnailCLSID}`"; Flags: uninsdeletekey"
+)
+$ThumbnailEntries = @($IssContent -split "`r?`n" | Where-Object {
+    $_ -match '^Root:\s*HKCU(?:32|64)?;' -and
+    ($_ -match [regex]::Escape('{#MyThumbnailCLSID}') -or $_ -match [regex]::Escape('{{E357FCCD-A995-4576-B01F-234630154E96}'))
+})
+$MissingThumbnailEntries = @($ExpectedThumbnailEntries | Where-Object { $_ -cnotin $ThumbnailEntries })
+$UnexpectedThumbnailEntries = @($ThumbnailEntries | Where-Object { $_ -cnotin $ExpectedThumbnailEntries })
+if ($MissingThumbnailEntries.Count -gt 0 -or $UnexpectedThumbnailEntries.Count -gt 0) {
+    $Details = @(
+        $MissingThumbnailEntries | ForEach-Object { "missing: $_" }
+        $UnexpectedThumbnailEntries | ForEach-Object { "unexpected: $_" }
+    ) -join "; "
+    throw "BarePDF.iss thumbnail registration must match the exact native HKCU64 mapping plus private HKCU32 upgrade cleanup. $Details"
 }
 
 $ResolvedCommit = (& git -C $RepoRoot rev-parse "$CommitSha^{commit}" 2>$null)

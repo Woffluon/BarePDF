@@ -10,6 +10,18 @@ use pdfium_render::prelude::*;
 
 use crate::pdfium_lifetime::process_pdfium;
 
+pub struct PdfOperationInput<'a> {
+    path: &'a Path,
+    password: Option<&'a str>,
+}
+
+impl<'a> PdfOperationInput<'a> {
+    #[must_use]
+    pub const fn new(path: &'a Path, password: Option<&'a str>) -> Self {
+        Self { path, password }
+    }
+}
+
 pub struct PdfOperations;
 
 impl PdfOperations {
@@ -20,6 +32,23 @@ impl PdfOperations {
     /// Returns `PdfError` if inputs are empty, any input file cannot be found or loaded,
     /// or the output document cannot be created or saved.
     pub fn merge_files(inputs: &[PathBuf], output: &Path) -> Result<(), PdfError> {
+        let inputs = inputs
+            .iter()
+            .map(|path| PdfOperationInput::new(path, None))
+            .collect::<Vec<_>>();
+        Self::merge_files_with_passwords(&inputs, output)
+    }
+
+    /// Merges PDF inputs using a separate optional borrowed password for each file.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if inputs are empty, any input file cannot be found or loaded with its
+    /// password, or the output document cannot be created or saved.
+    pub fn merge_files_with_passwords(
+        inputs: &[PdfOperationInput<'_>],
+        output: &Path,
+    ) -> Result<(), PdfError> {
         if inputs.is_empty() {
             return Err(PdfError::InvalidPdfReason(
                 "No input files provided for merge".into(),
@@ -30,17 +59,17 @@ impl PdfOperations {
         let mut new_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
 
         for input in inputs {
-            if !input.is_file() {
-                return Err(PdfError::FileNotFound(input.display().to_string()));
+            if !input.path.is_file() {
+                return Err(PdfError::FileNotFound(input.path.display().to_string()));
             }
             let src_doc = pdfium
-                .load_pdf_from_file(input, None)
-                .map_err(map_pdfium_error)?;
+                .load_pdf_from_file(input.path, input.password)
+                .map_err(|error| map_pdfium_load_error(error, input.password.is_some()))?;
             let page_count = src_doc.pages().len();
             if page_count == 0 {
                 return Err(PdfError::InvalidPdfReason(format!(
                     "Input file '{}' contains no pages",
-                    input.display()
+                    input.path.display()
                 )));
             }
             for src_idx in 0..page_count {
@@ -67,6 +96,21 @@ impl PdfOperations {
         pages: &[PageIndex],
         output: &Path,
     ) -> Result<(), PdfError> {
+        Self::extract_pages_with_password(source, pages, output, None)
+    }
+
+    /// Extracts specific pages using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if pages are empty, the source cannot be loaded with the password,
+    /// a page index is out of range, or the output cannot be saved.
+    pub fn extract_pages_with_password(
+        source: &Path,
+        pages: &[PageIndex],
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
         if pages.is_empty() {
             return Err(PdfError::InvalidPdfReason(
                 "No pages specified for extraction".into(),
@@ -78,8 +122,8 @@ impl PdfOperations {
 
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
-            .load_pdf_from_file(source, None)
-            .map_err(map_pdfium_error)?;
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages_raw = u32::try_from(src_doc.pages().len()).map_err(|_| {
             PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
@@ -115,6 +159,21 @@ impl PdfOperations {
         output_dir: &Path,
         base_name: &str,
     ) -> Result<Vec<PathBuf>, PdfError> {
+        Self::split_into_single_pages_with_password(source, output_dir, base_name, None)
+    }
+
+    /// Splits a PDF using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source cannot be loaded with the password, the output directory
+    /// is missing, the base name is empty, or a page output cannot be saved.
+    pub fn split_into_single_pages_with_password(
+        source: &Path,
+        output_dir: &Path,
+        base_name: &str,
+        password: Option<&str>,
+    ) -> Result<Vec<PathBuf>, PdfError> {
         if !source.is_file() {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
@@ -133,8 +192,8 @@ impl PdfOperations {
 
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
-            .load_pdf_from_file(source, None)
-            .map_err(map_pdfium_error)?;
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
         if total_pages == 0 {
@@ -171,14 +230,29 @@ impl PdfOperations {
         pages_to_remove: &[PageIndex],
         output: &Path,
     ) -> Result<(), PdfError> {
+        Self::delete_pages_with_password(source, pages_to_remove, output, None)
+    }
+
+    /// Deletes specified pages using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source cannot be loaded with the password, a removal index is
+    /// invalid, all pages would be removed, or the output cannot be saved.
+    pub fn delete_pages_with_password(
+        source: &Path,
+        pages_to_remove: &[PageIndex],
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
         if !source.is_file() {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
-            .load_pdf_from_file(source, None)
-            .map_err(map_pdfium_error)?;
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages_raw = u32::try_from(src_doc.pages().len()).map_err(|_| {
             PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
@@ -214,14 +288,29 @@ impl PdfOperations {
         rotations: &[(PageIndex, Rotation)],
         output: &Path,
     ) -> Result<(), PdfError> {
+        Self::rotate_pages_with_password(source, rotations, output, None)
+    }
+
+    /// Rotates specified pages using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source cannot be loaded with the password, a rotation page index
+    /// is invalid, or the output cannot be saved.
+    pub fn rotate_pages_with_password(
+        source: &Path,
+        rotations: &[(PageIndex, Rotation)],
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
         if !source.is_file() {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
-            .load_pdf_from_file(source, None)
-            .map_err(map_pdfium_error)?;
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
         if total_pages <= 0 {
@@ -273,6 +362,21 @@ impl PdfOperations {
         new_order: &[PageIndex],
         output: &Path,
     ) -> Result<(), PdfError> {
+        Self::reorder_pages_with_password(source, new_order, output, None)
+    }
+
+    /// Reorders pages using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source cannot be loaded with the password, the order is invalid,
+    /// or the output cannot be saved.
+    pub fn reorder_pages_with_password(
+        source: &Path,
+        new_order: &[PageIndex],
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
         if !source.is_file() {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
@@ -284,8 +388,8 @@ impl PdfOperations {
 
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
-            .load_pdf_from_file(source, None)
-            .map_err(map_pdfium_error)?;
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
         if total_pages <= 0 {
@@ -378,6 +482,19 @@ fn map_pdfium_error(error: PdfiumError) -> PdfError {
     }
 }
 
+fn map_pdfium_load_error(error: PdfiumError, password_supplied: bool) -> PdfError {
+    match error {
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+            if password_supplied {
+                PdfError::IncorrectPassword
+            } else {
+                PdfError::PasswordRequired
+            }
+        }
+        error => map_pdfium_error(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +533,14 @@ mod tests {
     fn test_map_pdfium_error_password() {
         let err = PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError);
         assert!(matches!(map_pdfium_error(err), PdfError::PasswordRequired));
+    }
+
+    #[test]
+    fn supplied_password_maps_pdfium_password_error_to_incorrect_password() {
+        let err = PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError);
+        assert!(matches!(
+            map_pdfium_load_error(err, true),
+            PdfError::IncorrectPassword
+        ));
     }
 }
