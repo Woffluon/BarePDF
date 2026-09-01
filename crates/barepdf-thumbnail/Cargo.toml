@@ -14,7 +14,7 @@ name = "barepdf_thumbnail"
 
 [dependencies]
 pdfium-render.workspace = true
-windows-core = "0.58"
+windows-core = "0.62"
 windows = { version = "0.58", features = [
     "implement",
     "Win32_Foundation",
