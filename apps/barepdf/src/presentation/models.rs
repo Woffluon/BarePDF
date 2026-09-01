@@ -64,6 +64,38 @@ pub(super) fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
     window.set_thumbnail_items(ModelRc::new(model));
 }
 
+pub(super) fn refresh_tool_thumbnails(
+    window: &AppWindow,
+    app: &mut AppState,
+    selected_range: &str,
+) {
+    let selected = super::callbacks::selected_tool_pages(selected_range, app.page_count());
+    let model = VecModel::default();
+    for index in 0..app.page_count() {
+        let (width, height) = app
+            .page_dimensions
+            .get(index as usize)
+            .copied()
+            .unwrap_or(app.first_page_dimensions);
+        let display_width = 140.0;
+        let display_height = (display_width * height / width.max(1.0)).min(150.0);
+        let image = app.active_document().and_then(|document| {
+            app.thumbnail_images
+                .get(document, index, RenderKind::Thumbnail)
+        });
+        model.push(ThumbnailItem {
+            page_index: index as i32,
+            page_number: thumbnail_page_label(app.preferences.language.resolve(), index),
+            width: display_width,
+            height: display_height,
+            bitmap: image.clone().unwrap_or_default(),
+            has_bitmap: image.is_some(),
+            is_selected: selected.contains(&(index + 1)),
+        });
+    }
+    window.set_thumbnail_items(ModelRc::new(model));
+}
+
 pub(super) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
     let active = app.application.tabs.active_id();
     let items = app

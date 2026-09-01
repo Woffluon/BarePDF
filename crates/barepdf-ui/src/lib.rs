@@ -8,28 +8,28 @@ slint::slint! {
                 : (theme-mode == 2 ? ColorScheme.dark : ColorScheme.unknown);
         }
         out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-        out property <color> window: dark ? #0f1114 : #f3f4f6;
-        out property <color> command: dark ? #181a1e : #fbfbfc;
-        out property <color> panel: dark ? #15171a : #ffffff;
-        out property <color> panel-elevated: dark ? #1b1e23 : #ffffff;
-        out property <color> canvas: dark ? #0f1114 : #e9ebee;
-        out property <color> control: dark ? #22252a : #ffffff;
-        out property <color> control-hover: dark ? #2b2e34 : #f0f1f3;
-        out property <color> control-pressed: dark ? #343840 : #e4e6e9;
-        out property <color> text: dark ? #f4f4f5 : #1f2328;
-        out property <color> text-muted: dark ? #a7abb3 : #626972;
-        out property <color> border: dark ? #ffffff18 : #1f23281f;
-        out property <color> accent: #f69423;
-        out property <color> accent-content: #241407;
-        out property <color> selection: #f694232e;
+        out property <color> window: dark ? #0c0e12 : #f4f5f7;
+        out property <color> command: dark ? #13161c : #ffffff;
+        out property <color> panel: dark ? #171a22 : #ffffff;
+        out property <color> panel-elevated: dark ? #1e222b : #f9fafb;
+        out property <color> canvas: dark ? #0c0e12 : #eaecf0;
+        out property <color> control: dark ? #1e222b : #ffffff;
+        out property <color> control-hover: dark ? #292e3a : #f1f3f6;
+        out property <color> control-pressed: dark ? #333948 : #e5e7eb;
+        out property <color> text: dark ? #f3f4f6 : #111827;
+        out property <color> text-muted: dark ? #949ba6 : #6b7280;
+        out property <color> border: dark ? #ffffff14 : #00000014;
+        out property <color> accent: dark ? #f59e0b : #ea580c;
+        out property <color> accent-content: dark ? #181105 : #ffffff;
+        out property <color> selection: dark ? #f59e0b2a : #ea580c26;
         out property <color> danger: dark ? #ffb4ab : #b42318;
-        out property <color> focus: dark ? #ffd08a : #9a4f00;
+        out property <color> focus: dark ? #f59e0b : #ea580c;
         out property <length> space-1: 4px;
         out property <length> space-2: 8px;
         out property <length> space-3: 12px;
         out property <length> space-4: 16px;
         out property <length> control-height: 34px;
-        out property <length> control-radius: 6px;
+        out property <length> control-radius: 7px;
         out property <length> focus-width: 2px;
     }
 
@@ -508,18 +508,19 @@ slint::slint! {
 
     component PageSelectionCard inherits Rectangle {
         in property <ThumbnailItem> item;
+        in property <bool> is-selected: item.is_selected;
         callback selected(bool, bool);
 
         width: 58px;
         height: 66px;
         border-radius: ThemeTokens.control-radius;
         background: card-focus.has-focus ? ThemeTokens.selection
-            : card-touch.has-hover ? ThemeTokens.control-hover
-            : item.is-selected ? ThemeTokens.selection : ThemeTokens.control;
-        border-width: card-focus.has-focus ? ThemeTokens.focus-width : (item.is-selected ? 2px : 1px);
-        border-color: card-focus.has-focus ? ThemeTokens.focus : (item.is-selected ? ThemeTokens.accent : ThemeTokens.border);
+            : root.is-selected ? ThemeTokens.selection
+            : (card-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+        border-width: card-focus.has-focus ? ThemeTokens.focus-width : (root.is-selected ? 2px : 1px);
+        border-color: card-focus.has-focus ? ThemeTokens.focus : (root.is-selected ? ThemeTokens.accent : ThemeTokens.border);
         accessible-role: button;
-        accessible-label: "Page " + item.page-number + (item.is-selected ? ", selected. " : ". ") + "Use Control or Shift with Enter to extend selection.";
+        accessible-label: "Page " + item.page_number + (root.is-selected ? ", selected. " : ". ") + "Use Control or Shift with Enter to extend selection.";
         card-touch := TouchArea {
             pointer-event(event) => {
                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
@@ -538,9 +539,25 @@ slint::slint! {
         Rectangle {
             x: (parent.width - 28px) / 2; y: 5px; width: 28px; height: 38px;
             background: white; border-width: 1px; border-color: #00000020;
-            if root.item.has-bitmap : Image { source: root.item.bitmap; width: 100%; height: 100%; image-fit: contain; }
+            if root.item.has_bitmap : Image { source: root.item.bitmap; width: 100%; height: 100%; image-fit: contain; }
         }
-        Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page-number; color: ThemeTokens.text-muted; font-size: 9px; horizontal-alignment: center; overflow: elide; }
+        if root.is-selected : Rectangle {
+            x: parent.width - 15px;
+            y: 3px;
+            width: 12px;
+            height: 12px;
+            border-radius: 6px;
+            background: ThemeTokens.accent;
+            Text {
+                text: "✓";
+                color: ThemeTokens.accent-content;
+                font-size: 8px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page_number; color: root.is-selected ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 9px; font-weight: root.is-selected ? 600 : 400; horizontal-alignment: center; overflow: elide; }
     }
 
     component ToolsModal inherits Rectangle {
@@ -556,6 +573,7 @@ slint::slint! {
         in-out property <int> convert-format: 0;
         in-out property <int> convert-dpi: 150;
         in-out property <int> convert-jpeg-quality: 90;
+        property <int> convert-scope: 0;
         in property <string> error-text: "";
         in property <bool> is-working: false;
         in property <string> active-doc-title: "";
@@ -580,12 +598,16 @@ slint::slint! {
         in property <string> text-drop-convert: "";
         in property <string> text-pages-unit: "";
         in property <string> text-pages-empty-hint: "";
+        in property <string> text-pages-select-all: "";
+        in property <string> text-pages-clear-selection: "";
         in property <string> text-split-placeholder: "";
         in property <string> text-delete-placeholder: "";
         in property <string> text-rotate-placeholder: "";
         in property <string> text-format: "";
         in property <string> text-resolution: "";
         in property <string> text-jpeg-quality: "";
+        in property <string> text-convert-all: "";
+        in property <string> text-convert-custom: "";
         in property <string> text-merge-drag-hint: "";
         in property <string> text-merge-dragged-hint: "";
         in property <string> btn-add-files: "";
@@ -596,6 +618,7 @@ slint::slint! {
         in property <string> btn-cancel: "";
         in property <string> btn-save: "";
         in property <string> btn-execute: "";
+        in property <string> btn-convert-all: "";
         in property <string> label-pages: "";
         in property <string> label-split-mode: "";
         in property <string> split-extract: "";
@@ -621,6 +644,8 @@ slint::slint! {
         callback convert-submit(int, int, int, string);
         callback drop-files(data-transfer, int);
         callback select-page(int, bool, bool);
+        callback select-all-pages();
+        callback clear-pages();
 
         background: #0000008a;
         forward-focus: modal-focus;
@@ -628,7 +653,7 @@ slint::slint! {
 
         modal-focus := FocusScope {
             width: Math.min(parent.width - 32px, root.current-tool == -1 ? 520px : 560px);
-            height: Math.min(parent.height - 32px, root.current-tool == -1 ? 410px : (root.current-tool == 0 ? 500px : 420px));
+            height: Math.min(parent.height - 32px, root.current-tool == -1 ? 410px : (root.current-tool == 0 ? 500px : (root.current-tool == 4 ? (root.convert-scope == 1 ? 520px : 440px) : 460px)));
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
                     if root.current-tool != -1 {
@@ -802,11 +827,19 @@ slint::slint! {
                         }
                         if root.split-mode == 0 : VerticalLayout {
                             spacing: 6px;
-                            Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            HorizontalLayout {
+                                alignment: space-between;
+                                Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                    TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                                }
+                            }
                             Flickable {
                                 height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
                                 HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
-                                    for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                                    for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
                                 }
                             }
                             range-edit := LineEdit {
@@ -838,11 +871,19 @@ slint::slint! {
                             font-size: 12px;
                             overflow: elide;
                         }
-                        Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                            }
+                        }
                         Flickable {
                             height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
                             HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
-                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
                             }
                         }
                         del-edit := LineEdit {
@@ -873,11 +914,19 @@ slint::slint! {
                             font-size: 12px;
                             overflow: elide;
                         }
-                        Text { text: root.label-pages + " (" + root.text-pages-empty-hint + ")"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: root.label-pages + " (" + root.text-pages-empty-hint + ")"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                            }
+                        }
                         Flickable {
                             height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
                             HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
-                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
                             }
                         }
                         rot-edit := LineEdit {
@@ -909,36 +958,103 @@ slint::slint! {
                         spacing: 12px;
                         ToolDropZone { label: root.text-drop-convert; dropped(data) => { root.drop-files(data, 4); } }
                         Text { text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")"; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
-                        Flickable {
-                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
-                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
-                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page-index, ctrl, shift); } }
+
+                        HorizontalLayout {
+                            spacing: 16px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                Text { text: root.text-format; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    TextButton { text: "TXT"; active: root.convert-format == 0; clicked => { root.convert-format = 0; } }
+                                    TextButton { text: "MD"; active: root.convert-format == 1; clicked => { root.convert-format = 1; } }
+                                    TextButton { text: "PNG"; active: root.convert-format == 2; clicked => { root.convert-format = 2; } }
+                                    TextButton { text: "JPEG"; active: root.convert-format == 3; clicked => { root.convert-format = 3; } }
+                                }
+                            }
+                            if root.convert-format >= 2 : VerticalLayout {
+                                spacing: 4px;
+                                Text { text: root.text-resolution; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    TextButton { text: "150 DPI"; active: root.convert-dpi == 150; clicked => { root.convert-dpi = 150; } }
+                                    TextButton { text: "300 DPI"; active: root.convert-dpi == 300; clicked => { root.convert-dpi = 300; } }
+                                }
+                            }
+                            if root.convert-format == 3 : VerticalLayout {
+                                spacing: 4px;
+                                Text { text: root.text-jpeg-quality; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    TextButton { text: "90"; active: root.convert-jpeg-quality == 90; clicked => { root.convert-jpeg-quality = 90; } }
+                                }
                             }
                         }
-                        Text { text: root.text-format; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+
                         HorizontalLayout {
-                            spacing: 5px;
-                            TextButton { text: "TXT"; active: root.convert-format == 0; clicked => { root.convert-format = 0; } }
-                            TextButton { text: "MD"; active: root.convert-format == 1; clicked => { root.convert-format = 1; } }
-                            TextButton { text: "PNG"; active: root.convert-format == 2; clicked => { root.convert-format = 2; } }
-                            TextButton { text: "JPEG"; active: root.convert-format == 3; clicked => { root.convert-format = 3; } }
+                            spacing: 6px;
+                            TextButton {
+                                text: root.text-convert-all + (root.active-doc-pages != "" ? " (" + root.active-doc-pages + " " + root.text-pages-unit + ")" : "");
+                                active: root.convert-scope == 0;
+                                clicked => { root.convert-scope = 0; }
+                            }
+                            TextButton {
+                                text: root.text-convert-custom;
+                                active: root.convert-scope == 1;
+                                clicked => { root.convert-scope = 1; }
+                            }
                         }
-                        if root.convert-format >= 2 : HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: root.text-resolution; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
-                            TextButton { text: "150 DPI"; active: root.convert-dpi == 150; clicked => { root.convert-dpi = 150; } }
-                            TextButton { text: "300 DPI"; active: root.convert-dpi == 300; clicked => { root.convert-dpi = 300; } }
+
+                        if root.convert-scope == 0 : VerticalLayout {
+                            spacing: 12px;
+                            Rectangle { height: 12px; }
+                            HorizontalLayout {
+                                spacing: ThemeTokens.space-2;
+                                alignment: end;
+                                TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                                TextButton {
+                                    text: root.btn-convert-all;
+                                    primary: true;
+                                    enabled: !root.is-working;
+                                    clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, ""); }
+                                }
+                            }
                         }
-                        if root.convert-format == 3 : HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: root.text-jpeg-quality; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
-                            TextButton { text: "90"; active: root.convert-jpeg-quality == 90; clicked => { root.convert-jpeg-quality = 90; } }
-                        }
-                        HorizontalLayout {
-                            spacing: ThemeTokens.space-2;
-                            alignment: end;
-                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
-                            TextButton { text: root.btn-save; primary: true; enabled: !root.is-working; clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); } }
+
+                        if root.convert-scope == 1 : VerticalLayout {
+                            spacing: 6px;
+                            HorizontalLayout {
+                                alignment: space-between;
+                                Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                    TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                                }
+                            }
+                            Flickable {
+                                height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                                HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                    for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                                }
+                            }
+                            conv-edit := LineEdit {
+                                text <=> root.page-range-input;
+                                placeholder-text: root.text-split-placeholder;
+                                accepted => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); }
+                            }
+                            Rectangle { height: 8px; }
+                            HorizontalLayout {
+                                spacing: ThemeTokens.space-2;
+                                alignment: end;
+                                TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                                TextButton {
+                                    text: root.btn-save;
+                                    primary: true;
+                                    enabled: !root.is-working && root.page-range-input != "";
+                                    clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); }
+                                }
+                            }
                         }
                     }
                 }
@@ -1076,6 +1192,8 @@ slint::slint! {
         in property <string> text-settings-turkish: "Türkçe";
         in property <string> text-settings-light: "Light";
         in property <string> text-settings-dark: "Dark";
+        in property <string> text-settings-developer: "Developer";
+        in property <string> text-settings-website: "Website";
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
         in property <string> text-cancel-print: "Cancel";
@@ -1127,12 +1245,17 @@ slint::slint! {
         in property <string> text-tools-drop-convert: "Drop a PDF to convert";
         in property <string> text-tools-pages-unit: "pages";
         in property <string> text-tools-pages-empty-hint: "empty for all pages";
+        in property <string> text-tools-select-all: "Select All";
+        in property <string> text-tools-clear-selection: "Clear";
         in property <string> text-tools-split-placeholder: "1-3, 5, 8-10";
         in property <string> text-tools-delete-placeholder: "2, 4-6, 10";
         in property <string> text-tools-rotate-placeholder: "All pages or e.g. 1, 3-5";
         in property <string> text-tools-format: "Format";
         in property <string> text-tools-resolution: "Resolution";
         in property <string> text-tools-jpeg-quality: "JPEG quality";
+        in property <string> text-tools-convert-all: "All Pages";
+        in property <string> text-tools-convert-custom: "Custom Pages";
+        in property <string> text-tools-btn-convert-all: "Convert All Pages";
         in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
         in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
 
@@ -1163,6 +1286,9 @@ slint::slint! {
         callback request-change-update-checks(bool);
         callback request-check-update();
         callback request-update-action();
+        callback request-open-url(string);
+        callback request-select-all-tool-pages();
+        callback request-clear-tool-pages();
         callback request-copy();
         callback request-select-all();
         callback request-open-recent(string);
@@ -1727,7 +1853,7 @@ slint::slint! {
                         background: #00000001;
                         TouchArea { clicked => { root.settings-open = false; } }
                         Rectangle {
-                            x: parent.width - 350px; y: 8px; width: 340px; height: 402px;
+                            x: parent.width - 350px; y: 8px; width: 340px; height: 490px;
                             background: ThemeTokens.panel; border-radius: 10px; border-width: 1px; border-color: ThemeTokens.border;
                             drop-shadow-blur: 12px; drop-shadow-color: #00000040;
                             TouchArea { clicked => { } }
@@ -1765,6 +1891,20 @@ slint::slint! {
                                     }
                                 }
                                 Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 10px; wrap: word-wrap; }
+                                Rectangle { height: 1px; background: ThemeTokens.border; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: root.text-settings-developer; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                        TextButton { text: "Efe Arabacı ↗"; clicked => { root.request-open-url("https://xn--efearabac-3pb.com/"); } }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: root.text-settings-website; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                        TextButton { text: "BarePDF Web ↗"; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/"); } }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1822,12 +1962,17 @@ slint::slint! {
                         text-drop-convert: root.text-tools-drop-convert;
                         text-pages-unit: root.text-tools-pages-unit;
                         text-pages-empty-hint: root.text-tools-pages-empty-hint;
+                        text-pages-select-all: root.text-tools-select-all;
+                        text-pages-clear-selection: root.text-tools-clear-selection;
                         text-split-placeholder: root.text-tools-split-placeholder;
                         text-delete-placeholder: root.text-tools-delete-placeholder;
                         text-rotate-placeholder: root.text-tools-rotate-placeholder;
                         text-format: root.text-tools-format;
                         text-resolution: root.text-tools-resolution;
                         text-jpeg-quality: root.text-tools-jpeg-quality;
+                        text-convert-all: root.text-tools-convert-all;
+                        text-convert-custom: root.text-tools-convert-custom;
+                        btn-convert-all: root.text-tools-btn-convert-all;
                         text-merge-drag-hint: root.text-tools-merge-drag-hint;
                         text-merge-dragged-hint: root.text-tools-merge-dragged-hint;
 
@@ -1847,6 +1992,8 @@ slint::slint! {
                         convert-submit(format, dpi, quality, range) => { root.request-convert-execute(format, dpi, quality, range); }
                         drop-files(data, tool-id) => { root.request-tool-drop(data, tool-id); }
                         select-page(page, ctrl, shift) => { root.request-select-page-range(page, ctrl, shift); }
+                        select-all-pages => { root.request-select-all-tool-pages(); }
+                        clear-pages => { root.request-clear-tool-pages(); }
                     }
                     if root.print-preview-open : PrintPreview {
                         page <=> root.print-preview-page;

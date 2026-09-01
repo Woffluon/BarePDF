@@ -87,6 +87,8 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("settings.theme.system", "System");
     m.insert("settings.theme.light", "Light");
     m.insert("settings.theme.dark", "Dark");
+    m.insert("settings.developer", "Developer");
+    m.insert("settings.project_website", "Website");
     m.insert("language.english", "English");
     m.insert("language.turkish", "Türkçe");
     m.insert("settings.view_mode", "Default View Mode");
@@ -185,6 +187,8 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("settings.theme.system", "Sistem");
     m.insert("settings.theme.light", "Açık");
     m.insert("settings.theme.dark", "Koyu");
+    m.insert("settings.developer", "Geliştirici");
+    m.insert("settings.project_website", "Web Sitesi");
     m.insert("language.english", "İngilizce");
     m.insert("language.turkish", "Türkçe");
     m.insert("settings.view_mode", "Varsayılan Görünüm Mode");
@@ -346,6 +350,11 @@ fn add_english_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("tools.drop.convert", "Drop a PDF to convert"),
         ("tools.pages.unit", "pages"),
         ("tools.pages.empty_hint", "empty for all pages"),
+        ("tools.pages.select_all", "Select All"),
+        ("tools.pages.clear_selection", "Clear"),
+        ("tools.convert.all_pages", "All pages"),
+        ("tools.convert.custom_range", "Custom pages"),
+        ("tools.convert.btn_all", "Convert All Pages"),
         ("tools.range.split_placeholder", "1-3, 5, 8-10"),
         ("tools.range.delete_placeholder", "2, 4-6, 10"),
         ("tools.range.rotate_placeholder", "All pages or e.g. 1, 3-5"),
@@ -491,6 +500,11 @@ fn add_turkish_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
         ("tools.drop.convert", "Dönüştürmek için bir PDF bırakın"),
         ("tools.pages.unit", "sayfa"),
         ("tools.pages.empty_hint", "tüm sayfalar için boş bırakın"),
+        ("tools.pages.select_all", "Tümünü Seç"),
+        ("tools.pages.clear_selection", "Temizle"),
+        ("tools.convert.all_pages", "Tüm sayfalar"),
+        ("tools.convert.custom_range", "Özel sayfalar"),
+        ("tools.convert.btn_all", "Tüm Sayfaları Dönüştür"),
         ("tools.range.split_placeholder", "1-3, 5, 8-10"),
         ("tools.range.delete_placeholder", "2, 4-6, 10"),
         (
@@ -625,6 +639,8 @@ mod tests {
             "print.preview.orientation.portrait",
             "print.preview.orientation.landscape",
             "print.preview.continue",
+            "settings.developer",
+            "settings.project_website",
             "tools.convert",
             "tools.convert.desc",
             "tools.drop.merge",
@@ -634,6 +650,11 @@ mod tests {
             "tools.drop.convert",
             "tools.pages.unit",
             "tools.pages.empty_hint",
+            "tools.pages.select_all",
+            "tools.pages.clear_selection",
+            "tools.convert.all_pages",
+            "tools.convert.custom_range",
+            "tools.convert.btn_all",
             "tools.range.split_placeholder",
             "tools.range.delete_placeholder",
             "tools.range.rotate_placeholder",
@@ -662,6 +683,62 @@ mod tests {
         assert_eq!(
             t(ResolvedLanguage::Turkish, "print.preview.range_placeholder"),
             "Tüm sayfalar veya 1-3"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "settings.developer"),
+            "Developer"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "settings.developer"),
+            "Geliştirici"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "settings.project_website"),
+            "Website"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "settings.project_website"),
+            "Web Sitesi"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "tools.pages.select_all"),
+            "Select All"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "tools.pages.select_all"),
+            "Tümünü Seç"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "tools.pages.clear_selection"),
+            "Clear"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "tools.pages.clear_selection"),
+            "Temizle"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "tools.convert.all_pages"),
+            "All pages"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "tools.convert.all_pages"),
+            "Tüm sayfalar"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "tools.convert.custom_range"),
+            "Custom pages"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "tools.convert.custom_range"),
+            "Özel sayfalar"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "tools.convert.btn_all"),
+            "Convert All Pages"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "tools.convert.btn_all"),
+            "Tüm Sayfaları Dönüştür"
         );
     }
 }

@@ -43,7 +43,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::models::{refresh_page_model, refresh_tab_model, refresh_thumbnail_model};
+use super::models::{
+    refresh_page_model, refresh_tab_model, refresh_thumbnail_model, refresh_tool_thumbnails,
+};
 use super::state::AppState;
 use super::ui::{
     apply_theme, begin_open, invalidate_layout_and_render, native_window_handle, navigate_to_page,
@@ -1514,7 +1516,7 @@ fn connect_selection_callbacks(
     });
 }
 
-fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
+pub(super) fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
     let files = app
         .tools_merge_files
         .iter()
@@ -1556,7 +1558,7 @@ fn current_tool_source(app: &AppState) -> Option<PathBuf> {
     })
 }
 
-fn set_tool_source(app: &mut AppState, source: PathBuf) {
+pub(super) fn set_tool_source(app: &mut AppState, source: PathBuf) {
     if app.tools_source_path.as_ref() != Some(&source) {
         app.tools_source_path = Some(source);
         app.tool_source_token = app.tool_source_token.wrapping_add(1).max(1);
@@ -1575,13 +1577,41 @@ fn tool_drop_paths(text: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-fn selected_tool_pages(input: &str, total: u32) -> Vec<u32> {
+pub(super) fn selected_tool_pages(input: &str, total: u32) -> Vec<u32> {
     let Some(page_count) = PageCount::new(total) else {
         return Vec::new();
     };
     PageRangeSelection::parse(input, page_count)
         .map(|pages| pages.into_iter().map(|page| page.get() + 1).collect())
         .unwrap_or_default()
+}
+
+pub(super) fn toggle_tool_page_selection(
+    existing: &str,
+    page: u32,
+    total: u32,
+    shift: bool,
+) -> String {
+    if shift {
+        let anchor = existing
+            .split([',', '-'])
+            .find_map(|item| item.trim().parse::<u32>().ok())
+            .unwrap_or(page);
+        format!("{}-{}", anchor.min(page), anchor.max(page))
+    } else {
+        let mut pages = selected_tool_pages(existing, total);
+        if let Some(index) = pages.iter().position(|selected| *selected == page) {
+            pages.remove(index);
+        } else {
+            pages.push(page);
+            pages.sort_unstable();
+        }
+        pages
+            .into_iter()
+            .map(|selected| selected.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 fn next_tool_job_key(app: &mut AppState) -> ToolJobKey {
@@ -1690,6 +1720,7 @@ fn handle_tool_event(
             window.set_tool_password_prompt_open(false);
             window.set_tools_open(false);
             window.set_current_tool(-1);
+            refresh_thumbnail_model(&mut state.borrow_mut(), window);
             match outcome {
                 ToolOutcome::Pdf { output } => {
                     show_banner(
@@ -1781,6 +1812,10 @@ fn connect_tools_callbacks(
     dialogs: Arc<WindowsFileDialogs>,
 ) {
     ensure_tool_event_timer(window, state, scheduler);
+    window.on_request_open_url(move |url| {
+        let _ = open_url(url.as_str());
+    });
+
     let weak = window.as_weak();
     let state_toggle_tools = state.clone();
     window.on_request_toggle_tools(move || {
@@ -1788,6 +1823,7 @@ fn connect_tools_callbacks(
             let next_open = !window.get_tools_open();
             if !next_open {
                 cancel_active_tool(&state_toggle_tools, &window);
+                refresh_thumbnail_model(&mut state_toggle_tools.borrow_mut(), &window);
             }
             window.set_tools_open(next_open);
             if next_open {
@@ -1818,16 +1854,35 @@ fn connect_tools_callbacks(
                 refresh_merge_files(&window, &mut app);
                 window.set_selected_merge_index(-1);
             } else if tool_id == 1 || tool_id == 2 || tool_id == 3 {
-                let app = state_open_tool.borrow();
+                let mut app = state_open_tool.borrow_mut();
                 let has_doc = app.application.ready_document().is_some();
-                if has_doc {
+                let range = if has_doc {
                     let page_num = app.current_page + 1;
-                    window.set_tools_page_range(SharedString::from(page_num.to_string()));
+                    page_num.to_string()
                 } else {
-                    window.set_tools_page_range(SharedString::new());
-                }
+                    String::new()
+                };
+                window.set_tools_page_range(SharedString::from(range.clone()));
                 window.set_tools_split_mode(0);
                 window.set_tools_rotation(1);
+                refresh_tool_thumbnails(&window, &mut app, &range);
+            } else if tool_id == 4 {
+                let mut app = state_open_tool.borrow_mut();
+                let count = app.page_count();
+                let range = if count > 0 {
+                    if count == 1 {
+                        "1".to_string()
+                    } else {
+                        format!("1-{}", count)
+                    }
+                } else {
+                    String::new()
+                };
+                window.set_tools_page_range(SharedString::from(range.clone()));
+                refresh_tool_thumbnails(&window, &mut app, &range);
+            } else if tool_id == -1 {
+                let mut app = state_open_tool.borrow_mut();
+                refresh_thumbnail_model(&mut app, &window);
             }
         }
     });
@@ -1841,6 +1896,7 @@ fn connect_tools_callbacks(
             window.set_current_tool(-1);
             window.set_tools_error(SharedString::new());
             window.set_tools_working(false);
+            refresh_thumbnail_model(&mut state_close_tools.borrow_mut(), &window);
         }
     });
 
@@ -2190,7 +2246,7 @@ fn connect_tools_callbacks(
 
     let weak = window.as_weak();
     let state_selection = state.clone();
-    window.on_request_select_page_range(move |page, ctrl, shift| {
+    window.on_request_select_page_range(move |page, _ctrl, shift| {
         let Some(window) = weak.upgrade() else {
             return;
         };
@@ -2201,29 +2257,41 @@ fn connect_tools_callbacks(
             return;
         }
         let existing = window.get_tools_page_range().to_string();
-        let range = if shift {
-            let anchor = existing
-                .split([',', '-'])
-                .find_map(|item| item.trim().parse::<u32>().ok())
-                .unwrap_or(page);
-            format!("{}-{}", anchor.min(page), anchor.max(page))
-        } else if ctrl {
-            let mut pages = selected_tool_pages(&existing, total);
-            if let Some(index) = pages.iter().position(|selected| *selected == page) {
-                pages.remove(index);
-            } else {
-                pages.push(page);
-                pages.sort_unstable();
-            }
-            pages
-                .into_iter()
-                .map(|selected| selected.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            page.to_string()
+        let range = toggle_tool_page_selection(&existing, page, total, shift);
+        window.set_tools_page_range(SharedString::from(range.clone()));
+        refresh_tool_thumbnails(&window, &mut app, &range);
+        app.wake_pump();
+    });
+
+    let weak = window.as_weak();
+    let state_select_all = state.clone();
+    window.on_request_select_all_tool_pages(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
         };
-        window.set_tools_page_range(SharedString::from(range));
+        let mut app = state_select_all.borrow_mut();
+        let count = app.page_count();
+        if count > 0 {
+            let range = if count == 1 {
+                "1".to_string()
+            } else {
+                format!("1-{}", count)
+            };
+            window.set_tools_page_range(SharedString::from(range.clone()));
+            refresh_tool_thumbnails(&window, &mut app, &range);
+            app.wake_pump();
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_clear_pages = state.clone();
+    window.on_request_clear_tool_pages(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_clear_pages.borrow_mut();
+        window.set_tools_page_range(SharedString::default());
+        refresh_tool_thumbnails(&window, &mut app, "");
         app.wake_pump();
     });
 
@@ -2339,7 +2407,8 @@ fn connect_tools_callbacks(
 mod tests {
     use super::{
         parse_print_preview_range, parse_zoom_percent, print_preview_dimensions,
-        selected_tool_pages, tool_drop_paths, PrintPreviewState, PRINT_PREVIEW_REQUEST_MASK,
+        selected_tool_pages, toggle_tool_page_selection, tool_drop_paths, PrintPreviewState,
+        PRINT_PREVIEW_REQUEST_MASK,
     };
     use barepdf_core::{DocumentId, PageCount, PageIndex, RequestId, Rotation};
     use std::path::PathBuf;
@@ -2447,5 +2516,25 @@ mod tests {
     fn ctrl_selection_expands_existing_ranges_before_toggling_a_page() {
         assert_eq!(selected_tool_pages("1-3, 5", 5), vec![1, 2, 3, 5]);
         assert!(selected_tool_pages("6", 5).is_empty());
+    }
+
+    #[test]
+    fn toggle_tool_page_selection_toggles_pages_without_ctrl() {
+        // Toggle page in
+        assert_eq!(toggle_tool_page_selection("1, 3", 2, 5, false), "1, 2, 3");
+        assert_eq!(toggle_tool_page_selection("", 1, 5, false), "1");
+        assert_eq!(toggle_tool_page_selection("1-3", 5, 5, false), "1, 2, 3, 5");
+
+        // Toggle page out
+        assert_eq!(toggle_tool_page_selection("1-3, 5", 2, 5, false), "1, 3, 5");
+        assert_eq!(toggle_tool_page_selection("2", 2, 5, false), "");
+    }
+
+    #[test]
+    fn toggle_tool_page_selection_handles_shift_range_selection() {
+        assert_eq!(toggle_tool_page_selection("2", 5, 5, true), "2-5");
+        assert_eq!(toggle_tool_page_selection("5", 2, 5, true), "2-5");
+        assert_eq!(toggle_tool_page_selection("2-4", 6, 10, true), "2-6");
+        assert_eq!(toggle_tool_page_selection("", 3, 5, true), "3-3");
     }
 }

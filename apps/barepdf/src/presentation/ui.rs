@@ -1444,6 +1444,16 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_turkish, "language.turkish");
     set_text!(set_text_settings_light, "settings.theme.light");
     set_text!(set_text_settings_dark, "settings.theme.dark");
+    set_text!(set_text_settings_developer, "settings.developer");
+    set_text!(set_text_settings_website, "settings.project_website");
+    set_text!(set_text_tools_select_all, "tools.pages.select_all");
+    set_text!(
+        set_text_tools_clear_selection,
+        "tools.pages.clear_selection"
+    );
+    set_text!(set_text_tools_convert_all, "tools.convert.all_pages");
+    set_text!(set_text_tools_convert_custom, "tools.convert.custom_range");
+    set_text!(set_text_tools_btn_convert_all, "tools.convert.btn_all");
     set_text!(set_text_tools, "tools.title");
     set_text!(set_text_tools_tooltip, "tools.tooltip");
     set_text!(set_text_tools_merge, "tools.merge");
