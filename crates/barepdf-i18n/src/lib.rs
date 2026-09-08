@@ -87,8 +87,17 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("settings.theme.system", "System");
     m.insert("settings.theme.light", "Light");
     m.insert("settings.theme.dark", "Dark");
+    m.insert("settings.appearance", "Appearance");
+    m.insert("settings.effects", "Effects");
+    m.insert("settings.efficient", "Efficient");
+    m.insert("settings.enhanced", "Enhanced");
+    m.insert(
+        "settings.effects.help",
+        "Enhanced effects use more system resources.",
+    );
     m.insert("settings.developer", "Developer");
     m.insert("settings.project_website", "Website");
+    m.insert("settings.about", "About");
     m.insert("language.english", "English");
     m.insert("language.turkish", "Türkçe");
     m.insert("settings.view_mode", "Default View Mode");
@@ -187,8 +196,17 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("settings.theme.system", "Sistem");
     m.insert("settings.theme.light", "Açık");
     m.insert("settings.theme.dark", "Koyu");
+    m.insert("settings.appearance", "Görünüm");
+    m.insert("settings.effects", "Efektler");
+    m.insert("settings.efficient", "Verimli");
+    m.insert("settings.enhanced", "Gelişmiş");
+    m.insert(
+        "settings.effects.help",
+        "Gelişmiş efektler daha fazla sistem kaynağı kullanır.",
+    );
     m.insert("settings.developer", "Geliştirici");
     m.insert("settings.project_website", "Web Sitesi");
+    m.insert("settings.about", "Hakkında");
     m.insert("language.english", "İngilizce");
     m.insert("language.turkish", "Türkçe");
     m.insert("settings.view_mode", "Varsayılan Görünüm Mode");
@@ -641,6 +659,7 @@ mod tests {
             "print.preview.continue",
             "settings.developer",
             "settings.project_website",
+            "settings.about",
             "tools.convert",
             "tools.convert.desc",
             "tools.drop.merge",
@@ -700,6 +719,8 @@ mod tests {
             t(ResolvedLanguage::Turkish, "settings.project_website"),
             "Web Sitesi"
         );
+        assert_eq!(t(ResolvedLanguage::English, "settings.about"), "About");
+        assert_eq!(t(ResolvedLanguage::Turkish, "settings.about"), "Hakkında");
         assert_eq!(
             t(ResolvedLanguage::English, "tools.pages.select_all"),
             "Select All"

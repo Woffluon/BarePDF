@@ -161,6 +161,23 @@ pub(super) fn wire_callbacks(
     });
 
     let weak = window.as_weak();
+    let state_enhanced_ui = state.clone();
+    let preferences_path_enhanced_ui = preferences_path.to_path_buf();
+    window.on_request_change_enhanced_ui(move |enabled| {
+        let mut app = state_enhanced_ui.borrow_mut();
+        app.preferences.enhanced_ui = enabled;
+        let window = weak.upgrade();
+        persist_preferences(
+            &app.preferences,
+            &preferences_path_enhanced_ui,
+            window.as_ref(),
+        );
+        if let Some(window) = window {
+            window.set_enhanced_ui(enabled);
+        }
+    });
+
+    let weak = window.as_weak();
     let state_update_consent = state.clone();
     let update_check_canceller_consent = update_check_canceller.clone();
     let preferences_path_updates = preferences_path.to_path_buf();

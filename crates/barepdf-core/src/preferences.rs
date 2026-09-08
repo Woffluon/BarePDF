@@ -27,6 +27,7 @@ pub struct UserPreferences {
     pub last_window_width: u32,
     pub last_window_height: u32,
     pub sidebar_visible: bool,
+    pub enhanced_ui: bool,
     pub update_checks_enabled: Option<bool>,
     pub last_update_check_unix: Option<u64>,
 }
@@ -44,6 +45,7 @@ impl Default for UserPreferences {
             last_window_width: 1100,
             last_window_height: 800,
             sidebar_visible: true,
+            enhanced_ui: false,
             update_checks_enabled: None,
             last_update_check_unix: None,
         }
@@ -92,5 +94,12 @@ mod tests {
         preferences.add_recent_file("one.pdf".into());
         preferences.add_recent_file("three.pdf".into());
         assert_eq!(preferences.recent_files, vec!["three.pdf", "one.pdf"]);
+    }
+
+    #[test]
+    fn legacy_preferences_default_to_efficient_ui() {
+        let preferences = UserPreferences::default();
+
+        assert!(!preferences.enhanced_ui);
     }
 }

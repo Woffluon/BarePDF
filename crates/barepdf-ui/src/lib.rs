@@ -3,33 +3,45 @@ slint::slint! {
 
     export global ThemeTokens {
         in-out property <int> theme-mode: 0;
+        in-out property <bool> enhanced: false;
+        in-out property <bool> system-reduce-effects: false;
+        out property <bool> effects-active: enhanced && !system-reduce-effects;
+        out property <bool> motion-active: effects-active;
         changed theme-mode => {
             Palette.color-scheme = theme-mode == 1 ? ColorScheme.light
                 : (theme-mode == 2 ? ColorScheme.dark : ColorScheme.unknown);
         }
         out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-        out property <color> window: dark ? #0c0e12 : #f4f5f7;
+        out property <color> window: dark ? #0c0e12 : #f5f6f8;
         out property <color> command: dark ? #13161c : #ffffff;
         out property <color> panel: dark ? #171a22 : #ffffff;
-        out property <color> panel-elevated: dark ? #1e222b : #f9fafb;
-        out property <color> canvas: dark ? #0c0e12 : #eaecf0;
-        out property <color> control: dark ? #1e222b : #ffffff;
-        out property <color> control-hover: dark ? #292e3a : #f1f3f6;
-        out property <color> control-pressed: dark ? #333948 : #e5e7eb;
-        out property <color> text: dark ? #f3f4f6 : #111827;
-        out property <color> text-muted: dark ? #949ba6 : #6b7280;
-        out property <color> border: dark ? #ffffff14 : #00000014;
-        out property <color> accent: dark ? #f59e0b : #ea580c;
-        out property <color> accent-content: dark ? #181105 : #ffffff;
-        out property <color> selection: dark ? #f59e0b2a : #ea580c26;
+        out property <color> panel-elevated: dark ? #1e222b : #fbfcfd;
+        out property <color> canvas: dark ? #090b0e : #e9ecf0;
+        out property <color> control: dark ? rgb(32, 37, 46) : #f7f8fa;
+        out property <color> control-hover: dark ? #2a303a : #eef1f4;
+        out property <color> control-pressed: dark ? #343a45 : #e3e7ec;
+        out property <color> text: dark ? #f3f4f6 : #181a1f;
+        out property <color> text-muted: dark ? #a3aab4 : #5f6670;
+        out property <color> border: dark ? #343a45 : #d5dae1;
+        out property <color> accent: #f69423;
+        out property <color> accent-content: #181105;
+        out property <color> selection: dark ? #f6942326 : #f694231f;
         out property <color> danger: dark ? #ffb4ab : #b42318;
-        out property <color> focus: dark ? #f59e0b : #ea580c;
+        out property <color> focus: dark ? #f6a14a : #9a4100;
+        out property <color> surface-command: effects-active ? command.with-alpha(0.94) : command;
+        out property <color> surface-flyout: effects-active ? panel-elevated.with-alpha(0.95) : panel-elevated;
+        out property <color> surface-modal: effects-active ? panel.with-alpha(0.94) : panel;
+        out property <color> inner-highlight: effects-active ? (dark ? #ffffff18 : #ffffffb8) : #00000000;
+        out property <color> warm-shadow: effects-active ? (dark ? #f6a14a18 : #9a410022) : #00000038;
         out property <length> space-1: 4px;
         out property <length> space-2: 8px;
         out property <length> space-3: 12px;
         out property <length> space-4: 16px;
-        out property <length> control-height: 34px;
-        out property <length> control-radius: 7px;
+        out property <length> space-6: 24px;
+        out property <length> control-height: 36px;
+        out property <length> control-radius: 8px;
+        out property <length> flyout-radius: 12px;
+        out property <length> page-radius: 2px;
         out property <length> focus-width: 2px;
     }
 
@@ -103,6 +115,7 @@ slint::slint! {
         accessible-role: button;
         accessible-label: tooltip;
         accessible-enabled: root.enabled;
+        animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
 
         touch := TouchArea {
             enabled: root.enabled;
@@ -170,12 +183,13 @@ slint::slint! {
         background: !enabled ? #00000000
             : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
             : active ? ThemeTokens.selection
-            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
-        border-width: active || primary ? 1px : 0px;
-        border-color: primary ? #d87912 : ThemeTokens.accent;
+            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control));
+        border-width: enabled ? 1px : 0px;
+        border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
         accessible-role: button;
         accessible-label: text;
         accessible-enabled: root.enabled;
+        animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
         touch := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.clicked(); } }
         focus-scope := FocusScope {
             x: 0px;
@@ -208,23 +222,23 @@ slint::slint! {
         callback activate();
         callback close();
 
-        width: 156px;
+        width: 164px;
         height: ThemeTokens.control-height;
-        border-radius: ThemeTokens.control-radius;
+        border-radius: 0px;
         background: item.is_active ? ThemeTokens.panel-elevated
             : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-        border-width: item.is_active ? 1px : 0px;
+        border-width: 0px;
         border-color: ThemeTokens.border;
         accessible-role: tab;
         accessible-label: item.title;
 
         tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
+        animate background { duration: ThemeTokens.motion-active ? 100ms : 0ms; }
         if root.item.is_active : Rectangle {
-            x: 0px;
-            y: 8px;
-            width: 3px;
-            height: parent.height - 16px;
-            border-radius: 2px;
+            x: 8px;
+            y: parent.height - 2px;
+            width: parent.width - 16px;
+            height: 2px;
             background: ThemeTokens.accent;
         }
         tab-focus := FocusScope {
@@ -257,16 +271,16 @@ slint::slint! {
                 horizontal-stretch: 1;
             }
             close-button := Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 5px;
+                width: 24px;
+                height: 24px;
+                border-radius: 6px;
                 background: close-touch.has-hover ? ThemeTokens.control-hover : #00000000;
                 accessible-role: button;
                 accessible-label: root.close-label + " " + root.item.title;
                 close-touch := TouchArea { clicked => { root.close(); } }
                 Image {
-                    x: 3px;
-                    y: 3px;
+                    x: 4px;
+                    y: 4px;
                     width: 16px;
                     height: 16px;
                     source: @image-url("../../../assets/icons/dismiss_20_regular.svg");
@@ -371,12 +385,15 @@ slint::slint! {
                 return reject;
             }
             Rectangle {
-                background: ThemeTokens.panel;
-                border-radius: 10px;
+                background: ThemeTokens.surface-modal;
+                border-radius: ThemeTokens.flyout-radius;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
-                drop-shadow-blur: 18px;
-                drop-shadow-color: #00000048;
+                accessible-role: groupbox;
+                accessible-label: root.text-title;
+                drop-shadow-blur: ThemeTokens.effects-active ? 20px : 14px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
                 VerticalLayout {
                     padding: 20px;
                     spacing: 14px;
@@ -395,6 +412,7 @@ slint::slint! {
                             Rectangle {
                                 width: Math.min(parent.width - 28px, 248px);
                                 height: Math.min(parent.height - 28px, 338px);
+                                border-radius: ThemeTokens.page-radius;
                                 background: white;
                                 border-width: 1px;
                                 border-color: #00000020;
@@ -434,6 +452,12 @@ slint::slint! {
                         TextButton { text: root.text-continue; primary: true; clicked => { root.confirm(); } }
                     }
                 }
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                    border-radius: ThemeTokens.flyout-radius - 1px;
+                    border-width: ThemeTokens.effects-active ? 1px : 0px;
+                    border-color: ThemeTokens.inner-highlight;
+                }
             }
         }
     }
@@ -460,18 +484,32 @@ slint::slint! {
                 return reject;
             }
             Rectangle {
-                background: ThemeTokens.panel;
-                border-radius: 10px;
+                background: ThemeTokens.surface-modal;
+                border-radius: ThemeTokens.flyout-radius;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
-                drop-shadow-blur: 16px;
-                drop-shadow-color: #00000048;
+                accessible-role: groupbox;
+                accessible-label: root.title;
+                drop-shadow-blur: ThemeTokens.effects-active ? 20px : 14px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
                 VerticalLayout {
                     padding: 24px;
-                    spacing: 13px;
+                    spacing: 12px;
                     Text { text: root.title; color: ThemeTokens.text; font-size: 19px; font-weight: 700; }
                     Text { text: root.file-name; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
-                    if root.error-text != "" : Text { text: root.error-text; color: ThemeTokens.danger; font-size: 12px; }
+                    if root.error-text != "" : Rectangle {
+                        height: 36px;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.danger.with-alpha(0.10);
+                        border-width: 1px;
+                        border-color: ThemeTokens.danger.with-alpha(0.55);
+                        accessible-role: text;
+                        accessible-label: root.error-text;
+                        accessible-live-region: assertive;
+                        Text { x: 10px; width: parent.width - 20px; text: root.error-text; color: ThemeTokens.danger; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                    }
+                    Text { text: root.placeholder; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
                     password-field := LineEdit {
                         text <=> root.password-input;
                         placeholder-text: root.placeholder;
@@ -485,6 +523,12 @@ slint::slint! {
                         TextButton { text: root.cancel-label; clicked => { root.cancel(); } }
                         TextButton { text: root.unlock-label; primary: true; clicked => { root.submit(root.password-input); } }
                     }
+                }
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                    border-radius: ThemeTokens.flyout-radius - 1px;
+                    border-width: ThemeTokens.effects-active ? 1px : 0px;
+                    border-color: ThemeTokens.inner-highlight;
                 }
             }
         }
@@ -503,7 +547,7 @@ slint::slint! {
             can-drop(event) => { return DragAction.copy; }
             dropped(event) => { root.dropped(event.data); return DragAction.copy; }
         }
-        Text { text: root.label; color: ThemeTokens.text-muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+        Text { text: root.label; color: ThemeTokens.text-muted; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
     }
 
     component PageSelectionCard inherits Rectangle {
@@ -557,7 +601,7 @@ slint::slint! {
                 vertical-alignment: center;
             }
         }
-        Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page_number; color: root.is-selected ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 9px; font-weight: root.is-selected ? 600 : 400; horizontal-alignment: center; overflow: elide; }
+        Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page_number; color: root.is-selected ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 11px; font-weight: root.is-selected ? 600 : 400; horizontal-alignment: center; overflow: elide; }
     }
 
     component ToolsModal inherits Rectangle {
@@ -667,12 +711,15 @@ slint::slint! {
             }
 
             Rectangle {
-                background: ThemeTokens.panel;
-                border-radius: 12px;
+                background: ThemeTokens.surface-modal;
+                border-radius: ThemeTokens.flyout-radius;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
-                drop-shadow-blur: 20px;
-                drop-shadow-color: #00000055;
+                accessible-role: groupbox;
+                accessible-label: root.title;
+                drop-shadow-blur: ThemeTokens.effects-active ? 22px : 16px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
 
                 VerticalLayout {
                     padding: 20px;
@@ -706,11 +753,16 @@ slint::slint! {
                         }
                     }
 
-                    if root.error-text != "" : Text {
-                        text: root.error-text;
-                        color: ThemeTokens.danger;
-                        font-size: 12px;
-                        wrap: word-wrap;
+                    if root.error-text != "" : Rectangle {
+                        height: 40px;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.danger.with-alpha(0.10);
+                        border-width: 1px;
+                        border-color: ThemeTokens.danger.with-alpha(0.55);
+                        accessible-role: text;
+                        accessible-label: root.error-text;
+                        accessible-live-region: assertive;
+                        Text { x: 10px; width: parent.width - 20px; text: root.error-text; color: ThemeTokens.danger; font-size: 12px; vertical-alignment: center; wrap: word-wrap; }
                     }
 
                     if root.current-tool == -1 : VerticalLayout {
@@ -791,7 +843,7 @@ slint::slint! {
                                         Text { text: (fidx + 1) + "."; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
                                         VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
                                             Text { text: file-path; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
-                                            Text { text: root.merge-drag-index == fidx ? root.text-merge-dragged-hint : root.text-merge-drag-hint; color: ThemeTokens.text-muted; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                                            Text { text: root.merge-drag-index == fidx ? root.text-merge-dragged-hint : root.text-merge-drag-hint; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; overflow: elide; }
                                         }
                                     }
                                 }
@@ -1058,6 +1110,12 @@ slint::slint! {
                         }
                     }
                 }
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                    border-radius: ThemeTokens.flyout-radius - 1px;
+                    border-width: ThemeTokens.effects-active ? 1px : 0px;
+                    border-color: ThemeTokens.inner-highlight;
+                }
             }
         }
     }
@@ -1089,11 +1147,11 @@ slint::slint! {
         in property <[TabItem]> tab-items: [];
         in-out property <length> current-scroll-y: 0px;
         in-out property <length> thumbnail-scroll-y: 0px;
-        out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 248px : 0px);
-        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 88px
-            - (root.banner-visible ? 42px : 0px)
-            - (root.tab-items.length > 0 ? 38px : 0px)
-            - (root.print-active || root.print-status != "" ? 38px : 0px);
+        out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 256px : 0px);
+        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 84px
+            - (root.banner-visible ? 44px : 0px)
+            - (root.tab-items.length > 0 ? 40px : 0px)
+            - (root.print-active || root.print-status != "" ? 40px : 0px);
         out property <length> thumbnail-viewport-height: root.pdf-viewport-height - 56px;
         in property <bool> has-document: false;
         in property <bool> has-selection: false;
@@ -1150,6 +1208,9 @@ slint::slint! {
         in-out property <bool> tool-password-prompt-open: false;
         in property <string> tool-password-error: "";
         in-out property <string> tool-password-input: "";
+        in-out property <bool> enhanced-ui: false;
+        in property <bool> system-reduce-effects: false;
+        in property <bool> visual-effects-ready: true;
 
         in property <string> text-open: "Open PDF";
         in property <string> text-sidebar: "Sidebar";
@@ -1187,6 +1248,12 @@ slint::slint! {
         in property <string> text-password-unlock: "Unlock";
         in property <string> text-settings-language: "Language";
         in property <string> text-settings-theme: "Theme";
+        in property <string> text-settings-appearance: "Appearance";
+        in property <string> text-settings-effects: "Effects";
+        in property <string> text-settings-efficient: "Efficient";
+        in property <string> text-settings-enhanced: "Enhanced";
+        in property <string> text-settings-effects-help: "Enhanced mode adds restrained depth and motion. System accessibility settings take priority.";
+        in property <string> text-settings-about: "About";
         in property <string> text-settings-system: "System";
         in property <string> text-settings-english: "English";
         in property <string> text-settings-turkish: "Türkçe";
@@ -1283,6 +1350,7 @@ slint::slint! {
         callback request-toggle-view-mode();
         callback request-change-language(int);
         callback request-change-theme(int);
+        callback request-change-enhanced-ui(bool);
         callback request-change-update-checks(bool);
         callback request-check-update();
         callback request-update-action();
@@ -1332,6 +1400,9 @@ slint::slint! {
         changed tool-password-prompt-open => {
             if (!root.tool-password-prompt-open) { root.tool-password-input = ""; }
         }
+        changed enhanced-ui => { ThemeTokens.enhanced = root.enhanced-ui && root.visual-effects-ready; }
+        changed system-reduce-effects => { ThemeTokens.system-reduce-effects = root.system-reduce-effects; }
+        changed visual-effects-ready => { ThemeTokens.enhanced = root.enhanced-ui && root.visual-effects-ready; }
 
         FocusScope {
             key-pressed(event) => {
@@ -1384,20 +1455,23 @@ slint::slint! {
             spacing: 0px;
 
             if root.window-mode != 1 : Rectangle {
-                height: 64px;
-                background: ThemeTokens.command;
+                height: 56px;
+                background: ThemeTokens.surface-command;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
+                drop-shadow-blur: ThemeTokens.effects-active ? 8px : 0px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 2px : 0px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
 
                 VerticalLayout {
-                    padding-top: 12px;
-                    padding-bottom: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
 
                     HorizontalLayout {
                         height: ThemeTokens.control-height;
-                        padding-left: root.width < 820px ? 4px : 10px;
-                        padding-right: root.width < 820px ? 4px : 10px;
-                        spacing: root.width < 820px ? 3px : 5px;
+                        padding-left: root.width < 900px ? 4px : 12px;
+                        padding-right: root.width < 900px ? 4px : 12px;
+                        spacing: root.width < 900px ? 3px : 6px;
 
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
@@ -1406,7 +1480,7 @@ slint::slint! {
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/panel_left_20_regular.svg");
-                        label: root.text-sidebar; tooltip: root.text-sidebar; show-label: root.width >= 980px;
+                        label: root.text-sidebar; tooltip: root.text-sidebar; show-label: root.width >= 1180px;
                         active: root.sidebar-visible; enabled: root.has-document;
                         clicked => { root.request-toggle-sidebar(); }
                     }
@@ -1494,25 +1568,25 @@ slint::slint! {
                     Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
-                        label: root.view-mode-label; tooltip: root.text-view; show-label: root.width >= 1120px;
-                        enabled: root.has-document; visible: root.width >= 1040px; clicked => { root.request-toggle-view-mode(); }
+                        label: root.view-mode-label; tooltip: root.text-view; show-label: false;
+                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-toggle-view-mode(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
-                        label: root.text-fit-width; tooltip: root.text-fit-width; show-label: root.width >= 1040px;
+                        label: root.text-fit-width; tooltip: root.text-fit-width; show-label: false;
                         active: root.zoom-mode == 1;
-                        enabled: root.has-document; visible: root.width >= 1040px; clicked => { root.request-fit-width(); }
+                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-fit-width(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
-                        label: root.text-fit-page; tooltip: root.text-fit-page; show-label: root.width >= 1180px;
+                        label: root.text-fit-page; tooltip: root.text-fit-page; show-label: false;
                         active: root.zoom-mode == 2;
-                        enabled: root.has-document; visible: root.width >= 1120px; clicked => { root.request-fit-page(); }
+                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-fit-page(); }
                     }
                     Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     TextButton {
                         text: root.text-print;
-                        visible: root.width >= 1040px;
+                        visible: root.width >= 1180px;
                         enabled: root.has-document && !root.print-active;
                         clicked => { root.request-print(); }
                     }
@@ -1521,21 +1595,21 @@ slint::slint! {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
                         label: root.text-tools; tooltip: root.text-tools-tooltip; show-label: root.width >= 1260px;
                         active: root.tools-open;
-                        visible: root.width >= 1040px;
+                        visible: root.width >= 1180px;
                         clicked => { root.request-toggle-tools(); }
                     }
-                    if root.width < 1040px : TextButton { text: root.text-toolbar-more; active: root.toolbar-more-open; clicked => { root.toolbar-more-open = !root.toolbar-more-open; } }
+                    if root.width < 1180px : TextButton { text: root.text-toolbar-more; active: root.toolbar-more-open; clicked => { root.toolbar-more-open = !root.toolbar-more-open; } }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
                         tooltip: root.text-fullscreen; enabled: root.has-document;
-                        visible: root.width >= 900px;
+                        visible: root.width >= 1180px;
                         clicked => { root.request-toggle-fullscreen(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
                         tooltip: root.text-presentation; enabled: root.has-document;
-                        visible: root.width >= 960px;
+                        visible: root.width >= 1180px;
                         clicked => { root.request-presentation-mode(); }
                     }
                     settings-button := IconButton {
@@ -1545,11 +1619,16 @@ slint::slint! {
                     }
                     }
                 }
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                    border-width: ThemeTokens.effects-active ? 1px : 0px;
+                    border-color: ThemeTokens.inner-highlight;
+                }
             }
 
             if root.window-mode == 0 && root.tab-items.length > 0 : Rectangle {
-                height: 38px;
-                background: ThemeTokens.command;
+                height: 40px;
+                background: ThemeTokens.surface-command;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
 
@@ -1562,7 +1641,7 @@ slint::slint! {
 
                     tab-strip := Flickable {
                         horizontal-stretch: 1;
-                        viewport-width: root.tab-items.length * 160px;
+                        viewport-width: root.tab-items.length * 168px;
                         viewport-height: self.height;
                         interactive: true;
 
@@ -1601,10 +1680,13 @@ slint::slint! {
             }
 
             if root.banner-visible : Rectangle {
-                height: 42px;
+                height: 44px;
                 background: ThemeTokens.dark ? #31251c : #fff7ef;
                 border-width: 1px;
                 border-color: ThemeTokens.accent.with-alpha(0.5);
+                accessible-role: region;
+                accessible-label: root.banner-text;
+                accessible-live-region: polite;
                 Rectangle { width: 3px; height: parent.height; background: ThemeTokens.accent; }
                 HorizontalLayout {
                     padding-left: 16px; padding-right: 9px; spacing: ThemeTokens.space-2;
@@ -1621,7 +1703,7 @@ slint::slint! {
             }
 
             if root.window-mode == 0 && (root.print-active || root.print-status != "") : Rectangle {
-                height: 38px;
+                height: 40px;
                 background: ThemeTokens.panel;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
@@ -1656,7 +1738,7 @@ slint::slint! {
                 spacing: 0px;
 
                 if root.sidebar-visible && root.has-document : Rectangle {
-                    width: 248px;
+                    width: 256px;
                     background: ThemeTokens.panel;
                     border-width: 1px;
                     border-color: ThemeTokens.border;
@@ -1700,7 +1782,7 @@ slint::slint! {
                                     Text {
                                         x: 8px; y: 162px; width: parent.width - 16px; height: 20px;
                                         text: thumb.page-number; color: thumb.is-selected ? ThemeTokens.text : ThemeTokens.text-muted;
-                                        font-size: 11px; font-weight: thumb.is-selected ? 600 : 500;
+                                        font-size: 12px; font-weight: thumb.is-selected ? 600 : 500;
                                         horizontal-alignment: center; vertical-alignment: center;
                                     }
                                 }
@@ -1743,18 +1825,20 @@ slint::slint! {
                     }
 
                     if !root.has-document && !root.password-required : VerticalLayout {
-                        alignment: center; spacing: 14px;
+                        alignment: center; spacing: 12px;
                         HorizontalLayout {
-                            height: 42px; alignment: center;
-                            Image { source: @image-url("../../../assets/logo.svg"); width: 42px; height: 42px; image-fit: contain; }
+                            height: 40px; alignment: center;
+                            Image { source: @image-url("../../../assets/logo.svg"); width: 40px; height: 40px; image-fit: contain; }
                         }
-                        Text { text: "BarePDF"; color: ThemeTokens.text; font-size: 34px; font-weight: 750; horizontal-alignment: center; }
+                        Text { text: "BarePDF"; color: ThemeTokens.text-muted; font-size: 12px; font-weight: 650; horizontal-alignment: center; }
+                        Text { text: root.text-empty-title; color: ThemeTokens.text; font-size: 24px; font-weight: 700; horizontal-alignment: center; }
                         Text { text: root.text-empty-desc; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; }
-                        Rectangle { height: 6px; }
+                        Rectangle { height: 4px; }
                         HorizontalLayout {
                             height: 36px; alignment: center;
                             Rectangle {
-                                width: 128px; height: 36px; border-radius: ThemeTokens.control-radius; background: ThemeTokens.accent;
+                                width: 132px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.accent;
+                                border-width: 1px; border-color: #d87912;
                                 TouchArea { clicked => { root.request-open-file(); } }
                                 Text { text: root.text-open; color: ThemeTokens.accent-content; font-size: 12px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
                             }
@@ -1779,7 +1863,7 @@ slint::slint! {
                             width: root.page-display-width; height: root.page-display-height;
                             x: Math.max(24px, (parent.viewport-width - self.width) / 2);
                             y: Math.max(24px, (parent.viewport-height - self.height) / 2);
-                            background: white; border-width: 1px; border-color: #00000020;
+                            background: white; border-radius: ThemeTokens.page-radius; border-width: 1px; border-color: #00000020;
                             drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
                             if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
                             if root.visible-pages.length > 0 : Rectangle {
@@ -1804,7 +1888,7 @@ slint::slint! {
                         for page in root.visible-pages : Rectangle {
                             width: page.width; height: page.height;
                             x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
-                            background: white; border-width: 1px; border-color: #00000020;
+                            background: white; border-radius: ThemeTokens.page-radius; border-width: 1px; border-color: #00000020;
                             drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
@@ -1815,7 +1899,7 @@ slint::slint! {
                                     if (event.kind == PointerEventKind.move) { root.pointer-move(page.page-index, self.mouse-x, self.mouse-y); }
                                 }
                             }
-                            if !page.has-bitmap : Text { text: root.text-loading + " " + page.page-number; color: #737373; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                            if !page.has-bitmap : Text { text: root.text-loading + " " + page.page-number; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
                         }
                     }
 
@@ -1830,9 +1914,19 @@ slint::slint! {
                     }
 
                     if root.toolbar-more-open : Rectangle {
-                        x: Math.max(8px, parent.width - 242px); y: 8px; width: 234px; height: 188px;
-                        background: ThemeTokens.panel; border-radius: 8px; border-width: 1px; border-color: ThemeTokens.border;
-                        drop-shadow-blur: 12px; drop-shadow-color: #00000040;
+                        x: Math.max(8px, parent.width - 248px); y: root.toolbar-more-open ? 8px : 14px; width: 240px; height: 302px;
+                        background: ThemeTokens.surface-flyout;
+                        border-radius: ThemeTokens.flyout-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        drop-shadow-blur: ThemeTokens.effects-active ? 18px : 12px;
+                        drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                        drop-shadow-color: ThemeTokens.warm-shadow;
+                        accessible-role: groupbox;
+                        accessible-label: root.text-toolbar-more;
+                        opacity: root.toolbar-more-open ? 1 : 0;
+                        animate opacity { duration: ThemeTokens.motion-active ? 140ms : 0ms; }
+                        animate y { duration: ThemeTokens.motion-active ? 140ms : 0ms; easing: ease-out; }
                         FocusScope {
                             key-pressed(event) => {
                                 if (event.text == "\u{001b}") { root.toolbar-more-open = false; return accept; }
@@ -1845,7 +1939,15 @@ slint::slint! {
                                 TextButton { text: root.text-fit-page; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-fit-page(); } }
                                 TextButton { text: root.text-print; enabled: root.has-document && !root.print-active; clicked => { root.toolbar-more-open = false; root.request-print(); } }
                                 TextButton { text: root.text-tools; clicked => { root.toolbar-more-open = false; root.request-toggle-tools(); } }
+                                TextButton { text: root.text-fullscreen; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-toggle-fullscreen(); } }
+                                TextButton { text: root.text-presentation; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-presentation-mode(); } }
                             }
+                        }
+                        Rectangle {
+                            x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                            border-radius: ThemeTokens.flyout-radius - 1px;
+                            border-width: ThemeTokens.effects-active ? 1px : 0px;
+                            border-color: ThemeTokens.inner-highlight;
                         }
                     }
 
@@ -1853,58 +1955,100 @@ slint::slint! {
                         background: #00000001;
                         TouchArea { clicked => { root.settings-open = false; } }
                         Rectangle {
-                            x: parent.width - 350px; y: 8px; width: 340px; height: 490px;
-                            background: ThemeTokens.panel; border-radius: 10px; border-width: 1px; border-color: ThemeTokens.border;
-                            drop-shadow-blur: 12px; drop-shadow-color: #00000040;
+                            x: parent.width - 368px; y: root.settings-open ? 8px : 14px; width: 360px; height: parent.height - 16px;
+                            background: ThemeTokens.surface-flyout;
+                            border-radius: ThemeTokens.flyout-radius;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
+                            drop-shadow-blur: ThemeTokens.effects-active ? 20px : 12px;
+                            drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                            drop-shadow-color: ThemeTokens.warm-shadow;
+                            accessible-role: groupbox;
+                            accessible-label: root.text-settings;
+                            opacity: root.settings-open ? 1 : 0;
+                            animate opacity { duration: ThemeTokens.motion-active ? 140ms : 0ms; }
+                            animate y { duration: ThemeTokens.motion-active ? 140ms : 0ms; easing: ease-out; }
                             TouchArea { clicked => { } }
                             VerticalLayout {
-                                padding: 18px; spacing: ThemeTokens.space-3;
-                                Text { text: root.text-settings; color: ThemeTokens.text; font-size: 17px; font-weight: 700; }
-                                Text { text: root.text-settings-language; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                padding: 16px;
+                                spacing: 12px;
                                 HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton { text: root.text-settings-system; active: root.current-language == 0; clicked => { root.request-change-language(0); } }
-                                    TextButton { text: root.text-settings-english; active: root.current-language == 1; clicked => { root.request-change-language(1); } }
-                                    TextButton { text: root.text-settings-turkish; active: root.current-language == 2; clicked => { root.request-change-language(2); } }
-                                }
-                                Text { text: root.text-settings-theme; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton { text: root.text-settings-system; active: root.current-theme == 0; clicked => { root.request-change-theme(0); } }
-                                    TextButton { text: root.text-settings-light; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
-                                    TextButton { text: root.text-settings-dark; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
+                                    height: 36px;
+                                    Text { text: root.text-settings; color: ThemeTokens.text; font-size: 19px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                                    IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-close; clicked => { root.settings-open = false; } }
                                 }
                                 Rectangle { height: 1px; background: ThemeTokens.border; }
-                                Text { text: root.text-updates + " · BarePDF v" + root.current-version; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton { text: root.text-update-enabled; active: root.update-checks-enabled; clicked => { root.request-change-update-checks(true); } }
-                                    TextButton { text: root.text-update-disabled; active: !root.update-checks-enabled; clicked => { root.request-change-update-checks(false); } }
-                                }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton { text: root.text-check-now; clicked => { root.request-check-update(); } }
-                                    if root.update-action-label != "" : TextButton {
-                                        text: root.update-action-label;
-                                        enabled: root.update-action-enabled;
-                                        clicked => { root.request-update-action(); }
+                                ScrollView {
+                                    VerticalLayout {
+                                        padding-top: 4px;
+                                        padding-right: 4px;
+                                        spacing: 12px;
+
+                                        Text { text: root.text-settings-appearance; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                        Text { text: root.text-settings-theme; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: root.text-settings-system; active: root.current-theme == 0; clicked => { root.request-change-theme(0); } }
+                                            TextButton { text: root.text-settings-light; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
+                                            TextButton { text: root.text-settings-dark; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
+                                        }
+                                        Text { text: root.text-settings-effects; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: root.text-settings-efficient; active: !root.enhanced-ui; clicked => { root.request-change-enhanced-ui(false); } }
+                                            TextButton { text: root.text-settings-enhanced; active: root.enhanced-ui; clicked => { root.request-change-enhanced-ui(true); } }
+                                        }
+                                        Text { text: root.text-settings-effects-help; color: ThemeTokens.text-muted; font-size: 11px; wrap: word-wrap; }
+                                        Rectangle { height: 1px; background: ThemeTokens.border; }
+
+                                        Text { text: root.text-settings-language; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: root.text-settings-system; active: root.current-language == 0; clicked => { root.request-change-language(0); } }
+                                            TextButton { text: root.text-settings-english; active: root.current-language == 1; clicked => { root.request-change-language(1); } }
+                                            TextButton { text: root.text-settings-turkish; active: root.current-language == 2; clicked => { root.request-change-language(2); } }
+                                        }
+                                        Rectangle { height: 1px; background: ThemeTokens.border; }
+
+                                        Text { text: root.text-updates; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                        Text { text: "BarePDF v" + root.current-version; color: ThemeTokens.text-muted; font-size: 11px; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: root.text-update-enabled; active: root.update-checks-enabled; clicked => { root.request-change-update-checks(true); } }
+                                            TextButton { text: root.text-update-disabled; active: !root.update-checks-enabled; clicked => { root.request-change-update-checks(false); } }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: root.text-check-now; clicked => { root.request-check-update(); } }
+                                            if root.update-action-label != "" : TextButton {
+                                                text: root.update-action-label;
+                                                enabled: root.update-action-enabled;
+                                                clicked => { root.request-update-action(); }
+                                            }
+                                        }
+                                        Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 11px; wrap: word-wrap; }
+                                        Rectangle { height: 1px; background: ThemeTokens.border; }
+
+                                        Text { text: root.text-settings-about; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                        HorizontalLayout {
+                                            alignment: space-between;
+                                            Text { text: root.text-settings-developer; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            TextButton { text: "Efe Arabacı ↗"; clicked => { root.request-open-url("https://xn--efearabac-3pb.com/"); } }
+                                        }
+                                        HorizontalLayout {
+                                            alignment: space-between;
+                                            Text { text: root.text-settings-website; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            TextButton { text: "BarePDF Web ↗"; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/"); } }
+                                        }
+                                        Rectangle { height: 4px; }
                                     }
                                 }
-                                Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 10px; wrap: word-wrap; }
-                                Rectangle { height: 1px; background: ThemeTokens.border; }
-                                VerticalLayout {
-                                    spacing: 8px;
-                                    HorizontalLayout {
-                                        alignment: space-between;
-                                        Text { text: root.text-settings-developer; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
-                                        TextButton { text: "Efe Arabacı ↗"; clicked => { root.request-open-url("https://xn--efearabac-3pb.com/"); } }
-                                    }
-                                    HorizontalLayout {
-                                        alignment: space-between;
-                                        Text { text: root.text-settings-website; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
-                                        TextButton { text: "BarePDF Web ↗"; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/"); } }
-                                    }
-                                }
+                            }
+                            Rectangle {
+                                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                                border-radius: ThemeTokens.flyout-radius - 1px;
+                                border-width: ThemeTokens.effects-active ? 1px : 0px;
+                                border-color: ThemeTokens.inner-highlight;
                             }
                         }
                     }
@@ -2047,11 +2191,11 @@ slint::slint! {
             }
 
             if root.window-mode != 1 : Rectangle {
-                height: 24px; background: ThemeTokens.command; border-width: 1px; border-color: ThemeTokens.border;
+                height: 28px; background: ThemeTokens.surface-command; border-width: 1px; border-color: ThemeTokens.border;
                 HorizontalLayout {
                     padding-left: 11px; padding-right: 11px; alignment: space-between;
-                    Text { text: root.status-text; color: ThemeTokens.text-muted; font-size: 10px; vertical-alignment: center; overflow: elide; }
-                    Text { text: root.has-document ? root.view-mode-label : ""; color: ThemeTokens.text-muted; font-size: 10px; vertical-alignment: center; }
+                    Text { text: root.status-text; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; overflow: elide; accessible-role: text; accessible-label: root.status-text; }
+                    Text { text: root.has-document ? root.view-mode-label : ""; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
                 }
             }
         }

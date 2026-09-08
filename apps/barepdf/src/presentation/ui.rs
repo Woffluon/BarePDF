@@ -32,7 +32,8 @@ use barepdf_core::{
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform_windows::{
-    ask_yes_no, install_file_drop, show_fatal_error, WindowsClipboard, WindowsFileDialogs,
+    ask_yes_no, install_file_drop, reduce_visual_effects, show_fatal_error, WindowsClipboard,
+    WindowsFileDialogs,
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderError, RenderEvent, RenderJob, RenderKind, RenderScheduler,
@@ -217,6 +218,8 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     )));
     window.set_current_version(SharedString::from(CURRENT_VERSION));
     window.set_update_checks_enabled(state.preferences.update_checks_enabled == Some(true));
+    window.set_enhanced_ui(state.preferences.enhanced_ui);
+    window.set_system_reduce_effects(reduce_visual_effects());
     window.set_zoom_mode(zoom_mode_index(state.zoom_mode));
     window.set_zoom_str(SharedString::from(zoom_percentage(state.zoom_factor)));
     render_update_ui(window, state);
@@ -451,6 +454,7 @@ pub(super) fn handle_render_event(
                     if !app.first_page_ready {
                         app.first_page_ready = true;
                         record_first_page_profile(&mut app);
+                        window.set_visual_effects_ready(true);
                         start_deferred_document_work(&mut app, scheduler, window);
                         render_visible_pages(&mut app, scheduler, window);
                     }
@@ -557,6 +561,7 @@ pub(super) fn handle_render_event(
             error,
             ..
         } => {
+            window.set_visual_effects_ready(true);
             let mut app = state.borrow_mut();
             if DocumentController::is_pending(&app.application, document_id) {
                 match error {
@@ -660,6 +665,8 @@ pub(super) fn begin_open(
     ) {
         DocumentController::cancel_open(&mut app.application, document_id);
         show_banner(window, "PDF work queue is unavailable. Try again.", true);
+    } else {
+        window.set_visual_effects_ready(false);
     }
     refresh_tab_model(&app, window);
 }
@@ -1444,8 +1451,14 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_turkish, "language.turkish");
     set_text!(set_text_settings_light, "settings.theme.light");
     set_text!(set_text_settings_dark, "settings.theme.dark");
+    set_text!(set_text_settings_appearance, "settings.appearance");
+    set_text!(set_text_settings_effects, "settings.effects");
+    set_text!(set_text_settings_efficient, "settings.efficient");
+    set_text!(set_text_settings_enhanced, "settings.enhanced");
+    set_text!(set_text_settings_effects_help, "settings.effects.help");
     set_text!(set_text_settings_developer, "settings.developer");
     set_text!(set_text_settings_website, "settings.project_website");
+    set_text!(set_text_settings_about, "settings.about");
     set_text!(set_text_tools_select_all, "tools.pages.select_all");
     set_text!(
         set_text_tools_clear_selection,

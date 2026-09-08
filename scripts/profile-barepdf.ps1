@@ -13,6 +13,8 @@ param (
     [int]$DurationSeconds = 20,
     [ValidateRange(1, 100)]
     [int]$Runs = 5,
+    [ValidateSet("Efficient", "Enhanced")]
+    [string]$VisualMode = "Efficient",
     [string]$ExecutablePath = "",
     [string]$BaselinePath = "",
     [Alias("OutputPath")]
@@ -120,6 +122,86 @@ function Get-EnvironmentValue([string]$Name) {
     $value = [Environment]::GetEnvironmentVariable($Name)
     if ($null -eq $value) { return "<unset>" }
     return $value
+}
+
+function New-ProfileAppData([string]$Mode) {
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    $directory = Join-Path $tempRoot ("barepdf-profile-appdata-" + [guid]::NewGuid().ToString("N"))
+    $configDirectory = Join-Path $directory "BarePDF"
+    New-Item -ItemType Directory -Path $configDirectory -Force -ErrorAction Stop | Out-Null
+    $configPath = Join-Path $configDirectory "config.json"
+    $config = [ordered]@{
+        theme = "Dark"
+        update_checks_enabled = $false
+        last_window_width = 1260
+        last_window_height = 926
+        enhanced_ui = ($Mode -eq "Enhanced")
+    }
+    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    [PSCustomObject]@{ Root = $directory; Config = $configPath }
+}
+
+function Test-VerifiedProfileAppData([string]$Directory) {
+    try {
+        $fullDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+        $parent = [IO.Directory]::GetParent($fullDirectory)
+        $item = Get-Item -LiteralPath $fullDirectory -Force -ErrorAction Stop
+        return $null -ne $parent -and
+            $parent.FullName.TrimEnd('\') -eq $tempRoot -and
+            [IO.Path]::GetFileName($fullDirectory) -match '^barepdf-profile-appdata-[0-9a-f]{32}$' -and
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Remove-ProfileAppData([string]$Directory) {
+    if (Test-VerifiedProfileAppData $Directory) {
+        Remove-Item -LiteralPath $Directory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-GpuCountersForProcess([int]$ProcessId) {
+    $engineValues = @()
+    $enginePath = '\GPU Engine(*)\Utilization Percentage'
+    try {
+        $engineSamples = @(Get-Counter -Counter $enginePath -ErrorAction Stop).CounterSamples |
+            Where-Object { $_.InstanceName -match "(?i)(^|_)pid_$ProcessId(?:_|$)" -or $_.Path -match "(?i)(^|_)pid_$ProcessId(?:_|$)" }
+        $engineValues = @($engineSamples | ForEach-Object { [double]$_.CookedValue } |
+            Where-Object { -not [double]::IsNaN($_) -and -not [double]::IsInfinity($_) })
+    } catch {
+        $engineValues = @()
+    }
+
+    $memoryValues = @()
+    $memoryPaths = @(
+        '\GPU Process Memory(*)\Dedicated Usage',
+        '\GPU Process Memory(*)\Shared Usage'
+    )
+    $usableMemoryPaths = @()
+    foreach ($memoryPath in $memoryPaths) {
+        try {
+            $memorySamples = @(Get-Counter -Counter $memoryPath -ErrorAction Stop).CounterSamples |
+                Where-Object { $_.InstanceName -match "(?i)(^|_)pid_$ProcessId(?:_|$)" -or $_.Path -match "(?i)(^|_)pid_$ProcessId(?:_|$)" }
+            $values = @($memorySamples | ForEach-Object { [double]$_.CookedValue } |
+                Where-Object { -not [double]::IsNaN($_) -and -not [double]::IsInfinity($_) })
+            if ($values.Count -gt 0) {
+                $memoryValues += $values
+                $usableMemoryPaths += $memoryPath
+            }
+        } catch {
+        }
+    }
+
+    [PSCustomObject]@{
+        EngineUtilizationPercent = if ($engineValues.Count -gt 0) { ($engineValues | Measure-Object -Sum).Sum } else { $null }
+        ProcessMemoryMiB = if ($memoryValues.Count -gt 0) { (($memoryValues | Measure-Object -Sum).Sum / 1MB) } else { $null }
+        EngineSupported = ($engineValues.Count -gt 0)
+        ProcessMemorySupported = ($memoryValues.Count -gt 0)
+        EnginePath = if ($engineValues.Count -gt 0) { $enginePath } else { $null }
+        MemoryPaths = $usableMemoryPaths
+    }
 }
 
 function Get-BuildProvenance([string]$Executable) {
@@ -254,6 +336,36 @@ function Write-GateComparison([string]$Name, $Current, $Baseline, [string]$Unit,
     }
 }
 
+function Write-UnsupportedGate([string]$Name, [string]$Reason) {
+    Write-Host ("{0,-36} UNSUPPORTED ({1})" -f $Name, $Reason)
+    return [PSCustomObject][ordered]@{
+        metric = $Name
+        status = "UNSUPPORTED"
+        reason = $Reason
+    }
+}
+
+function Write-MaxGate([string]$Name, $Current, [string]$Unit, [double]$Limit) {
+    if ($null -eq $Current -or $null -eq $Current.p95) {
+        Write-Host ("{0,-36} NOT EVALUATED (metric unavailable in current result)" -f $Name)
+        return [PSCustomObject][ordered]@{
+            metric = $Name
+            status = "NOT_EVALUATED"
+            reason = "metric unavailable in current result"
+        }
+    }
+    $passed = [double]$Current.p95 -le $Limit
+    $status = if ($passed) { "PASS" } else { "FAIL" }
+    Write-Host ("{0,-36} current p95={1} {2}; ceiling <= {3} {2}: {4}" -f $Name, $Current.p95, $Unit, $Limit, $status)
+    return [PSCustomObject][ordered]@{
+        metric = $Name
+        unit = $Unit
+        current_p95 = $Current.p95
+        gate = "<= $Limit $Unit p95"
+        status = $status
+    }
+}
+
 function Stop-BarePdfProcess($Process) {
     if ($Process -and -not $Process.HasExited) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
@@ -287,9 +399,17 @@ $buildProvenance = Get-BuildProvenance $ExePath.Path
 $installerPackage = Get-PackageSize "Installer package" (Join-Path $repoRoot "target\release\installer") "BarePDF-Setup-x64-v*.exe"
 $portablePackage = Get-PackageSize "Portable package" (Join-Path $repoRoot "target\release\portable") "BarePDF-Portable-x64-v*.zip"
 $idleResults = @()
+$gpuEngineValues = @()
+$gpuProcessMemoryValues = @()
+$gpuEngineCounterPaths = @()
+$gpuProcessMemoryCounterPaths = @()
 for ($run = 1; $run -le $Runs; $run++) {
     $process = $null
+    $profileAppData = $null
+    $previousAppData = [Environment]::GetEnvironmentVariable("APPDATA", "Process")
     try {
+        $profileAppData = New-ProfileAppData $VisualMode
+        [Environment]::SetEnvironmentVariable("APPDATA", $profileAppData.Root, "Process")
         $process = Start-Process -FilePath $ExePath -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 3
         $startSample = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
@@ -307,6 +427,15 @@ for ($run = 1; $run -le $Runs; $run++) {
             $peakPrivate = [math]::Max($peakPrivate, $sample.PrivateMemorySize64 / 1MB)
         }
         $stopwatch.Stop()
+        $gpu = Get-GpuCountersForProcess $process.Id
+        if ($gpu.EngineSupported) {
+            $gpuEngineValues += [double]$gpu.EngineUtilizationPercent
+            $gpuEngineCounterPaths += $gpu.EnginePath
+        }
+        if ($gpu.ProcessMemorySupported) {
+            $gpuProcessMemoryValues += [double]$gpu.ProcessMemoryMiB
+            $gpuProcessMemoryCounterPaths += $gpu.MemoryPaths
+        }
 
         $cpuPercent = if ($stopwatch.Elapsed.TotalSeconds -gt 0) {
             (($lastSample.TotalProcessorTime.TotalSeconds - $startCpu) / $stopwatch.Elapsed.TotalSeconds) /
@@ -323,6 +452,12 @@ for ($run = 1; $run -le $Runs; $run++) {
         }
     } finally {
         Stop-BarePdfProcess $process
+        if ($null -eq $previousAppData) {
+            Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable("APPDATA", $previousAppData, "Process")
+        }
+        if ($profileAppData) { Remove-ProfileAppData $profileAppData.Root }
     }
 }
 
@@ -330,7 +465,11 @@ $results = @()
 for ($run = 1; $run -le $Runs; $run++) {
     $profilePath = Join-Path $env:TEMP "barepdf-profile-$([guid]::NewGuid().ToString('N')).json"
     $process = $null
+    $profileAppData = $null
+    $previousAppData = [Environment]::GetEnvironmentVariable("APPDATA", "Process")
     try {
+        $profileAppData = New-ProfileAppData $VisualMode
+        [Environment]::SetEnvironmentVariable("APPDATA", $profileAppData.Root, "Process")
         $previousProfilePath = $env:BAREPDF_PROFILE_FILE
         $env:BAREPDF_PROFILE_FILE = $profilePath
         try {
@@ -382,6 +521,12 @@ for ($run = 1; $run -le $Runs; $run++) {
     } finally {
         Stop-BarePdfProcess $process
         Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+        if ($null -eq $previousAppData) {
+            Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable("APPDATA", $previousAppData, "Process")
+        }
+        if ($profileAppData) { Remove-ProfileAppData $profileAppData.Root }
     }
 }
 
@@ -393,9 +538,29 @@ $peakValues = @($results | ForEach-Object { $_.PeakPrivateMB } | Where-Object { 
 $idleCpuValues = @($idleResults | ForEach-Object { $_.CpuPercent })
 $idleWorkingSetValues = @($idleResults | ForEach-Object { $_.WorkingSetMB })
 $idlePrivateValues = @($idleResults | ForEach-Object { $_.PrivateMB })
+$gpuEngineCounterPaths = @($gpuEngineCounterPaths | Select-Object -Unique)
+$gpuProcessMemoryCounterPaths = @($gpuProcessMemoryCounterPaths | Select-Object -Unique)
+$gpuCounterProvenance = [PSCustomObject][ordered]@{
+    provider = "Windows Performance Counters via Get-Counter"
+    process_scope = "target process pid per sample"
+    sample_after_settle_seconds = 3
+    gpu_engine_utilization = [PSCustomObject][ordered]@{
+        supported = ($gpuEngineValues.Count -gt 0)
+        counter_paths = $gpuEngineCounterPaths
+        samples = $gpuEngineValues.Count
+        reason = if ($gpuEngineValues.Count -gt 0) { $null } else { "GPU Engine counters absent or unusable" }
+    }
+    gpu_process_memory = [PSCustomObject][ordered]@{
+        supported = ($gpuProcessMemoryValues.Count -gt 0)
+        counter_paths = $gpuProcessMemoryCounterPaths
+        samples = $gpuProcessMemoryValues.Count
+        reason = if ($gpuProcessMemoryValues.Count -gt 0) { $null } else { "GPU Process Memory counters absent or unusable" }
+    }
+}
 
 Write-Host "BarePDF release profile ($Runs runs)" -ForegroundColor Cyan
 Write-Host "Fixture: $FixtureName [$FixtureClass]"
+Write-Host "Visual mode: $VisualMode"
 Write-Host "PDF: $PdfPath"
 Write-Host "Fixture bytes: $($fixture.Length)"
 Write-Host "Fixture SHA-256: $fixtureSha256"
@@ -415,6 +580,8 @@ Write-Host ""
 $metricSummaries = [PSCustomObject][ordered]@{
     first_low_resolution_bitmap_ms = Get-MetricSummary $firstPageValues
     idle_cpu_percent = Get-MetricSummary $idleCpuValues
+    idle_gpu_engine_utilization_percent = Get-MetricSummary $gpuEngineValues
+    gpu_process_memory_mib = Get-MetricSummary $gpuProcessMemoryValues
     idle_working_set_mib = Get-MetricSummary $idleWorkingSetValues
     idle_private_memory_mib = Get-MetricSummary $idlePrivateValues
     settled_working_set_mib = Get-MetricSummary $settledWorkingSetValues
@@ -439,6 +606,8 @@ Write-Host "  Requires a distinct native-DPI bitmap signal from the application.
 Write-MetricSummary "UI callback p95" $null "ms"
 Write-Host "  Requires an application callback-duration signal or trace."
 Write-MetricSummary "Idle CPU" $metricSummaries.idle_cpu_percent "%"
+Write-MetricSummary "Idle GPU engine utilization" $metricSummaries.idle_gpu_engine_utilization_percent "%"
+Write-MetricSummary "GPU process memory" $metricSummaries.gpu_process_memory_mib "MiB"
 Write-MetricSummary "Timer wake-ups" $null "wake-ups/s"
 Write-Host "  Requires a WPR/WPA CPU Usage + Thread Activity trace."
 Write-MetricSummary "Idle working set" $metricSummaries.idle_working_set_mib "MiB"
@@ -455,6 +624,7 @@ if ($null -eq $artifactSummaries.portable_bytes) { Write-Host "  $($portablePack
 $currentResult = [PSCustomObject][ordered]@{
     schema_version = 2
     captured_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+    visual_mode = $VisualMode
     fixture = [PSCustomObject][ordered]@{
         name = $FixtureName
         class = $FixtureClass
@@ -472,13 +642,16 @@ $currentResult = [PSCustomObject][ordered]@{
     }
     measurement = [PSCustomObject][ordered]@{
         release_profile = "release"
+        visual_mode = $VisualMode
         duration_seconds = $DurationSeconds
         sample_interval_ms = 250
+        settle_seconds = 3
         requested_runs = $Runs
         idle_runs = $idleResults.Count
         document_runs = $results.Count
     }
     provenance = $buildProvenance
+    counter_support = $gpuCounterProvenance
     metrics = $metricSummaries
     artifacts = $artifactSummaries
 }
@@ -506,15 +679,45 @@ if ($BaselinePath) {
         Write-Host "Baseline comparison (p95 gates)" -ForegroundColor Cyan
         $comparisons = @(
             Write-GateComparison "First low-resolution bitmap" $currentResult.metrics.first_low_resolution_bitmap_ms $baseline.metrics.first_low_resolution_bitmap_ms "ms" 5 "Percent"
-            Write-GateComparison "Idle CPU" $currentResult.metrics.idle_cpu_percent $baseline.metrics.idle_cpu_percent "%" 0.2 "Absolute"
-            Write-GateComparison "Idle working set" $currentResult.metrics.idle_working_set_mib $baseline.metrics.idle_working_set_mib "MiB" 2 "Absolute"
-            Write-GateComparison "Peak working set" $currentResult.metrics.peak_working_set_mib $baseline.metrics.peak_working_set_mib "MiB" 5 "Percent"
+        )
+        if ($VisualMode -eq "Efficient") {
+            $comparisons += @(
+                Write-GateComparison "Idle CPU" $currentResult.metrics.idle_cpu_percent $baseline.metrics.idle_cpu_percent "%" 0.2 "Absolute"
+                Write-GateComparison "Idle working set" $currentResult.metrics.idle_working_set_mib $baseline.metrics.idle_working_set_mib "MiB" 2 "Absolute"
+                Write-GateComparison "Peak working set" $currentResult.metrics.peak_working_set_mib $baseline.metrics.peak_working_set_mib "MiB" 5 "Percent"
+            )
+        } else {
+            $enhancedGpuGate = if ($null -eq $currentResult.metrics.idle_gpu_engine_utilization_percent -or
+                $null -eq $baseline.metrics.idle_gpu_engine_utilization_percent) {
+                Write-UnsupportedGate "Enhanced idle GPU" "GPU Engine counter support is unavailable in current result or baseline"
+            } else {
+                Write-GateComparison "Enhanced idle GPU" $currentResult.metrics.idle_gpu_engine_utilization_percent $baseline.metrics.idle_gpu_engine_utilization_percent "%" 0.5 "Absolute"
+            }
+            $enhancedGpuMaxGate = if ($null -eq $currentResult.metrics.idle_gpu_engine_utilization_percent) {
+                Write-UnsupportedGate "Enhanced idle GPU ceiling" "GPU Engine counter support is unavailable in current result"
+            } else {
+                Write-MaxGate "Enhanced idle GPU ceiling" $currentResult.metrics.idle_gpu_engine_utilization_percent "%" 1.0
+            }
+            $comparisons += @(
+                Write-GateComparison "Enhanced idle CPU" $currentResult.metrics.idle_cpu_percent $baseline.metrics.idle_cpu_percent "%" 0.5 "Absolute"
+                Write-MaxGate "Enhanced idle CPU ceiling" $currentResult.metrics.idle_cpu_percent "%" 1.0
+                $enhancedGpuGate
+                $enhancedGpuMaxGate
+                Write-GateComparison "Enhanced idle working set" $currentResult.metrics.idle_working_set_mib $baseline.metrics.idle_working_set_mib "MiB" 8 "Absolute"
+                Write-GateComparison "Enhanced peak working set" $currentResult.metrics.peak_working_set_mib $baseline.metrics.peak_working_set_mib "MiB" 10 "Percent"
+                Write-GateComparison "Enhanced peak private memory" $currentResult.metrics.peak_private_memory_mib $baseline.metrics.peak_private_memory_mib "MiB" 10 "Percent"
+            )
+        }
+        $comparisons += @(
             Write-GateComparison "Installer package" $currentResult.artifacts.installer_bytes $baseline.artifacts.installer_bytes "bytes" 2 "Percent"
             Write-GateComparison "Portable package" $currentResult.artifacts.portable_bytes $baseline.artifacts.portable_bytes "bytes" 2 "Percent"
-        ) | Where-Object { $null -ne $_ }
+        )
+        $comparisons = @($comparisons | Where-Object { $null -ne $_ })
         $failedGates = @($comparisons | Where-Object { $_.status -eq "FAIL" })
+        $unsupportedGates = @($comparisons | Where-Object { $_.status -eq "UNSUPPORTED" })
         $comparison | Add-Member -NotePropertyName comparisons -NotePropertyValue $comparisons
         $comparison | Add-Member -NotePropertyName failed_gates -NotePropertyValue $failedGates.Count
+        $comparison | Add-Member -NotePropertyName unsupported_gates -NotePropertyValue $unsupportedGates.Count
     }
 }
 $currentResult | Add-Member -NotePropertyName baseline_comparison -NotePropertyValue $comparison
