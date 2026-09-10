@@ -38,9 +38,9 @@ slint::slint! {
         out property <length> space-3: 12px;
         out property <length> space-4: 16px;
         out property <length> space-6: 24px;
-        out property <length> control-height: 36px;
-        out property <length> control-radius: 8px;
-        out property <length> flyout-radius: 12px;
+        out property <length> control-height: 34px;
+        out property <length> control-radius: 6px;
+        out property <length> flyout-radius: 10px;
         out property <length> page-radius: 2px;
         out property <length> focus-width: 2px;
     }
@@ -223,22 +223,23 @@ slint::slint! {
         callback close();
 
         width: 164px;
-        height: ThemeTokens.control-height;
-        border-radius: 0px;
+        height: 28px;
+        border-radius: 6px;
         background: item.is_active ? ThemeTokens.panel-elevated
             : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-        border-width: 0px;
+        border-width: item.is_active ? 1px : 0px;
         border-color: ThemeTokens.border;
         accessible-role: tab;
         accessible-label: item.title;
 
         tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
-        animate background { duration: ThemeTokens.motion-active ? 100ms : 0ms; }
+        animate background { duration: ThemeTokens.motion-active ? 80ms : 0ms; }
         if root.item.is_active : Rectangle {
             x: 8px;
             y: parent.height - 2px;
             width: parent.width - 16px;
             height: 2px;
+            border-radius: 1px;
             background: ThemeTokens.accent;
         }
         tab-focus := FocusScope {
@@ -264,23 +265,23 @@ slint::slint! {
             Text {
                 text: root.item.title;
                 color: ThemeTokens.text;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: root.item.is_active ? 600 : 500;
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
             }
             close-button := Rectangle {
-                width: 24px;
-                height: 24px;
-                border-radius: 6px;
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
                 background: close-touch.has-hover ? ThemeTokens.control-hover : #00000000;
                 accessible-role: button;
                 accessible-label: root.close-label + " " + root.item.title;
                 close-touch := TouchArea { clicked => { root.close(); } }
                 Image {
-                    x: 4px;
-                    y: 4px;
+                    x: 3px;
+                    y: 3px;
                     width: 16px;
                     height: 16px;
                     source: @image-url("../../../assets/icons/dismiss_20_regular.svg");
@@ -1148,11 +1149,11 @@ slint::slint! {
         in-out property <length> current-scroll-y: 0px;
         in-out property <length> thumbnail-scroll-y: 0px;
         out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 256px : 0px);
-        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 84px
-            - (root.banner-visible ? 44px : 0px)
-            - (root.tab-items.length > 0 ? 40px : 0px)
+        out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 64px
+            - (root.banner-visible ? 40px : 0px)
+            - (root.tab-items.length > 0 ? 34px : 0px)
             - (root.print-active || root.print-status != "" ? 40px : 0px);
-        out property <length> thumbnail-viewport-height: root.pdf-viewport-height - 56px;
+        out property <length> thumbnail-viewport-height: root.pdf-viewport-height - 54px;
         in property <bool> has-document: false;
         in property <bool> has-selection: false;
         in-out property <bool> password-required: false;
@@ -1445,8 +1446,8 @@ slint::slint! {
                 width: Math.min(parent.width - 40px, root.page-display-width);
                 height: Math.min(parent.height - 40px, root.page-display-height);
                 background: white;
-                drop-shadow-blur: 12px;
-                drop-shadow-color: #00000078;
+                border-width: 1px;
+                border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                 Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
             }
         }
@@ -1454,72 +1455,156 @@ slint::slint! {
         if root.window-mode != 2 : VerticalLayout {
             spacing: 0px;
 
-            if root.window-mode != 1 : Rectangle {
-                height: 56px;
+            // 1. Top Tab Bar (height: 34px, with + new tab button)
+            if root.window-mode == 0 && root.tab-items.length > 0 : Rectangle {
+                height: 34px;
                 background: ThemeTokens.surface-command;
                 border-width: 1px;
                 border-color: ThemeTokens.border;
-                drop-shadow-blur: ThemeTokens.effects-active ? 8px : 0px;
-                drop-shadow-offset-y: ThemeTokens.effects-active ? 2px : 0px;
-                drop-shadow-color: ThemeTokens.warm-shadow;
 
-                VerticalLayout {
-                    padding-top: 10px;
-                    padding-bottom: 10px;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    spacing: 5px;
 
-                    HorizontalLayout {
-                        height: ThemeTokens.control-height;
-                        padding-left: root.width < 900px ? 4px : 12px;
-                        padding-right: root.width < 900px ? 4px : 12px;
-                        spacing: root.width < 900px ? 3px : 6px;
+                    tab-strip := Flickable {
+                        horizontal-stretch: 1;
+                        viewport-width: root.tab-items.length * 168px;
+                        viewport-height: self.height;
+                        interactive: true;
 
+                        HorizontalLayout {
+                            width: tab-strip.viewport-width;
+                            height: tab-strip.viewport-height;
+                            spacing: 4px;
+                            for tab in root.tab-items : DocumentTab {
+                                item: tab;
+                                close-label: root.text-close;
+                                activate => { root.request-activate-tab(tab.id); }
+                                close => { root.request-close-tab(tab.id); }
+                            }
+                        }
+                    }
+                    new-tab-button := Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: new-tab-touch.has-hover && new-tab-touch.enabled ? ThemeTokens.control-hover : #00000000;
+                        accessible-role: button;
+                        accessible-label: root.text-new-tab;
+                        new-tab-touch := TouchArea {
+                            enabled: root.tab-items.length < 16;
+                            clicked => { root.request-new-tab(); }
+                        }
+                        Text {
+                            text: "+";
+                            color: new-tab-touch.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // 2. Command Bar (Toolbar) directly beneath tabs (height: 40px)
+            if root.window-mode != 1 : Rectangle {
+                height: 40px;
+                background: ThemeTokens.surface-command;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+
+                HorizontalLayout {
+                    height: 40px;
+                    padding-left: root.width < 960px ? 6px : 10px;
+                    padding-right: root.width < 960px ? 6px : 10px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    spacing: root.width < 960px ? 4px : 6px;
+                    alignment: center;
+
+                    // Group 1: Open file & Sidebar toggle
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
-                        label: root.text-open; tooltip: root.text-open; show-label: true; primary: true;
+                        label: root.text-open;
+                        tooltip: root.text-open;
+                        show-label: root.width >= 960px;
+                        primary: true;
                         clicked => { root.request-open-file(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/panel_left_20_regular.svg");
-                        label: root.text-sidebar; tooltip: root.text-sidebar; show-label: root.width >= 1180px;
-                        active: root.sidebar-visible; enabled: root.has-document;
+                        label: root.text-sidebar;
+                        tooltip: root.text-sidebar;
+                        show-label: false;
+                        active: root.sidebar-visible;
+                        enabled: root.has-document;
                         clicked => { root.request-toggle-sidebar(); }
                     }
-                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                    // Divider 1
+                    Rectangle { width: 1px; height: 20px; background: ThemeTokens.border; }
+
+                    // Group 2: Previous page | [ Page / Total ] | Next page
                     IconButton {
                         icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
-                        tooltip: root.text-prev-page; enabled: root.has-document;
+                        tooltip: root.text-prev-page;
+                        enabled: root.has-document;
                         clicked => { root.request-prev-page(); }
                     }
                     Rectangle {
-                        width: 94px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius;
-                        background: ThemeTokens.control; border-width: 1px; border-color: ThemeTokens.border;
+                        width: 88px;
+                        height: ThemeTokens.control-height;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.control;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
                         HorizontalLayout {
-                            padding-left: 5px; padding-right: 7px; spacing: 3px;
+                            padding-left: 5px;
+                            padding-right: 7px;
+                            spacing: 3px;
                             LineEdit {
-                                width: 45px;
+                                width: 42px;
                                 enabled: root.has-document;
                                 text <=> root.current-page-str;
                                 input-type: number;
                                 horizontal-alignment: right;
                                 accepted => { root.request-go-to-page(self.text); }
                             }
-                            Text { text: "/ " + root.total-pages-str; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
+                            Text {
+                                text: "/ " + root.total-pages-str;
+                                color: ThemeTokens.text-muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
-                        tooltip: root.text-next-page; enabled: root.has-document;
+                        tooltip: root.text-next-page;
+                        enabled: root.has-document;
                         clicked => { root.request-next-page(); }
                     }
-                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                    // Divider 2
+                    Rectangle { width: 1px; height: 20px; background: ThemeTokens.border; }
+
+                    // Group 3: Zoom out | [ Zoom% ] | Zoom in | View mode toggle | Fit width | Fit page
                     IconButton {
                         icon: @image-url("../../../assets/icons/zoom_out_20_regular.svg");
-                        tooltip: root.text-zoom-out; enabled: root.has-document;
+                        tooltip: root.text-zoom-out;
+                        enabled: root.has-document;
                         clicked => { root.request-zoom-out(); }
                     }
                     zoom-field := Rectangle {
-                        width: 68px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.control;
-                        border-width: 1px; border-color: zoom-input.has-focus ? ThemeTokens.focus : ThemeTokens.border;
+                        width: 62px;
+                        height: ThemeTokens.control-height;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.control;
+                        border-width: 1px;
+                        border-color: zoom-input.has-focus ? ThemeTokens.focus : ThemeTokens.border;
                         in property <string> canonical-zoom: root.zoom-str;
                         changed canonical-zoom => {
                             if !zoom-input.has-focus {
@@ -1527,7 +1612,10 @@ slint::slint! {
                             }
                         }
                         zoom-input := LineEdit {
-                            x: 7px; y: 1px; width: parent.width - 14px; height: parent.height - 2px;
+                            x: 4px;
+                            y: 1px;
+                            width: parent.width - 8px;
+                            height: parent.height - 2px;
                             enabled: root.has-document;
                             text: root.zoom-str;
                             font-size: 11px;
@@ -1562,143 +1650,142 @@ slint::slint! {
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/zoom_in_20_regular.svg");
-                        tooltip: root.text-zoom-in; enabled: root.has-document;
+                        tooltip: root.text-zoom-in;
+                        enabled: root.has-document;
                         clicked => { root.request-zoom-in(); }
                     }
-                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
-                        label: root.view-mode-label; tooltip: root.text-view; show-label: false;
-                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-toggle-view-mode(); }
+                        label: root.view-mode-label;
+                        tooltip: root.text-view;
+                        show-label: false;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.request-toggle-view-mode(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
-                        label: root.text-fit-width; tooltip: root.text-fit-width; show-label: false;
+                        label: root.text-fit-width;
+                        tooltip: root.text-fit-width;
+                        show-label: false;
                         active: root.zoom-mode == 1;
-                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-fit-width(); }
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.request-fit-width(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
-                        label: root.text-fit-page; tooltip: root.text-fit-page; show-label: false;
+                        label: root.text-fit-page;
+                        tooltip: root.text-fit-page;
+                        show-label: false;
                         active: root.zoom-mode == 2;
-                        enabled: root.has-document; visible: root.width >= 1180px; clicked => { root.request-fit-page(); }
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.request-fit-page(); }
                     }
-                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                    // Divider 3
+                    if root.width >= 760px : Rectangle { width: 1px; height: 20px; background: ThemeTokens.border; }
+
+                    // Group 4: Print | PDF Tools (Birleştir, Böl vs.)
                     TextButton {
                         text: root.text-print;
-                        visible: root.width >= 1180px;
+                        visible: root.width >= 760px;
                         enabled: root.has-document && !root.print-active;
                         clicked => { root.request-print(); }
                     }
-                    Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
                     IconButton {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
-                        label: root.text-tools; tooltip: root.text-tools-tooltip; show-label: root.width >= 1260px;
+                        label: root.text-tools;
+                        tooltip: root.text-tools-tooltip;
+                        show-label: root.width >= 1080px;
                         active: root.tools-open;
-                        visible: root.width >= 1180px;
+                        visible: root.width >= 760px;
                         clicked => { root.request-toggle-tools(); }
                     }
-                    if root.width < 1180px : TextButton { text: root.text-toolbar-more; active: root.toolbar-more-open; clicked => { root.toolbar-more-open = !root.toolbar-more-open; } }
+
+                    // Overflow Menu Button (Only when window width is below 760px)
+                    if root.width < 760px : TextButton {
+                        text: root.text-toolbar-more;
+                        active: root.toolbar-more-open;
+                        clicked => { root.toolbar-more-open = !root.toolbar-more-open; }
+                    }
+
+                    // Spacer between center groups and right group
                     Rectangle { horizontal-stretch: 1; }
+
+                    // Right Group: Fullscreen | Presentation | Settings
                     IconButton {
                         icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
-                        tooltip: root.text-fullscreen; enabled: root.has-document;
-                        visible: root.width >= 1180px;
+                        tooltip: root.text-fullscreen;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
                         clicked => { root.request-toggle-fullscreen(); }
                     }
                     IconButton {
                         icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
-                        tooltip: root.text-presentation; enabled: root.has-document;
-                        visible: root.width >= 1180px;
+                        tooltip: root.text-presentation;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
                         clicked => { root.request-presentation-mode(); }
                     }
                     settings-button := IconButton {
                         icon: @image-url("../../../assets/icons/settings_20_regular.svg");
-                        tooltip: root.text-settings; active: root.settings-open;
+                        tooltip: root.text-settings;
+                        active: root.settings-open;
                         clicked => { root.settings-open = !root.settings-open; }
                     }
-                    }
-                }
-                Rectangle {
-                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
-                    border-width: ThemeTokens.effects-active ? 1px : 0px;
-                    border-color: ThemeTokens.inner-highlight;
                 }
             }
 
-            if root.window-mode == 0 && root.tab-items.length > 0 : Rectangle {
-                height: 40px;
-                background: ThemeTokens.surface-command;
-                border-width: 1px;
-                border-color: ThemeTokens.border;
-
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    padding-top: 3px;
-                    padding-bottom: 3px;
-                    spacing: 5px;
-
-                    tab-strip := Flickable {
-                        horizontal-stretch: 1;
-                        viewport-width: root.tab-items.length * 168px;
-                        viewport-height: self.height;
-                        interactive: true;
-
-                        HorizontalLayout {
-                            width: tab-strip.viewport-width;
-                            height: tab-strip.viewport-height;
-                            spacing: 4px;
-                            for tab in root.tab-items : DocumentTab {
-                                item: tab;
-                                close-label: root.text-close;
-                                activate => { root.request-activate-tab(tab.id); }
-                                close => { root.request-close-tab(tab.id); }
-                            }
-                        }
-                    }
-                    new-tab-button := Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        border-radius: 6px;
-                        background: new-tab-touch.has-hover && new-tab-touch.enabled ? ThemeTokens.control-hover : #00000000;
-                        accessible-role: button;
-                        accessible-label: root.text-new-tab;
-                        new-tab-touch := TouchArea {
-                            enabled: root.tab-items.length < 16;
-                            clicked => { root.request-new-tab(); }
-                        }
-                        Text {
-                            text: "+";
-                            color: new-tab-touch.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
-                            font-size: 20px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
+            // 3. InfoBar banner directly beneath command bar (height: 40px)
             if root.banner-visible : Rectangle {
-                height: 44px;
-                background: ThemeTokens.dark ? #31251c : #fff7ef;
+                height: 40px;
+                background: ThemeTokens.dark ? #231b14 : #fff9f2;
                 border-width: 1px;
-                border-color: ThemeTokens.accent.with-alpha(0.5);
+                border-color: ThemeTokens.accent.with-alpha(0.35);
                 accessible-role: region;
                 accessible-label: root.banner-text;
                 accessible-live-region: polite;
-                Rectangle { width: 3px; height: parent.height; background: ThemeTokens.accent; }
+
+                // Left accent stripe
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: 4px;
+                    height: parent.height;
+                    background: ThemeTokens.accent;
+                }
+
                 HorizontalLayout {
-                    padding-left: 16px; padding-right: 9px; spacing: ThemeTokens.space-2;
-                    Text { text: root.banner-text; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: root.banner-text;
+                        color: ThemeTokens.text;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
                     if root.banner-update-action : TextButton {
                         text: root.banner-action-label;
                         enabled: root.banner-action-enabled;
                         primary: true;
                         clicked => { root.request-update-action(); }
                     }
-                    if root.banner-can-retry : TextButton { text: root.text-retry; clicked => { root.request-retry(); } }
-                    IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-dismiss; clicked => { root.request-dismiss-banner(); } }
+                    if root.banner-can-retry : TextButton {
+                        text: root.text-retry;
+                        clicked => { root.request-retry(); }
+                    }
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                        tooltip: root.text-dismiss;
+                        clicked => { root.request-dismiss-banner(); }
+                    }
                 }
             }
 
@@ -1746,12 +1833,24 @@ slint::slint! {
                         padding: 10px;
                         spacing: 10px;
                         Rectangle {
-                            height: 36px; border-radius: ThemeTokens.control-radius; background: ThemeTokens.window;
-                            border-width: 1px; border-color: ThemeTokens.border;
+                            height: 34px;
+                            border-radius: 6px;
+                            background: ThemeTokens.control;
+                            border-width: 1px;
+                            border-color: ThemeTokens.border;
                             HorizontalLayout {
-                                padding: 3px; spacing: 3px;
-                                TextButton { text: root.text-thumbnails; active: root.sidebar-tab == 0; clicked => { root.sidebar-tab = 0; root.request-sidebar-tab(0); } }
-                                TextButton { text: root.text-outline; active: root.sidebar-tab == 1; clicked => { root.sidebar-tab = 1; root.request-sidebar-tab(1); } }
+                                padding: 2px;
+                                spacing: 2px;
+                                TextButton {
+                                    text: root.text-thumbnails;
+                                    active: root.sidebar-tab == 0;
+                                    clicked => { root.sidebar-tab = 0; root.request-sidebar-tab(0); }
+                                }
+                                TextButton {
+                                    text: root.text-outline;
+                                    active: root.sidebar-tab == 1;
+                                    clicked => { root.sidebar-tab = 1; root.request-sidebar-tab(1); }
+                                }
                             }
                         }
 
@@ -1762,8 +1861,8 @@ slint::slint! {
                                     height: 188px;
                                     border-radius: ThemeTokens.control-radius;
                                     background: thumb.is-selected ? ThemeTokens.selection : (thumb-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-                                    border-width: 1px;
-                                    border-color: ThemeTokens.border;
+                                    border-width: thumb.is-selected ? 2px : 1px;
+                                    border-color: thumb.is-selected ? ThemeTokens.accent : (thumb-touch.has-hover ? ThemeTokens.border : #00000000);
                                     thumb-touch := TouchArea { clicked => { root.request-select-page(thumb.page-index); } }
                                     if thumb.is-selected : Rectangle {
                                         x: 0px; y: 8px; width: 3px; height: parent.height - 16px;
@@ -1781,9 +1880,12 @@ slint::slint! {
                                     }
                                     Text {
                                         x: 8px; y: 162px; width: parent.width - 16px; height: 20px;
-                                        text: thumb.page-number; color: thumb.is-selected ? ThemeTokens.text : ThemeTokens.text-muted;
-                                        font-size: 12px; font-weight: thumb.is-selected ? 600 : 500;
-                                        horizontal-alignment: center; vertical-alignment: center;
+                                        text: thumb.page-number;
+                                        color: thumb.is-selected ? ThemeTokens.accent : ThemeTokens.text-muted;
+                                        font-size: 12px;
+                                        font-weight: thumb.is-selected ? 700 : 500;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
                                     }
                                 }
                             }
@@ -1794,18 +1896,29 @@ slint::slint! {
                             }
                             if root.sidebar-tab == 1 && root.outline-items.length > 0 : ListView {
                                 for item[index] in root.outline-items : Rectangle {
-                                    height: 34px;
-                                    border-radius: 5px;
+                                    height: 32px;
+                                    border-radius: ThemeTokens.control-radius;
                                     background: outline-touch.has-hover ? ThemeTokens.control-hover : #00000000;
                                     outline-touch := TouchArea { clicked => { root.request-toggle-outline(index); } }
                                     HorizontalLayout {
-                                        padding-left: 7px + item.depth * 14px; padding-right: 7px; spacing: 5px;
+                                        padding-left: 8px + item.depth * 16px;
+                                        padding-right: 8px;
+                                        spacing: 6px;
                                         if item.has-children : Image {
                                             source: item.expanded ? @image-url("../../../assets/icons/chevron_down_20_regular.svg") : @image-url("../../../assets/icons/chevron_right_16_regular.svg");
-                                            width: 16px; height: 16px; colorize: ThemeTokens.text-muted; image-fit: contain;
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ThemeTokens.text-muted;
+                                            image-fit: contain;
                                         }
-                                        if !item.has-children : Rectangle { width: 16px; }
-                                        Text { text: item.title; color: item.page-index >= 0 ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                        if !item.has-children : Rectangle { width: 14px; }
+                                        Text {
+                                            text: item.title;
+                                            color: item.page-index >= 0 ? ThemeTokens.text : ThemeTokens.text-muted;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
                                     }
                                 }
                             }
@@ -1825,33 +1938,133 @@ slint::slint! {
                     }
 
                     if !root.has-document && !root.password-required : VerticalLayout {
-                        alignment: center; spacing: 12px;
+                        alignment: center;
+                        spacing: 0px;
+
                         HorizontalLayout {
-                            height: 40px; alignment: center;
-                            Image { source: @image-url("../../../assets/logo.svg"); width: 40px; height: 40px; image-fit: contain; }
-                        }
-                        Text { text: "BarePDF"; color: ThemeTokens.text-muted; font-size: 12px; font-weight: 650; horizontal-alignment: center; }
-                        Text { text: root.text-empty-title; color: ThemeTokens.text; font-size: 24px; font-weight: 700; horizontal-alignment: center; }
-                        Text { text: root.text-empty-desc; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; }
-                        Rectangle { height: 4px; }
-                        HorizontalLayout {
-                            height: 36px; alignment: center;
+                            alignment: center;
+
                             Rectangle {
-                                width: 132px; height: ThemeTokens.control-height; border-radius: ThemeTokens.control-radius; background: ThemeTokens.accent;
-                                border-width: 1px; border-color: #d87912;
-                                TouchArea { clicked => { root.request-open-file(); } }
-                                Text { text: root.text-open; color: ThemeTokens.accent-content; font-size: 12px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
-                            }
-                        }
-                        if root.recent-files.length > 0 : Text { text: root.text-recent; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; }
-                        for recent in root.recent-files : HorizontalLayout {
-                            height: 34px; alignment: center;
-                            Rectangle {
-                                width: 360px; height: 34px; border-radius: 6px;
-                                background: recent-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.panel;
-                                border-width: 1px; border-color: ThemeTokens.border;
-                                recent-touch := TouchArea { clicked => { root.request-open-recent(recent.path); } }
-                                Text { x: 12px; width: parent.width - 24px; text: recent.name; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                width: Math.min(parent.width - 48px, 460px);
+                                background: ThemeTokens.panel;
+                                border-radius: ThemeTokens.flyout-radius;
+                                border-width: 1px;
+                                border-color: ThemeTokens.border;
+
+                                VerticalLayout {
+                                    padding: 24px;
+                                    spacing: 16px;
+
+                                    // Header with Logo
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 12px;
+                                        Image {
+                                            source: @image-url("../../../assets/logo.svg");
+                                            width: 38px;
+                                            height: 38px;
+                                            image-fit: contain;
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 2px;
+                                            Text {
+                                                text: "BarePDF";
+                                                color: ThemeTokens.accent;
+                                                font-size: 13px;
+                                                font-weight: 700;
+                                            }
+                                            Text {
+                                                text: root.text-empty-title;
+                                                color: ThemeTokens.text;
+                                                font-size: 18px;
+                                                font-weight: 700;
+                                            }
+                                        }
+                                    }
+
+                                    // Drop Zone Card
+                                    drop-card := Rectangle {
+                                        height: 96px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent.with-alpha(0.08) : ThemeTokens.window;
+                                        border-width: 1px;
+                                        border-color: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.border;
+
+                                        drop-card-touch := TouchArea {
+                                            clicked => { root.request-open-file(); }
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 6px;
+                                            Image {
+                                                source: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+                                                width: 26px;
+                                                height: 26px;
+                                                colorize: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.text-muted;
+                                                image-fit: contain;
+                                                horizontal-alignment: center;
+                                            }
+                                            Text {
+                                                text: root.text-empty-desc;
+                                                color: ThemeTokens.text-muted;
+                                                font-size: 12px;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    // Prominent Open File CTA Button
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        TextButton {
+                                            text: root.text-open;
+                                            primary: true;
+                                            clicked => { root.request-open-file(); }
+                                        }
+                                    }
+
+                                    // Recent Files List
+                                    if root.recent-files.length > 0 : VerticalLayout {
+                                        spacing: 8px;
+                                        Rectangle { height: 1px; background: ThemeTokens.border; }
+                                        Text {
+                                            text: root.text-recent;
+                                            color: ThemeTokens.text-muted;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                        }
+                                        for recent in root.recent-files : Rectangle {
+                                            height: 34px;
+                                            border-radius: ThemeTokens.control-radius;
+                                            background: recent-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
+                                            border-width: 1px;
+                                            border-color: recent-touch.has-hover ? ThemeTokens.border : #00000000;
+                                            recent-touch := TouchArea { clicked => { root.request-open-recent(recent.path); } }
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                Image {
+                                                    source: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    colorize: ThemeTokens.text-muted;
+                                                    image-fit: contain;
+                                                }
+                                                Text {
+                                                    text: recent.name;
+                                                    color: ThemeTokens.text;
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                    horizontal-stretch: 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1863,8 +2076,9 @@ slint::slint! {
                             width: root.page-display-width; height: root.page-display-height;
                             x: Math.max(24px, (parent.viewport-width - self.width) / 2);
                             y: Math.max(24px, (parent.viewport-height - self.height) / 2);
-                            background: white; border-radius: ThemeTokens.page-radius; border-width: 1px; border-color: #00000020;
-                            drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
+                            background: white; border-radius: ThemeTokens.page-radius;
+                            border-width: 1px;
+                            border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
                             if root.visible-pages.length > 0 : Rectangle {
                                 for box in root.visible-pages[0].selection-boxes : Rectangle {
@@ -1888,8 +2102,9 @@ slint::slint! {
                         for page in root.visible-pages : Rectangle {
                             width: page.width; height: page.height;
                             x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
-                            background: white; border-radius: ThemeTokens.page-radius; border-width: 1px; border-color: #00000020;
-                            drop-shadow-blur: ThemeTokens.dark ? 6px : 4px; drop-shadow-color: #52616e24;
+                            background: white; border-radius: ThemeTokens.page-radius;
+                            border-width: 1px;
+                            border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
                             TouchArea {
@@ -2191,11 +2406,42 @@ slint::slint! {
             }
 
             if root.window-mode != 1 : Rectangle {
-                height: 28px; background: ThemeTokens.surface-command; border-width: 1px; border-color: ThemeTokens.border;
+                height: 24px;
+                background: ThemeTokens.surface-command;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
                 HorizontalLayout {
-                    padding-left: 11px; padding-right: 11px; alignment: space-between;
-                    Text { text: root.status-text; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; overflow: elide; accessible-role: text; accessible-label: root.status-text; }
-                    Text { text: root.has-document ? root.view-mode-label : ""; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    alignment: space-between;
+                    Text {
+                        text: root.status-text;
+                        color: ThemeTokens.text-muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        accessible-role: text;
+                        accessible-label: root.status-text;
+                    }
+                    if root.has-document : Rectangle {
+                        height: 18px;
+                        border-radius: 4px;
+                        background: ThemeTokens.control;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 4px;
+                            Text {
+                                text: root.current-page-str + " / " + root.total-pages-str + " • " + root.view-mode-label;
+                                color: ThemeTokens.text-muted;
+                                font-size: 10px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
                 }
             }
         }
