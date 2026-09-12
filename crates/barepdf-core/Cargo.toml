@@ -11,5 +11,6 @@ description = "Core domain types, layout algorithms, commands, and preferences f
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
 barepdf-i18n = { path = "../barepdf-i18n" }
 

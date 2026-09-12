@@ -1,0 +1,90 @@
+import { ThemeTokens } from "../tokens.slint";
+import { TextButton } from "../components/button.slint";
+
+export component PreferencesDialog inherits Rectangle {
+    in property <bool> is-open: false;
+    in property <int> current-language: 0;
+    in property <int> current-theme: 0;
+    in property <int> current-paper-tint: 0;
+    callback close();
+    callback change-language(int);
+    callback change-theme(int);
+    callback change-paper-tint(int);
+
+    visible: root.is-open;
+    background: #0000008a;
+
+    TouchArea { clicked => { } }
+
+    Rectangle {
+        width: Math.min(parent.width - 32px, 480px);
+        height: 380px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: ThemeTokens.surface-modal;
+        border-radius: ThemeTokens.flyout-radius;
+        border-width: 1px;
+        border-color: ThemeTokens.border;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Preferences";
+                    color: ThemeTokens.text;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                TextButton {
+                    text: "✕";
+                    clicked => { root.close(); }
+                }
+            }
+
+            Rectangle { height: 1px; background: ThemeTokens.border; }
+
+            // Theme selector
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "Theme"; color: ThemeTokens.text-muted; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TextButton { text: "System"; active: root.current-theme == 0; clicked => { root.change-theme(0); } }
+                    TextButton { text: "Light"; active: root.current-theme == 1; clicked => { root.change-theme(1); } }
+                    TextButton { text: "Dark"; active: root.current-theme == 2; clicked => { root.change-theme(2); } }
+                }
+            }
+
+            // Paper Tint selector
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "Paper Tint (Reading Comfort)"; color: ThemeTokens.text-muted; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TextButton { text: "Normal"; active: root.current-paper-tint == 0; clicked => { root.change-paper-tint(0); } }
+                    TextButton { text: "Sepia"; active: root.current-paper-tint == 1; clicked => { root.change-paper-tint(1); } }
+                    TextButton { text: "Night"; active: root.current-paper-tint == 2; clicked => { root.change-paper-tint(2); } }
+                    TextButton { text: "Amber"; active: root.current-paper-tint == 3; clicked => { root.change-paper-tint(3); } }
+                }
+            }
+
+            // Language selector
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "Language"; color: ThemeTokens.text-muted; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TextButton { text: "System"; active: root.current-language == 0; clicked => { root.change-language(0); } }
+                    TextButton { text: "English"; active: root.current-language == 1; clicked => { root.change-language(1); } }
+                    TextButton { text: "Türkçe"; active: root.current-language == 2; clicked => { root.change-language(2); } }
+                }
+            }
+        }
+    }
+}

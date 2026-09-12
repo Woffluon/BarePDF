@@ -1,0 +1,100 @@
+import { ThemeTokens } from "../tokens.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component CommandPalette inherits Rectangle {
+    in-out property <string> search-query: "";
+    in property <bool> is-open: false;
+    in property <[string]> command-titles: [];
+    in property <[string]> command-subtitles: [];
+    callback close();
+    callback execute-command(string);
+    callback command-selected(int);
+
+    visible: root.is-open;
+    z: 1000;
+
+    // Dim background overlay
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000066;
+
+        TouchArea {
+            clicked => { root.close(); }
+        }
+    }
+
+    // Modal popup
+    Rectangle {
+        width: Math.min(parent.width - 32px, 520px);
+        height: Math.min(parent.height - 64px, 360px);
+        x: (parent.width - self.width) / 2;
+        y: Math.max(48px, (parent.height - self.height) / 3);
+        border-radius: ThemeTokens.flyout-radius;
+        background: ThemeTokens.surface-modal;
+        border-width: 1px;
+        border-color: ThemeTokens.border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000055;
+
+        VerticalLayout {
+            padding: ThemeTokens.space-3;
+            spacing: ThemeTokens.space-2;
+
+            HorizontalLayout {
+                spacing: ThemeTokens.space-2;
+                alignment: center;
+
+                Text {
+                    text: ">";
+                    color: ThemeTokens.accent;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                input := LineEdit {
+                    text <=> root.search-query;
+                    placeholder-text: "Type a command or page number (e.g. 42, sepia, print)…";
+                    accepted => { root.execute-command(root.search-query); }
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: ThemeTokens.border;
+            }
+
+            // Command suggestions list
+            for title[idx] in root.command-titles : Rectangle {
+                height: 36px;
+                border-radius: ThemeTokens.control-radius;
+                background: item-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+
+                HorizontalLayout {
+                    padding-left: ThemeTokens.space-2;
+                    padding-right: ThemeTokens.space-2;
+                    alignment: space-between;
+
+                    Text {
+                        text: title;
+                        color: item-touch.has-hover ? ThemeTokens.accent : ThemeTokens.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+
+                    if idx < root.command-subtitles.length : Text {
+                        text: root.command-subtitles[idx];
+                        color: ThemeTokens.text-muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                item-touch := TouchArea {
+                    clicked => { root.command-selected(idx); }
+                }
+            }
+        }
+    }
+}

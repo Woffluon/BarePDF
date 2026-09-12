@@ -1,8 +1,27 @@
+use std::path::PathBuf;
+
 use crate::types::{ReadingDirection, ViewingMode, ZoomMode};
 use crate::MAX_RECENT_FILES;
 use serde::{Deserialize, Serialize};
 
 use barepdf_i18n::Language;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentSession {
+    pub path: PathBuf,
+    pub page_index: u32,
+    pub scroll_y: f32,
+    pub zoom_mode: ZoomMode,
+    #[serde(default)]
+    pub bookmarks: Vec<BookmarkEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BookmarkEntry {
+    pub page_index: u32,
+    pub title: String,
+    pub created_unix: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeMode {
@@ -30,6 +49,9 @@ pub struct UserPreferences {
     pub enhanced_ui: bool,
     pub update_checks_enabled: Option<bool>,
     pub last_update_check_unix: Option<u64>,
+    pub active_tab_index: usize,
+    pub open_tabs: Vec<DocumentSession>,
+    pub paper_tint: u8,
 }
 
 impl Default for UserPreferences {
@@ -48,6 +70,9 @@ impl Default for UserPreferences {
             enhanced_ui: false,
             update_checks_enabled: None,
             last_update_check_unix: None,
+            active_tab_index: 0,
+            open_tabs: Vec::new(),
+            paper_tint: 0,
         }
     }
 }
@@ -101,5 +126,7 @@ mod tests {
         let preferences = UserPreferences::default();
 
         assert!(!preferences.enhanced_ui);
+        assert_eq!(preferences.paper_tint, 0);
+        assert!(preferences.open_tabs.is_empty());
     }
 }

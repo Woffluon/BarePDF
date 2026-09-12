@@ -1,0 +1,129 @@
+import { ThemeTokens } from "../tokens.slint";
+import { IconButton } from "../components/icon_button.slint";
+import { TextButton } from "../components/button.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component PrintPreviewDialog inherits Rectangle {
+    in-out property <int> page: 0;
+    in-out property <string> range: "";
+    in-out property <int> orientation: 0;
+    in property <image> image;
+    in property <bool> has-image: false;
+    in property <string> total-pages: "0";
+    in property <string> text-title: "";
+    in property <string> text-cancel-tooltip: "";
+    in property <string> text-empty: "";
+    in property <string> text-page: "";
+    in property <string> text-previous: "";
+    in property <string> text-next: "";
+    in property <string> text-page-range: "";
+    in property <string> text-range-placeholder: "";
+    in property <string> text-range-accessible: "";
+    in property <string> text-orientation: "";
+    in property <string> text-orientation-auto: "";
+    in property <string> text-orientation-portrait: "";
+    in property <string> text-orientation-landscape: "";
+    in property <string> text-cancel: "";
+    in property <string> text-continue: "";
+    callback previous();
+    callback next();
+    callback range-changed(string);
+    callback orientation-changed(int);
+    callback confirm();
+    callback cancel();
+
+    background: #0000008a;
+    forward-focus: dialog-focus;
+    TouchArea { clicked => { } }
+
+    dialog-focus := FocusScope {
+        width: Math.min(parent.width - 32px, 620px);
+        height: Math.min(parent.height - 32px, 540px);
+        key-pressed(event) => {
+            if (event.text == "\u{001b}") { root.cancel(); return accept; }
+            return reject;
+        }
+
+        Rectangle {
+            background: ThemeTokens.surface-modal;
+            border-radius: ThemeTokens.flyout-radius;
+            border-width: 1px;
+            border-color: ThemeTokens.border;
+            accessible-role: groupbox;
+            accessible-label: root.text-title;
+            drop-shadow-blur: ThemeTokens.effects-active ? 20px : 14px;
+            drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+            drop-shadow-color: ThemeTokens.warm-shadow;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+
+                HorizontalLayout {
+                    height: 28px;
+                    Text { text: root.text-title; color: ThemeTokens.text; font-size: 18px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                    IconButton { icon: @image-url("../../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-cancel-tooltip; clicked => { root.cancel(); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 18px;
+                    Rectangle {
+                        width: Math.min(320px, parent.width * 0.56);
+                        background: ThemeTokens.canvas;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        Rectangle {
+                            width: Math.min(parent.width - 28px, 248px);
+                            height: Math.min(parent.height - 28px, 338px);
+                            border-radius: ThemeTokens.page-radius;
+                            background: white;
+                            border-width: 1px;
+                            border-color: #00000020;
+                            if root.has-image : Image { source: root.image; width: 100%; height: 100%; image-fit: contain; }
+                            if !root.has-image : Text { text: root.text-empty; color: #626972; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 9px;
+                        Text { text: root.text-page + " " + (root.page + 1) + " / " + root.total-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            TextButton { text: root.text-previous; enabled: root.page > 0; clicked => { root.previous(); } }
+                            TextButton { text: root.text-next; enabled: root.page + 1 < root.total-pages.to-float(); clicked => { root.next(); } }
+                        }
+                        Text { text: root.text-page-range; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                        LineEdit {
+                            text <=> root.range;
+                            placeholder-text: root.text-range-placeholder;
+                            accessible-label: root.text-range-accessible;
+                            accepted => { root.range-changed(root.range); }
+                            changed text => { root.range-changed(self.text); }
+                        }
+                        Text { text: root.text-orientation; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 5px;
+                            TextButton { text: root.text-orientation-auto; active: root.orientation == 0; clicked => { root.orientation = 0; root.orientation-changed(0); } }
+                            TextButton { text: root.text-orientation-portrait; active: root.orientation == 1; clicked => { root.orientation = 1; root.orientation-changed(1); } }
+                            TextButton { text: root.text-orientation-landscape; active: root.orientation == 2; clicked => { root.orientation = 2; root.orientation-changed(2); } }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: ThemeTokens.space-2;
+                    alignment: end;
+                    TextButton { text: root.text-cancel; clicked => { root.cancel(); } }
+                    TextButton { text: root.text-continue; primary: true; clicked => { root.confirm(); } }
+                }
+            }
+
+            Rectangle {
+                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                border-radius: ThemeTokens.flyout-radius - 1px;
+                border-width: ThemeTokens.effects-active ? 1px : 0px;
+                border-color: ThemeTokens.inner-highlight;
+            }
+        }
+    }
+}

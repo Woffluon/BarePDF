@@ -1,0 +1,138 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component ZenOverlay inherits Rectangle {
+    in property <bool> is-zen: false;
+    in property <string> page-info: "";
+    in property <bool> can-prev: true;
+    in property <bool> can-next: true;
+    callback exit-zen();
+    callback prev-page();
+    callback next-page();
+    callback zoom-in();
+    callback zoom-out();
+
+    visible: root.is-zen;
+    z: 900;
+
+    // Floating Capsule HUD at bottom
+    Rectangle {
+        y: parent.height - self.height - 24px;
+        x: (parent.width - self.width) / 2;
+        width: 320px;
+        height: 44px;
+        border-radius: 22px;
+        background: ThemeTokens.surface-modal;
+        border-width: 1px;
+        border-color: ThemeTokens.border;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000066;
+
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            alignment: space-between;
+
+            // Previous button
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: prev-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                Text {
+                    text: "◀";
+                    color: root.can-prev ? ThemeTokens.text : ThemeTokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                prev-touch := TouchArea {
+                    clicked => { if root.can-prev { root.prev-page(); } }
+                }
+            }
+
+            // Page info
+            Text {
+                text: root.page-info;
+                color: ThemeTokens.text;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+
+            // Next button
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: next-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                Text {
+                    text: "▶";
+                    color: root.can-next ? ThemeTokens.text : ThemeTokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                next-touch := TouchArea {
+                    clicked => { if root.can-next { root.next-page(); } }
+                }
+            }
+
+            // Zoom Out
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: zout-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                Text {
+                    text: "−";
+                    color: ThemeTokens.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                zout-touch := TouchArea {
+                    clicked => { root.zoom-out(); }
+                }
+            }
+
+            // Zoom In
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: zin-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                Text {
+                    text: "+";
+                    color: ThemeTokens.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                zin-touch := TouchArea {
+                    clicked => { root.zoom-in(); }
+                }
+            }
+
+            // Exit Zen button
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: exit-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                Text {
+                    text: "✕";
+                    color: ThemeTokens.accent;
+                    font-size: 12px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                exit-touch := TouchArea {
+                    clicked => { root.exit-zen(); }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,46 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    callback clicked();
+    height: ThemeTokens.control-height;
+    min-width: 52px;
+    border-radius: ThemeTokens.control-radius;
+    background: !enabled ? #00000000
+        : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
+        : active ? ThemeTokens.selection
+        : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control));
+    border-width: enabled ? 1px : 0px;
+    border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: root.enabled;
+    animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
+    touch := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.clicked(); } }
+    focus-scope := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled <=> root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    Text {
+        text: root.text;
+        color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
+            : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
+        font-size: 12px;
+        font-weight: active ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if focus-scope.has-focus && root.enabled : Rectangle {
+        border-width: ThemeTokens.focus-width;
+        border-color: ThemeTokens.focus;
+        border-radius: root.border-radius;
+    }
+}

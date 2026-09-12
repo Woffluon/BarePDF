@@ -1,5 +1,5 @@
 use crate::error::RenderError;
-use barepdf_core::{DocumentId, PageIndex, RequestId, Rotation};
+use barepdf_core::{DocumentId, PageIndex, RequestId, Rotation, SecretPassword};
 use barepdf_pdf::{OutlineNode, RawBitmap, TextSpan};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,7 +59,7 @@ pub enum RenderCommand {
     OpenDocument {
         document_id: DocumentId,
         path: PathBuf,
-        password: Option<String>,
+        password: Option<SecretPassword>,
     },
     RenderPage(RenderJob),
     ExtractText {

@@ -1,11 +1,10 @@
-use barepdf_core::{PageCount, PageIndex, PageRangeSelection, PdfError, Rotation};
+use barepdf_core::{PageCount, PageIndex, PageRangeSelection, PdfError, Rotation, SecretPassword};
 use barepdf_pdf::conversion::{
     convert_pdf, CancellationToken, ConversionDpi, ConversionFormat, ConversionReport,
     ConversionRequest, JobPassword,
 };
 use barepdf_pdf::{PdfBackend, PdfOperationInput, PdfOperations, PdfiumEngine};
 use barepdf_platform_windows::WindowsImageEncoder;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -37,43 +36,6 @@ impl ToolJobKey {
     #[must_use]
     pub(crate) const fn is_current(self, generation: u64, source_token: u64) -> bool {
         self.generation == generation && self.source_token == source_token
-    }
-}
-
-pub(crate) struct SecretPassword {
-    bytes: Vec<u8>,
-}
-
-impl SecretPassword {
-    fn new(password: String) -> Self {
-        Self {
-            bytes: password.into_bytes(),
-        }
-    }
-
-    fn expose(&self) -> &str {
-        std::str::from_utf8(&self.bytes).unwrap_or_default()
-    }
-
-    fn clear(&mut self) {
-        self.bytes.fill(0);
-    }
-
-    #[cfg(test)]
-    fn bytes_for_test(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl fmt::Debug for SecretPassword {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SecretPassword([REDACTED])")
-    }
-}
-
-impl Drop for SecretPassword {
-    fn drop(&mut self) {
-        self.clear();
     }
 }
 
@@ -553,8 +515,8 @@ fn clear_current_cancellation(current: &Mutex<Option<CancellationToken>>) {
 }
 
 fn clear_rejected_password(password: String) {
-    let mut bytes = password.into_bytes();
-    bytes.fill(0);
+    let mut secret = SecretPassword::new(password);
+    secret.clear();
 }
 
 fn execute_request(request: &mut ToolRequest) -> ExecutionResult {

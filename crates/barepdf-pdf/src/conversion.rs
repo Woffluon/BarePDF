@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use barepdf_core::{validate_page_selection, MemoryBudget, PageIndex, PdfError, Rotation};
+use barepdf_core::{
+    validate_page_selection, MemoryBudget, PageIndex, PdfError, Rotation, SecretPassword,
+};
 
 use crate::backend::{PdfBackend, RawBitmap};
 use crate::text;
@@ -91,32 +93,40 @@ pub trait ImageEncoder: Send + Sync {
     ) -> Result<(), ImageEncodeError>;
 }
 
-pub struct JobPassword {
-    bytes: Vec<u8>,
-}
+#[derive(Clone, PartialEq, Eq)]
+pub struct JobPassword(SecretPassword);
 
 impl JobPassword {
     #[must_use]
-    pub fn new(password: String) -> Self {
-        Self {
-            bytes: password.into_bytes(),
-        }
+    pub fn new(password: impl Into<String>) -> Self {
+        Self(SecretPassword::new(password.into()))
     }
 
-    fn expose(&self) -> &str {
-        std::str::from_utf8(&self.bytes).unwrap_or_default()
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0.expose()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub fn bytes_for_test(&self) -> &[u8] {
+        self.0.bytes_for_test()
     }
 }
 
-impl fmt::Debug for JobPassword {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("JobPassword([REDACTED])")
-    }
-}
-
-impl Drop for JobPassword {
-    fn drop(&mut self) {
-        self.bytes.fill(0);
+impl std::fmt::Debug for JobPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("JobPassword")
+            .field(&format_args!("[REDACTED]"))
+            .finish()
     }
 }
 
@@ -643,7 +653,7 @@ mod tests {
     #[test]
     fn clearing_password_overwrites_its_utf8_buffer() {
         let mut password = JobPassword::new("sensitive".to_owned());
-        password.bytes.fill(0);
-        assert!(password.bytes.iter().all(|byte| *byte == 0));
+        password.clear();
+        assert!(password.bytes_for_test().is_empty());
     }
 }

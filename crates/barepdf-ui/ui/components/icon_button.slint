@@ -1,0 +1,79 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label: "";
+    in property <string> tooltip: label;
+    in property <bool> show-label: false;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: ThemeTokens.control-height;
+    min-width: show-label ? 42px : ThemeTokens.control-height;
+    border-radius: ThemeTokens.control-radius;
+    background: !enabled ? #00000000
+        : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
+        : active ? ThemeTokens.selection
+        : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
+    border-width: enabled && (primary || active || touch.has-hover) ? 1px : 0px;
+    border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
+    accessible-role: button;
+    accessible-label: tooltip;
+    accessible-enabled: root.enabled;
+    animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus-scope.focus(); root.clicked(); }
+    }
+
+    focus-scope := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled <=> root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        height: root.height;
+        padding-left: root.show-label ? 10px : ThemeTokens.space-2;
+        padding-right: root.show-label ? 11px : ThemeTokens.space-2;
+        spacing: root.show-label ? 7px : 0px;
+        alignment: center;
+
+        Rectangle {
+            width: 20px;
+            height: parent.height;
+            Image {
+                source: root.icon;
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                colorize: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.45)
+                    : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+        if root.show-label : Text {
+            height: parent.height;
+            text: root.label;
+            color: root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    if focus-scope.has-focus && root.enabled : Rectangle {
+        border-width: ThemeTokens.focus-width;
+        border-color: ThemeTokens.focus;
+        border-radius: root.border-radius;
+    }
+}

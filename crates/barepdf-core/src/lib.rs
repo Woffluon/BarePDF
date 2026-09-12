@@ -4,6 +4,7 @@ pub mod error;
 pub mod layout;
 pub mod limits;
 pub mod page_range;
+pub mod password;
 pub mod preferences;
 pub mod selection;
 pub mod types;
@@ -20,6 +21,7 @@ pub use limits::{
 pub use page_range::{
     pages_to_remove_to_retained_pages, validate_page_selection, PageRangeError, PageRangeSelection,
 };
-pub use preferences::{ThemeMode, UserPreferences};
+pub use password::SecretPassword;
+pub use preferences::{BookmarkEntry, DocumentSession, ThemeMode, UserPreferences};
 pub use selection::SelectionEngine;
 pub use types::*;

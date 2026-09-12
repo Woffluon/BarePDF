@@ -25,9 +25,9 @@ use crate::infrastructure::{
 };
 
 use barepdf_core::{
-    ContinuousLayout, DocumentId, MemoryBudget, PageIndex, PdfError, RequestId, ThemeMode,
-    UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode, MAX_DOCUMENT_PAGES,
-    MAX_OPEN_TABS, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+    ContinuousLayout, DocumentId, DocumentSession, MemoryBudget, PageIndex, PdfError, RequestId,
+    SecretPassword, ThemeMode, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
+    MAX_DOCUMENT_PAGES, MAX_OPEN_TABS, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
@@ -168,6 +168,20 @@ pub(crate) fn run() -> Result<(), AppError> {
         if path.is_file() {
             begin_open(path, None, &state, &scheduler, &window);
         }
+    } else if !state.borrow().preferences.open_tabs.is_empty() {
+        let saved_tabs = state.borrow().preferences.open_tabs.clone();
+        let active_index = state.borrow().preferences.active_tab_index;
+        for session in saved_tabs {
+            if session.path.is_file() {
+                begin_open(session.path, None, &state, &scheduler, &window);
+            }
+        }
+        let tabs_len = state.borrow().application.tabs.tabs().len();
+        if tabs_len > 0 && active_index < tabs_len {
+            let tab_id = state.borrow().application.tabs.tabs()[active_index].id;
+            state.borrow_mut().application.tabs.activate(tab_id);
+            super::models::refresh_tab_model(&state.borrow(), &window);
+        }
     }
 
     let timer = Rc::new(Timer::default());
@@ -200,11 +214,37 @@ pub(crate) fn run() -> Result<(), AppError> {
     let mut app = state.borrow_mut();
     app.preferences.last_window_width = ((size.width as f32) / scale).round() as u32;
     app.preferences.last_window_height = ((size.height as f32) / scale).round() as u32;
+    let (sessions, active_index) = snapshot_sessions(&app);
+    app.preferences.open_tabs = sessions;
+    app.preferences.active_tab_index = active_index;
     persist_preferences(&app.preferences, &preferences_path, None);
     Ok(())
 }
 
+pub(super) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize) {
+    let active_id = app.application.tabs.active_id();
+    let mut active_index = 0;
+    let mut sessions = Vec::new();
+    for tab in app.application.tabs.tabs() {
+        if let Some(path) = &tab.path {
+            if Some(tab.id) == active_id {
+                active_index = sessions.len();
+            }
+            sessions.push(DocumentSession {
+                path: path.clone(),
+                page_index: tab.view.current_page.get(),
+                scroll_y: tab.view.scroll_y,
+                zoom_mode: tab.view.zoom_mode,
+                bookmarks: Vec::new(),
+            });
+        }
+    }
+    (sessions, active_index)
+}
+
 fn initialize_window(window: &AppWindow, state: &AppState) {
+    let model = super::model::AppModel::from_app_state(state, window);
+    super::view_binder::sync_model_to_window(&model, window);
     window.set_sidebar_visible(state.preferences.sidebar_visible);
     window.set_current_language(language_index(state.preferences.language));
     window.set_view_mode(view_mode_index(state.viewing_mode));
@@ -222,6 +262,7 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     window.set_system_reduce_effects(reduce_visual_effects());
     window.set_zoom_mode(zoom_mode_index(state.zoom_mode));
     window.set_zoom_str(SharedString::from(zoom_percentage(state.zoom_factor)));
+    window.set_paper_tint(i32::from(state.preferences.paper_tint));
     render_update_ui(window, state);
 }
 
@@ -601,7 +642,7 @@ pub(super) fn handle_render_event(
 
 pub(super) fn begin_open(
     path: PathBuf,
-    password: Option<String>,
+    password: Option<SecretPassword>,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
     window: &AppWindow,

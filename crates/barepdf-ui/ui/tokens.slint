@@ -1,0 +1,60 @@
+import { Palette } from "std-widgets.slint";
+
+export global ThemeTokens {
+    in-out property <int> theme-mode: 0;
+    in-out property <bool> enhanced: false;
+    in-out property <bool> system-reduce-effects: false;
+    in-out property <int> paper-tint: 0; // 0: Normal, 1: Sepia, 2: Night, 3: Amber
+    out property <bool> effects-active: enhanced && !system-reduce-effects;
+    out property <bool> motion-active: effects-active;
+    changed theme-mode => {
+        Palette.color-scheme = theme-mode == 1 ? ColorScheme.light
+            : (theme-mode == 2 ? ColorScheme.dark : ColorScheme.unknown);
+    }
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
+    // Windows 11 Fluent 2 "Warm Slate & Warm Amber" Palette
+    out property <color> window: dark ? #0c0e12 : #f5f6f8;
+    out property <color> command: dark ? #13161c : #ffffff;
+    out property <color> panel: dark ? #171a22 : #ffffff;
+    out property <color> panel-elevated: dark ? #1e222b : #fbfcfd;
+    out property <color> canvas: paper-tint == 1 ? #f4ecd8
+        : (paper-tint == 2 ? #111111
+        : (paper-tint == 3 ? #1a1600
+        : (dark ? #090b0e : #e9ecf0)));
+    out property <color> control: dark ? rgb(32, 37, 46) : #f7f8fa;
+    out property <color> control-hover: dark ? #2a303a : #eef1f4;
+    out property <color> control-pressed: dark ? #343a45 : #e3e7ec;
+    out property <color> text: dark ? #f3f4f6 : #181a1f;
+    out property <color> text-muted: dark ? #a3aab4 : #5f6670;
+    out property <color> border: dark ? #343a45 : #d5dae1;
+    out property <color> accent: #f69423; // BarePDF Warm Amber
+    out property <color> accent-hover: #faad52;
+    out property <color> accent-content: #181105;
+    out property <color> selection: dark ? #f6942326 : #f694231f;
+    out property <color> danger: dark ? #ffb4ab : #b42318;
+    out property <color> focus: dark ? #f6a14a : #9a4100;
+    out property <color> surface-command: effects-active ? command.with-alpha(0.94) : command;
+    out property <color> surface-flyout: effects-active ? panel-elevated.with-alpha(0.95) : panel-elevated;
+    out property <color> surface-modal: effects-active ? panel.with-alpha(0.94) : panel;
+    out property <color> inner-highlight: effects-active ? (dark ? #ffffff18 : #ffffffb8) : #00000000;
+    out property <color> warm-shadow: effects-active ? (dark ? #f6a14a18 : #9a410022) : #00000038;
+
+    // Paper Tinting Colors
+    out property <color> paper-tint-bg: paper-tint == 1 ? #f4ecd8
+        : (paper-tint == 2 ? #111111 : (paper-tint == 3 ? #1a1600 : canvas));
+    out property <color> paper-tint-fg: paper-tint == 1 ? #2c2218
+        : (paper-tint == 2 ? #dcdcdc : (paper-tint == 3 ? #f69423 : text));
+
+    // Spacing & Geometry
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-6: 24px;
+    out property <length> control-height: 34px;
+    out property <length> control-radius: 6px;
+    out property <length> flyout-radius: 10px;
+    out property <length> page-radius: 2px;
+    out property <length> focus-width: 2px;
+}

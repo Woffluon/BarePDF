@@ -23,8 +23,8 @@ use crate::infrastructure::{
 
 use barepdf_core::{
     page_range::PageRangeSelection, selection::SelectionEngine, DocumentId, PageCount, PageIndex,
-    RequestId, Rotation, TextPosition, TextSelection, ViewingMode, WindowMode, ZoomFactor,
-    ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
+    RequestId, Rotation, SecretPassword, TextPosition, TextSelection, ViewingMode, WindowMode,
+    ZoomFactor, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::conversion::{ConversionDpi, ConversionFormat};
@@ -87,6 +87,7 @@ pub(super) fn wire_callbacks(
     connect_tab_callbacks(window, state, scheduler);
     connect_print_callbacks(window, state, scheduler, print_controller);
     connect_tools_callbacks(window, state, scheduler, dialogs);
+    connect_niche_feature_callbacks(window, state, scheduler, preferences_path);
 
     let weak = window.as_weak();
     let state_password = state.clone();
@@ -106,7 +107,7 @@ pub(super) fn wire_callbacks(
         let path = DocumentController::pending_path(&state_password.borrow().application)
             .map(Path::to_path_buf);
         if let (Some(path), Some(window)) = (path, weak.upgrade()) {
-            let password = password.to_string();
+            let password = SecretPassword::new(password.to_string());
             begin_open(
                 path,
                 Some(password),
@@ -2416,6 +2417,121 @@ fn connect_tools_callbacks(
     window.on_request_cancel_tool_password(move || {
         if let Some(window) = weak.upgrade() {
             cancel_active_tool(&state_cancel_password, &window);
+        }
+    });
+}
+
+fn connect_niche_feature_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    preferences_path: &Path,
+) {
+    let weak = window.as_weak();
+    let state_zen = state.clone();
+    let scheduler_zen = scheduler.clone();
+    let path_zen = preferences_path.to_path_buf();
+    window.on_request_toggle_zen_mode(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut model = super::model::AppModel::from_app_state(&state_zen.borrow(), &window);
+        if let Some(cmd) = super::update(&mut model, super::message::Msg::ToggleZenMode) {
+            super::view_binder::execute_command_effect(
+                cmd,
+                &model,
+                &state_zen,
+                &scheduler_zen,
+                &window,
+                &path_zen,
+            );
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_pal = state.clone();
+    window.on_request_toggle_command_palette(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut model = super::model::AppModel::from_app_state(&state_pal.borrow(), &window);
+        let _ = super::update(&mut model, super::message::Msg::ToggleCommandPalette);
+        super::view_binder::sync_hud_palette(&model, &window);
+    });
+
+    let weak = window.as_weak();
+    let state_cmd = state.clone();
+    let scheduler_cmd = scheduler.clone();
+    let path_cmd = preferences_path.to_path_buf();
+    window.on_request_execute_command(move |query| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut model = super::model::AppModel::from_app_state(&state_cmd.borrow(), &window);
+        if let Some(cmd) = super::update(
+            &mut model,
+            super::message::Msg::ExecuteCommand(query.to_string()),
+        ) {
+            super::view_binder::execute_command_effect(
+                cmd,
+                &model,
+                &state_cmd,
+                &scheduler_cmd,
+                &window,
+                &path_cmd,
+            );
+        }
+        window.set_command_palette_open(false);
+    });
+
+    let weak = window.as_weak();
+    let state_sel = state.clone();
+    let scheduler_sel = scheduler.clone();
+    let path_sel = preferences_path.to_path_buf();
+    window.on_request_command_selected(move |idx| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut model = super::model::AppModel::from_app_state(&state_sel.borrow(), &window);
+        let matching = super::hud_commands::filter_hud_commands(&model.command_palette_query);
+        if let Some(item) = matching.get(idx as usize) {
+            if let Some(cmd) = super::update(
+                &mut model,
+                super::message::Msg::ExecuteCommand(item.id.to_string()),
+            ) {
+                super::view_binder::execute_command_effect(
+                    cmd,
+                    &model,
+                    &state_sel,
+                    &scheduler_sel,
+                    &window,
+                    &path_sel,
+                );
+            }
+        }
+        window.set_command_palette_open(false);
+    });
+
+    let weak = window.as_weak();
+    let state_tint = state.clone();
+    let scheduler_tint = scheduler.clone();
+    let path_tint = preferences_path.to_path_buf();
+    window.on_request_set_paper_tint(move |tint| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let color = super::model::PaperTintColor::from_u8(tint as u8);
+        let mut model = super::model::AppModel::from_app_state(&state_tint.borrow(), &window);
+        if let Some(cmd) = super::update(&mut model, super::message::Msg::SetPaperTint(color)) {
+            window.set_paper_tint(tint);
+            super::view_binder::execute_command_effect(
+                cmd,
+                &model,
+                &state_tint,
+                &scheduler_tint,
+                &window,
+                &path_tint,
+            );
         }
     });
 }

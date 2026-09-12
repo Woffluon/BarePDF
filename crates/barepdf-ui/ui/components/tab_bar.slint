@@ -1,0 +1,90 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export struct TabItem {
+    id: int,
+    title: string,
+    is_active: bool,
+    is_loading: bool,
+}
+
+export component DocumentTab inherits Rectangle {
+    in property <TabItem> item;
+    in property <string> close-label;
+    callback activate();
+    callback close();
+
+    width: 164px;
+    height: 28px;
+    border-radius: 6px;
+    background: item.is_active ? ThemeTokens.panel-elevated
+        : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+    border-width: item.is_active ? 1px : 0px;
+    border-color: ThemeTokens.border;
+    accessible-role: tab;
+    accessible-label: item.title;
+
+    tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
+    animate background { duration: ThemeTokens.motion-active ? 80ms : 0ms; }
+    if root.item.is_active : Rectangle {
+        x: 8px;
+        y: parent.height - 2px;
+        width: parent.width - 16px;
+        height: 2px;
+        border-radius: 1px;
+        background: ThemeTokens.accent;
+    }
+    tab-focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") { root.activate(); return accept; }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 5px;
+        spacing: 6px;
+
+        if root.item.is_loading : Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 4px;
+            background: ThemeTokens.accent;
+        }
+        Text {
+            text: root.item.title;
+            color: ThemeTokens.text;
+            font-size: 12px;
+            font-weight: root.item.is_active ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        close-button := Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            background: close-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+            accessible-role: button;
+            accessible-label: root.close-label + " " + root.item.title;
+            close-touch := TouchArea { clicked => { root.close(); } }
+            Image {
+                x: 3px;
+                y: 3px;
+                width: 16px;
+                height: 16px;
+                source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                colorize: ThemeTokens.text-muted;
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+    }
+    if tab-focus.has-focus : Rectangle {
+        border-width: ThemeTokens.focus-width;
+        border-color: ThemeTokens.focus;
+        border-radius: root.border-radius;
+    }
+}

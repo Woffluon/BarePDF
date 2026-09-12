@@ -1,49 +1,17 @@
 slint::slint! {
     import { LineEdit, ListView, Palette, ScrollView } from "std-widgets.slint";
+    import { ThemeTokens } from "../ui/tokens.slint";
+    import { IconButton } from "../ui/components/icon_button.slint";
+    import { TextButton } from "../ui/components/button.slint";
+    import { DocumentTab, TabItem } from "../ui/components/tab_bar.slint";
+    import { CommandPalette } from "../ui/components/command_palette.slint";
+    import { ZenOverlay } from "../ui/views/zen_overlay.slint";
+    import { Scrubber } from "../ui/components/scrubber.slint";
+    import { FilterPill } from "../ui/components/filter_pill.slint";
+    import { PasswordDialog as PasswordPopover } from "../ui/dialogs/password_dialog.slint";
+    import { PrintPreviewDialog as PrintPreview } from "../ui/dialogs/print_preview_dialog.slint";
 
-    export global ThemeTokens {
-        in-out property <int> theme-mode: 0;
-        in-out property <bool> enhanced: false;
-        in-out property <bool> system-reduce-effects: false;
-        out property <bool> effects-active: enhanced && !system-reduce-effects;
-        out property <bool> motion-active: effects-active;
-        changed theme-mode => {
-            Palette.color-scheme = theme-mode == 1 ? ColorScheme.light
-                : (theme-mode == 2 ? ColorScheme.dark : ColorScheme.unknown);
-        }
-        out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-        out property <color> window: dark ? #0c0e12 : #f5f6f8;
-        out property <color> command: dark ? #13161c : #ffffff;
-        out property <color> panel: dark ? #171a22 : #ffffff;
-        out property <color> panel-elevated: dark ? #1e222b : #fbfcfd;
-        out property <color> canvas: dark ? #090b0e : #e9ecf0;
-        out property <color> control: dark ? rgb(32, 37, 46) : #f7f8fa;
-        out property <color> control-hover: dark ? #2a303a : #eef1f4;
-        out property <color> control-pressed: dark ? #343a45 : #e3e7ec;
-        out property <color> text: dark ? #f3f4f6 : #181a1f;
-        out property <color> text-muted: dark ? #a3aab4 : #5f6670;
-        out property <color> border: dark ? #343a45 : #d5dae1;
-        out property <color> accent: #f69423;
-        out property <color> accent-content: #181105;
-        out property <color> selection: dark ? #f6942326 : #f694231f;
-        out property <color> danger: dark ? #ffb4ab : #b42318;
-        out property <color> focus: dark ? #f6a14a : #9a4100;
-        out property <color> surface-command: effects-active ? command.with-alpha(0.94) : command;
-        out property <color> surface-flyout: effects-active ? panel-elevated.with-alpha(0.95) : panel-elevated;
-        out property <color> surface-modal: effects-active ? panel.with-alpha(0.94) : panel;
-        out property <color> inner-highlight: effects-active ? (dark ? #ffffff18 : #ffffffb8) : #00000000;
-        out property <color> warm-shadow: effects-active ? (dark ? #f6a14a18 : #9a410022) : #00000038;
-        out property <length> space-1: 4px;
-        out property <length> space-2: 8px;
-        out property <length> space-3: 12px;
-        out property <length> space-4: 16px;
-        out property <length> space-6: 24px;
-        out property <length> control-height: 34px;
-        out property <length> control-radius: 6px;
-        out property <length> flyout-radius: 10px;
-        out property <length> page-radius: 2px;
-        out property <length> focus-width: 2px;
-    }
+    export { ThemeTokens, TabItem }
 
     export struct SelectionBox {
         x: length,
@@ -84,218 +52,6 @@ slint::slint! {
     export struct RecentFileItem {
         name: string,
         path: string,
-    }
-
-    export struct TabItem {
-        id: int,
-        title: string,
-        is_active: bool,
-        is_loading: bool,
-    }
-
-    component IconButton inherits Rectangle {
-        in property <image> icon;
-        in property <string> label: "";
-        in property <string> tooltip: label;
-        in property <bool> show-label: false;
-        in property <bool> enabled: true;
-        in property <bool> active: false;
-        in property <bool> primary: false;
-        callback clicked();
-
-        height: ThemeTokens.control-height;
-        min-width: show-label ? 42px : ThemeTokens.control-height;
-        border-radius: ThemeTokens.control-radius;
-        background: !enabled ? #00000000
-            : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
-            : active ? ThemeTokens.selection
-            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
-        border-width: enabled && (primary || active || touch.has-hover) ? 1px : 0px;
-        border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
-        accessible-role: button;
-        accessible-label: tooltip;
-        accessible-enabled: root.enabled;
-        animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
-
-        touch := TouchArea {
-            enabled: root.enabled;
-            clicked => { focus-scope.focus(); root.clicked(); }
-        }
-
-        focus-scope := FocusScope {
-            x: 0px;
-            width: 0px;
-            enabled <=> root.enabled;
-            key-pressed(event) => {
-                if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
-                return reject;
-            }
-        }
-
-        HorizontalLayout {
-            height: root.height;
-            padding-left: root.show-label ? 10px : ThemeTokens.space-2;
-            padding-right: root.show-label ? 11px : ThemeTokens.space-2;
-            spacing: root.show-label ? 7px : 0px;
-            alignment: center;
-
-            Rectangle {
-                width: 20px;
-                height: parent.height;
-                Image {
-                    source: root.icon;
-                    width: 20px;
-                    height: 20px;
-                    y: (parent.height - self.height) / 2;
-                    colorize: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.45)
-                        : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
-                    image-fit: contain;
-                    accessible-role: none;
-                }
-            }
-            if root.show-label : Text {
-                height: parent.height;
-                text: root.label;
-                color: root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
-                font-size: 12px;
-                font-weight: 600;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-        }
-
-        if focus-scope.has-focus && root.enabled : Rectangle {
-            border-width: ThemeTokens.focus-width;
-            border-color: ThemeTokens.focus;
-            border-radius: root.border-radius;
-        }
-    }
-
-    component TextButton inherits Rectangle {
-        in property <string> text;
-        in property <bool> active: false;
-        in property <bool> enabled: true;
-        in property <bool> primary: false;
-        callback clicked();
-        height: ThemeTokens.control-height;
-        min-width: 52px;
-        border-radius: ThemeTokens.control-radius;
-        background: !enabled ? #00000000
-            : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
-            : active ? ThemeTokens.selection
-            : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control));
-        border-width: enabled ? 1px : 0px;
-        border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
-        accessible-role: button;
-        accessible-label: text;
-        accessible-enabled: root.enabled;
-        animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
-        touch := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.clicked(); } }
-        focus-scope := FocusScope {
-            x: 0px;
-            width: 0px;
-            enabled <=> root.enabled;
-            key-pressed(event) => {
-                if (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
-                return reject;
-            }
-        }
-        Text {
-            text: root.text;
-            color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
-                : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
-            font-size: 12px;
-            font-weight: active ? 600 : 500;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-        if focus-scope.has-focus && root.enabled : Rectangle {
-            border-width: ThemeTokens.focus-width;
-            border-color: ThemeTokens.focus;
-            border-radius: root.border-radius;
-        }
-    }
-
-    component DocumentTab inherits Rectangle {
-        in property <TabItem> item;
-        in property <string> close-label;
-        callback activate();
-        callback close();
-
-        width: 164px;
-        height: 28px;
-        border-radius: 6px;
-        background: item.is_active ? ThemeTokens.panel-elevated
-            : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-        border-width: item.is_active ? 1px : 0px;
-        border-color: ThemeTokens.border;
-        accessible-role: tab;
-        accessible-label: item.title;
-
-        tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
-        animate background { duration: ThemeTokens.motion-active ? 80ms : 0ms; }
-        if root.item.is_active : Rectangle {
-            x: 8px;
-            y: parent.height - 2px;
-            width: parent.width - 16px;
-            height: 2px;
-            border-radius: 1px;
-            background: ThemeTokens.accent;
-        }
-        tab-focus := FocusScope {
-            x: 0px;
-            width: 0px;
-            key-pressed(event) => {
-                if (event.text == " " || event.text == "\n") { root.activate(); return accept; }
-                return reject;
-            }
-        }
-
-        HorizontalLayout {
-            padding-left: 9px;
-            padding-right: 5px;
-            spacing: 6px;
-
-            if root.item.is_loading : Rectangle {
-                width: 7px;
-                height: 7px;
-                border-radius: 4px;
-                background: ThemeTokens.accent;
-            }
-            Text {
-                text: root.item.title;
-                color: ThemeTokens.text;
-                font-size: 12px;
-                font-weight: root.item.is_active ? 600 : 500;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-            close-button := Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 4px;
-                background: close-touch.has-hover ? ThemeTokens.control-hover : #00000000;
-                accessible-role: button;
-                accessible-label: root.close-label + " " + root.item.title;
-                close-touch := TouchArea { clicked => { root.close(); } }
-                Image {
-                    x: 3px;
-                    y: 3px;
-                    width: 16px;
-                    height: 16px;
-                    source: @image-url("../../../assets/icons/dismiss_20_regular.svg");
-                    colorize: ThemeTokens.text-muted;
-                    image-fit: contain;
-                    accessible-role: none;
-                }
-            }
-        }
-        if tab-focus.has-focus : Rectangle {
-            border-width: ThemeTokens.focus-width;
-            border-color: ThemeTokens.focus;
-            border-radius: root.border-radius;
-        }
     }
 
     component ToolChoice inherits Rectangle {
@@ -343,195 +99,6 @@ slint::slint! {
             border-width: ThemeTokens.focus-width;
             border-color: ThemeTokens.focus;
             border-radius: root.border-radius;
-        }
-    }
-
-    component PrintPreview inherits Rectangle {
-        in-out property <int> page: 0;
-        in-out property <string> range: "";
-        in-out property <int> orientation: 0;
-        in property <image> image;
-        in property <bool> has-image: false;
-        in property <string> total-pages: "0";
-        in property <string> text-title: "";
-        in property <string> text-cancel-tooltip: "";
-        in property <string> text-empty: "";
-        in property <string> text-page: "";
-        in property <string> text-previous: "";
-        in property <string> text-next: "";
-        in property <string> text-page-range: "";
-        in property <string> text-range-placeholder: "";
-        in property <string> text-range-accessible: "";
-        in property <string> text-orientation: "";
-        in property <string> text-orientation-auto: "";
-        in property <string> text-orientation-portrait: "";
-        in property <string> text-orientation-landscape: "";
-        in property <string> text-cancel: "";
-        in property <string> text-continue: "";
-        callback previous();
-        callback next();
-        callback range-changed(string);
-        callback orientation-changed(int);
-        callback confirm();
-        callback cancel();
-
-        background: #0000008a;
-        forward-focus: dialog-focus;
-        TouchArea { clicked => { } }
-        dialog-focus := FocusScope {
-            width: Math.min(parent.width - 32px, 620px);
-            height: Math.min(parent.height - 32px, 540px);
-            key-pressed(event) => {
-                if (event.text == "\u{001b}") { root.cancel(); return accept; }
-                return reject;
-            }
-            Rectangle {
-                background: ThemeTokens.surface-modal;
-                border-radius: ThemeTokens.flyout-radius;
-                border-width: 1px;
-                border-color: ThemeTokens.border;
-                accessible-role: groupbox;
-                accessible-label: root.text-title;
-                drop-shadow-blur: ThemeTokens.effects-active ? 20px : 14px;
-                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
-                drop-shadow-color: ThemeTokens.warm-shadow;
-                VerticalLayout {
-                    padding: 20px;
-                    spacing: 14px;
-                    HorizontalLayout {
-                        height: 28px;
-                        Text { text: root.text-title; color: ThemeTokens.text; font-size: 18px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
-                        IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-cancel-tooltip; clicked => { root.cancel(); } }
-                    }
-                    HorizontalLayout {
-                        spacing: 18px;
-                        Rectangle {
-                            width: Math.min(320px, parent.width * 0.56);
-                            background: ThemeTokens.canvas;
-                            border-width: 1px;
-                            border-color: ThemeTokens.border;
-                            Rectangle {
-                                width: Math.min(parent.width - 28px, 248px);
-                                height: Math.min(parent.height - 28px, 338px);
-                                border-radius: ThemeTokens.page-radius;
-                                background: white;
-                                border-width: 1px;
-                                border-color: #00000020;
-                                if root.has-image : Image { source: root.image; width: 100%; height: 100%; image-fit: contain; }
-                                if !root.has-image : Text { text: root.text-empty; color: #626972; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                            }
-                        }
-                        VerticalLayout {
-                            spacing: 9px;
-                            Text { text: root.text-page + " " + (root.page + 1) + " / " + root.total-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                TextButton { text: root.text-previous; enabled: root.page > 0; clicked => { root.previous(); } }
-                                TextButton { text: root.text-next; enabled: root.page + 1 < root.total-pages.to-float(); clicked => { root.next(); } }
-                            }
-                            Text { text: root.text-page-range; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
-                            LineEdit {
-                                text <=> root.range;
-                                placeholder-text: root.text-range-placeholder;
-                                accessible-label: root.text-range-accessible;
-                                accepted => { root.range-changed(root.range); }
-                                changed text => { root.range-changed(self.text); }
-                            }
-                            Text { text: root.text-orientation; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
-                            HorizontalLayout {
-                                spacing: 5px;
-                                TextButton { text: root.text-orientation-auto; active: root.orientation == 0; clicked => { root.orientation = 0; root.orientation-changed(0); } }
-                                TextButton { text: root.text-orientation-portrait; active: root.orientation == 1; clicked => { root.orientation = 1; root.orientation-changed(1); } }
-                                TextButton { text: root.text-orientation-landscape; active: root.orientation == 2; clicked => { root.orientation = 2; root.orientation-changed(2); } }
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: ThemeTokens.space-2;
-                        alignment: end;
-                        TextButton { text: root.text-cancel; clicked => { root.cancel(); } }
-                        TextButton { text: root.text-continue; primary: true; clicked => { root.confirm(); } }
-                    }
-                }
-                Rectangle {
-                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
-                    border-radius: ThemeTokens.flyout-radius - 1px;
-                    border-width: ThemeTokens.effects-active ? 1px : 0px;
-                    border-color: ThemeTokens.inner-highlight;
-                }
-            }
-        }
-    }
-
-    component PasswordPopover inherits Rectangle {
-        in-out property <string> password-input: "";
-        in property <string> file-name: "";
-        in property <string> error-text: "";
-        in property <string> title: "";
-        in property <string> placeholder: "";
-        in property <string> cancel-label: "";
-        in property <string> unlock-label: "";
-        callback submit(string);
-        callback cancel();
-        background: #0000008a;
-        forward-focus: modal-focus;
-        TouchArea { clicked => { } }
-        modal-focus := FocusScope {
-            width: 420px;
-            height: error-text == "" ? 230px : 258px;
-            forward-focus: password-field;
-            key-pressed(event) => {
-                if (event.text == "\u{001b}") { root.cancel(); return accept; }
-                return reject;
-            }
-            Rectangle {
-                background: ThemeTokens.surface-modal;
-                border-radius: ThemeTokens.flyout-radius;
-                border-width: 1px;
-                border-color: ThemeTokens.border;
-                accessible-role: groupbox;
-                accessible-label: root.title;
-                drop-shadow-blur: ThemeTokens.effects-active ? 20px : 14px;
-                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
-                drop-shadow-color: ThemeTokens.warm-shadow;
-                VerticalLayout {
-                    padding: 24px;
-                    spacing: 12px;
-                    Text { text: root.title; color: ThemeTokens.text; font-size: 19px; font-weight: 700; }
-                    Text { text: root.file-name; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
-                    if root.error-text != "" : Rectangle {
-                        height: 36px;
-                        border-radius: ThemeTokens.control-radius;
-                        background: ThemeTokens.danger.with-alpha(0.10);
-                        border-width: 1px;
-                        border-color: ThemeTokens.danger.with-alpha(0.55);
-                        accessible-role: text;
-                        accessible-label: root.error-text;
-                        accessible-live-region: assertive;
-                        Text { x: 10px; width: parent.width - 20px; text: root.error-text; color: ThemeTokens.danger; font-size: 12px; vertical-alignment: center; overflow: elide; }
-                    }
-                    Text { text: root.placeholder; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
-                    password-field := LineEdit {
-                        text <=> root.password-input;
-                        placeholder-text: root.placeholder;
-                        accessible-label: root.placeholder;
-                        input-type: password;
-                        accepted => { root.submit(root.password-input); }
-                    }
-                    HorizontalLayout {
-                        spacing: ThemeTokens.space-2;
-                        alignment: end;
-                        TextButton { text: root.cancel-label; clicked => { root.cancel(); } }
-                        TextButton { text: root.unlock-label; primary: true; clicked => { root.submit(root.password-input); } }
-                    }
-                }
-                Rectangle {
-                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
-                    border-radius: ThemeTokens.flyout-radius - 1px;
-                    border-width: ThemeTokens.effects-active ? 1px : 0px;
-                    border-color: ThemeTokens.inner-highlight;
-                }
-            }
         }
     }
 
@@ -1167,6 +734,15 @@ slint::slint! {
         in-out property <bool> sidebar-visible: true;
         in-out property <int> sidebar-tab: 0;
         in-out property <int> window-mode: 0;
+        in-out property <int> paper-tint <=> ThemeTokens.paper-tint;
+        in-out property <bool> command-palette-open: false;
+        in-out property <string> command-palette-query: "";
+        in property <[string]> command-palette-titles: [];
+        in property <[string]> command-palette-subtitles: [];
+        in-out property <bool> zen-mode: false;
+        in property <bool> scrubber-active: false;
+        in property <string> scrubber-page-label: "";
+        in property <length> scrubber-y: 0px;
         in property <int> view-mode: 0;
         in property <string> view-mode-label: "Continuous";
         in property <int> current-language: 0;
@@ -1395,6 +971,11 @@ slint::slint! {
         callback pointer-down(int, length, length, int);
         callback pointer-move(int, length, length);
         callback pointer-up(int, length, length);
+        callback request-toggle-zen-mode();
+        callback request-toggle-command-palette();
+        callback request-execute-command(string);
+        callback request-command-selected(int);
+        callback request-set-paper-tint(int);
 
         changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
         changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
@@ -1408,6 +989,7 @@ slint::slint! {
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
+                    if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                     if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
                     if (root.tools-open) {
                         if (root.current-tool != -1) {
@@ -1422,7 +1004,16 @@ slint::slint! {
                     if (root.settings-open) { root.settings-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
                 }
-                if (event.text == "\u{f11}" || event.text == "F11") { root.request-toggle-fullscreen(); return accept; }
+                if (event.modifiers.control && (event.text == "k" || event.text == "K")) {
+                    root.command-palette-open = !root.command-palette-open;
+                    root.request-toggle-command-palette();
+                    return accept;
+                }
+                if (event.text == "\u{f11}" || event.text == "F11") {
+                    root.zen-mode = !root.zen-mode;
+                    root.request-toggle-zen-mode();
+                    return accept;
+                }
                 if (event.text == "\u{f5}" || event.text == "F5") { root.request-presentation-mode(); return accept; }
                 if (event.text == Key.Home) { root.request-first-page(); return accept; }
                 if (event.text == Key.End) { root.request-last-page(); return accept; }
@@ -2444,6 +2035,39 @@ slint::slint! {
                     }
                 }
             }
+        }
+
+        // HUD Command Palette (Ctrl+K)
+        CommandPalette {
+            width: 100%;
+            height: 100%;
+            is-open <=> root.command-palette-open;
+            search-query <=> root.command-palette-query;
+            command-titles: root.command-palette-titles;
+            command-subtitles: root.command-palette-subtitles;
+            close => { root.command-palette-open = false; }
+            execute-command(cmd) => { root.request-execute-command(cmd); }
+            command-selected(idx) => { root.request-command-selected(idx); }
+        }
+
+        // Zen Mode Floating Capsule HUD (F11)
+        ZenOverlay {
+            width: 100%;
+            height: 100%;
+            is-zen: root.zen-mode;
+            page-info: root.current-page-str + " / " + root.total-pages-str;
+            exit-zen => { root.zen-mode = false; root.request-toggle-zen-mode(); }
+            prev-page => { root.request-prev-page(); }
+            next-page => { root.request-next-page(); }
+            zoom-in => { root.request-zoom-in(); }
+            zoom-out => { root.request-zoom-out(); }
+        }
+
+        // Thumbnail Scrubber Popover
+        Scrubber {
+            is-active: root.scrubber-active;
+            preview-label: root.scrubber-page-label;
+            y-position: root.scrubber-y;
         }
     }
 }

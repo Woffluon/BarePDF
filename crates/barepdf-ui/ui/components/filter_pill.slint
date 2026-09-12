@@ -1,0 +1,32 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component FilterPill inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 24px;
+    border-radius: 12px;
+    background: root.active ? ThemeTokens.accent.with-alpha(0.18)
+        : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+    border-width: 1px;
+    border-color: root.active ? ThemeTokens.accent : ThemeTokens.border;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: root.active ? ThemeTokens.accent : ThemeTokens.text;
+            font-size: 11px;
+            font-weight: root.active ? 600 : 400;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}

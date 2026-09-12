@@ -53,6 +53,21 @@ impl PageIndex {
     pub const fn get(self) -> u32 {
         self.0
     }
+
+    #[must_use]
+    pub fn next(self, page_count: u32) -> Option<Self> {
+        let next_idx = self.0.checked_add(1)?;
+        if next_idx < page_count {
+            Some(Self(next_idx))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn prev(self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
 }
 
 impl fmt::Display for PageIndex {
@@ -366,5 +381,16 @@ mod tests {
         .expect("valid persisted zoom");
 
         assert_eq!(zoom, ZoomFactor::new(2.0));
+    }
+
+    #[test]
+    fn page_index_next_and_prev() {
+        let page = PageIndex::from_raw(2);
+        assert_eq!(page.next(5), Some(PageIndex::from_raw(3)));
+        assert_eq!(page.next(3), None);
+        assert_eq!(page.prev(), Some(PageIndex::from_raw(1)));
+
+        let first = PageIndex::from_raw(0);
+        assert_eq!(first.prev(), None);
     }
 }

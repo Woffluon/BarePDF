@@ -105,7 +105,11 @@ impl<B: PdfBackend> RenderWorker<B> {
                 document_id,
                 path,
                 password,
-            } => self.open_document(document_id, &path, password.as_deref()),
+            } => self.open_document(
+                document_id,
+                &path,
+                password.as_ref().map(barepdf_core::SecretPassword::expose),
+            ),
             RenderCommand::RenderPage(job) => self.render_page(&job),
             RenderCommand::ExtractText {
                 document_id,
