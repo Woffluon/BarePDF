@@ -52,7 +52,10 @@ pub struct UserPreferences {
     pub active_tab_index: usize,
     pub open_tabs: Vec<DocumentSession>,
     pub paper_tint: u8,
+    pub invert_colors: bool,
 }
+
+pub type AppPreferences = UserPreferences;
 
 impl Default for UserPreferences {
     fn default() -> Self {
@@ -73,6 +76,7 @@ impl Default for UserPreferences {
             active_tab_index: 0,
             open_tabs: Vec::new(),
             paper_tint: 0,
+            invert_colors: false,
         }
     }
 }
@@ -128,5 +132,28 @@ mod tests {
         assert!(!preferences.enhanced_ui);
         assert_eq!(preferences.paper_tint, 0);
         assert!(preferences.open_tabs.is_empty());
+    }
+
+    #[test]
+    fn invert_colors_defaults_to_false_and_serializes() {
+        let preferences = UserPreferences::default();
+        assert!(!preferences.invert_colors);
+
+        // Deserializing empty JSON object should default invert_colors to false
+        let deserialized: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.invert_colors);
+
+        // Deserializing with invert_colors: true
+        let deserialized_true: UserPreferences =
+            serde_json::from_str(r#"{"invert_colors":true}"#).unwrap();
+        assert!(deserialized_true.invert_colors);
+
+        // Serializing with invert_colors: true
+        let prefs = UserPreferences {
+            invert_colors: true,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&prefs).unwrap();
+        assert!(json.contains(r#""invert_colors":true"#));
     }
 }

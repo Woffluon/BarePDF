@@ -18,6 +18,7 @@ pub(super) fn sync_model_to_window(model: &AppModel, window: &AppWindow) {
     window.set_paper_tint(i32::from(model.paper_tint.as_u8()));
     window.set_zen_mode(model.zen_mode);
     window.set_sidebar_visible(!model.zen_mode && model.sidebar_open);
+    window.set_invert_page_colors(model.invert_colors);
     sync_hud_palette(model, window);
 }
 
@@ -77,6 +78,13 @@ pub(super) fn execute_command_effect(
         }
         AppCommand::ShowBanner { message, can_retry } => {
             show_banner(window, &message, can_retry);
+        }
+        AppCommand::ToggleInvertColors => {
+            let mut app = state.borrow_mut();
+            app.preferences.invert_colors = model.invert_colors;
+            window.set_invert_page_colors(model.invert_colors);
+            persist_preferences(&app.preferences, preferences_path, Some(window));
+            invalidate_layout_and_render(&mut app, scheduler, window, true);
         }
     }
 }

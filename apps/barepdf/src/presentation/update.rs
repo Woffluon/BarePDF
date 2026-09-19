@@ -49,6 +49,11 @@ pub fn update(model: &mut AppModel, msg: Msg) -> Option<AppCommand> {
             }
             Some(AppCommand::SyncWindowChrome)
         }
+        Msg::ToggleInvertColors => {
+            model.invert_colors = !model.invert_colors;
+            model.preferences.invert_colors = model.invert_colors;
+            Some(AppCommand::ToggleInvertColors)
+        }
         Msg::ToggleCommandPalette => {
             model.command_palette_open = !model.command_palette_open;
             if model.command_palette_open {
@@ -191,5 +196,22 @@ mod tests {
         assert_eq!(model.paper_tint, PaperTintColor::WarmSepia);
         assert_eq!(model.preferences.paper_tint, 1);
         assert_eq!(cmd, Some(AppCommand::InvalidateCanvas));
+    }
+
+    #[test]
+    fn toggle_invert_colors_updates_model_and_preferences() {
+        let mut model = make_test_model();
+        assert!(!model.invert_colors);
+        assert!(!model.preferences.invert_colors);
+
+        let cmd = update(&mut model, Msg::ToggleInvertColors);
+        assert!(model.invert_colors);
+        assert!(model.preferences.invert_colors);
+        assert_eq!(cmd, Some(AppCommand::ToggleInvertColors));
+
+        let cmd = update(&mut model, Msg::ToggleInvertColors);
+        assert!(!model.invert_colors);
+        assert!(!model.preferences.invert_colors);
+        assert_eq!(cmd, Some(AppCommand::ToggleInvertColors));
     }
 }

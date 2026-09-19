@@ -105,6 +105,15 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("settings.reading_dir.ltr", "Left to Right (LTR)");
     m.insert("settings.reading_dir.rtl", "Right to Left (RTL)");
     m.insert("settings.close", "Close");
+    m.insert(
+        "command_palette_invert_colors_title",
+        "Toggle Inverted Page Colors (Ctrl+I)",
+    );
+    m.insert(
+        "command_palette_invert_colors_desc",
+        "High contrast inverted reading mode",
+    );
+    m.insert("settings_invert_colors", "Invert page colors");
     m.insert("updates", "Updates");
     m.insert("updates.enabled", "Enabled");
     m.insert("updates.disabled", "Disabled");
@@ -214,6 +223,15 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("settings.reading_dir.ltr", "Soldan Sağa (LTR)");
     m.insert("settings.reading_dir.rtl", "Sağdan Sola (RTL)");
     m.insert("settings.close", "Kapat");
+    m.insert(
+        "command_palette_invert_colors_title",
+        "Sayfa Renklerini Ters Çevir (Ctrl+I)",
+    );
+    m.insert(
+        "command_palette_invert_colors_desc",
+        "Yüksek kontrastlı ters çevrilmiş okuma modu",
+    );
+    m.insert("settings_invert_colors", "Sayfa renklerini ters çevir");
     m.insert("updates", "Güncellemeler");
     m.insert("updates.enabled", "Açık");
     m.insert("updates.disabled", "Kapalı");
@@ -639,6 +657,46 @@ mod tests {
         assert_eq!(t(ResolvedLanguage::English, "tools.merge"), "Merge PDFs");
         assert_eq!(t(ResolvedLanguage::Turkish, "tools.merge"), "PDF Birleştir");
         assert_eq!(t(ResolvedLanguage::Turkish, "nonexistent"), "");
+    }
+
+    #[test]
+    fn invert_colors_strings_are_localized() {
+        assert_eq!(
+            t(
+                ResolvedLanguage::English,
+                "command_palette_invert_colors_title"
+            ),
+            "Toggle Inverted Page Colors (Ctrl+I)"
+        );
+        assert_eq!(
+            t(
+                ResolvedLanguage::Turkish,
+                "command_palette_invert_colors_title"
+            ),
+            "Sayfa Renklerini Ters Çevir (Ctrl+I)"
+        );
+        assert_eq!(
+            t(
+                ResolvedLanguage::English,
+                "command_palette_invert_colors_desc"
+            ),
+            "High contrast inverted reading mode"
+        );
+        assert_eq!(
+            t(
+                ResolvedLanguage::Turkish,
+                "command_palette_invert_colors_desc"
+            ),
+            "Yüksek kontrastlı ters çevrilmiş okuma modu"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "settings_invert_colors"),
+            "Invert page colors"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "settings_invert_colors"),
+            "Sayfa renklerini ters çevir"
+        );
     }
 
     #[test]

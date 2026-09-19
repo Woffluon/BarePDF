@@ -9,6 +9,7 @@ slint::slint! {
     import { Scrubber } from "../ui/components/scrubber.slint";
     import { FilterPill } from "../ui/components/filter_pill.slint";
     import { PasswordDialog as PasswordPopover } from "../ui/dialogs/password_dialog.slint";
+    import { PreferencesDialog } from "../ui/dialogs/preferences_dialog.slint";
     import { PrintPreviewDialog as PrintPreview } from "../ui/dialogs/print_preview_dialog.slint";
 
     export { ThemeTokens, TabItem }
@@ -735,6 +736,8 @@ slint::slint! {
         in-out property <int> sidebar-tab: 0;
         in-out property <int> window-mode: 0;
         in-out property <int> paper-tint <=> ThemeTokens.paper-tint;
+        in-out property <bool> invert-page-colors: false;
+        in-out property <bool> preferences-open: false;
         in-out property <bool> command-palette-open: false;
         in-out property <string> command-palette-query: "";
         in property <[string]> command-palette-titles: [];
@@ -838,6 +841,7 @@ slint::slint! {
         in property <string> text-settings-dark: "Dark";
         in property <string> text-settings-developer: "Developer";
         in property <string> text-settings-website: "Website";
+        in property <string> text-settings-invert-colors: "Invert page colors";
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
         in property <string> text-cancel-print: "Cancel";
@@ -976,6 +980,7 @@ slint::slint! {
         callback request-execute-command(string);
         callback request-command-selected(int);
         callback request-set-paper-tint(int);
+        callback request-toggle-invert-colors();
 
         changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
         changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
@@ -1002,6 +1007,7 @@ slint::slint! {
                     if (root.toolbar-more-open) { root.toolbar-more-open = false; return accept; }
                     if (root.context-menu-open) { root.context-menu-open = false; return accept; }
                     if (root.settings-open) { root.settings-open = false; return accept; }
+                    if (root.preferences-open) { root.preferences-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
                 }
                 if (event.modifiers.control && (event.text == "k" || event.text == "K")) {
@@ -1022,6 +1028,7 @@ slint::slint! {
                 if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.request-copy(); return accept; }
                 if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.request-select-all(); return accept; }
                 if (event.modifiers.control && (event.text == "o" || event.text == "O")) { root.request-open-file(); return accept; }
+                if (event.modifiers.control && (event.text == "i" || event.text == "I")) { root.request-toggle-invert-colors(); return accept; }
                 if (event.modifiers.control && (event.text == "p" || event.text == "P") && root.has-document && !root.print-active) { root.request-print(); return accept; }
                 if (event.modifiers.control && event.text == "0") { root.request-actual-size(); return accept; }
                 if (event.text == "+" || event.text == "=") { root.request-zoom-in(); return accept; }
@@ -1798,6 +1805,12 @@ slint::slint! {
                                             TextButton { text: root.text-settings-light; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
                                             TextButton { text: root.text-settings-dark; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
                                         }
+                                        Text { text: root.text-settings-invert-colors; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            TextButton { text: "Off"; active: !root.invert-page-colors; clicked => { if (root.invert-page-colors) { root.request-toggle-invert-colors(); } } }
+                                            TextButton { text: "On"; active: root.invert-page-colors; clicked => { if (!root.invert-page-colors) { root.request-toggle-invert-colors(); } } }
+                                        }
                                         Text { text: root.text-settings-effects; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
                                         HorizontalLayout {
                                             spacing: 8px;
@@ -1992,6 +2005,19 @@ slint::slint! {
                             tool-password-popup.password-input = "";
                             root.request-cancel-tool-password();
                         }
+                    }
+                    if root.preferences-open : PreferencesDialog {
+                        is-open: root.preferences-open;
+                        current-language: root.current-language;
+                        current-theme: root.current-theme;
+                        current-paper-tint: root.paper-tint;
+                        current-invert-colors: root.invert-page-colors;
+                        text-settings-invert-colors: root.text-settings-invert-colors;
+                        close => { root.preferences-open = false; }
+                        change-language(idx) => { root.request-change-language(idx); }
+                        change-theme(idx) => { root.request-change-theme(idx); }
+                        change-paper-tint(idx) => { root.request-set-paper-tint(idx); }
+                        toggle-invert-colors(val) => { root.request-toggle-invert-colors(); }
                     }
                 }
             }

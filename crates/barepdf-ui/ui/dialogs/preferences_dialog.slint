@@ -6,10 +6,13 @@ export component PreferencesDialog inherits Rectangle {
     in property <int> current-language: 0;
     in property <int> current-theme: 0;
     in property <int> current-paper-tint: 0;
+    in property <bool> current-invert-colors: false;
+    in property <string> text-settings-invert-colors: "Invert page colors";
     callback close();
     callback change-language(int);
     callback change-theme(int);
     callback change-paper-tint(int);
+    callback toggle-invert-colors(bool);
 
     visible: root.is-open;
     background: #0000008a;
@@ -18,7 +21,7 @@ export component PreferencesDialog inherits Rectangle {
 
     Rectangle {
         width: Math.min(parent.width - 32px, 480px);
-        height: 380px;
+        height: 450px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: ThemeTokens.surface-modal;
@@ -71,6 +74,17 @@ export component PreferencesDialog inherits Rectangle {
                     TextButton { text: "Sepia"; active: root.current-paper-tint == 1; clicked => { root.change-paper-tint(1); } }
                     TextButton { text: "Night"; active: root.current-paper-tint == 2; clicked => { root.change-paper-tint(2); } }
                     TextButton { text: "Amber"; active: root.current-paper-tint == 3; clicked => { root.change-paper-tint(3); } }
+                }
+            }
+
+            // Invert colors selector
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: root.text-settings-invert-colors; color: ThemeTokens.text-muted; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TextButton { text: "Off"; active: !root.current-invert-colors; clicked => { root.toggle-invert-colors(false); } }
+                    TextButton { text: "On"; active: root.current-invert-colors; clicked => { root.toggle-invert-colors(true); } }
                 }
             }
 

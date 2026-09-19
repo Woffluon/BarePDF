@@ -22,6 +22,6 @@ pub use page_range::{
     pages_to_remove_to_retained_pages, validate_page_selection, PageRangeError, PageRangeSelection,
 };
 pub use password::SecretPassword;
-pub use preferences::{BookmarkEntry, DocumentSession, ThemeMode, UserPreferences};
+pub use preferences::{AppPreferences, BookmarkEntry, DocumentSession, ThemeMode, UserPreferences};
 pub use selection::SelectionEngine;
 pub use types::*;

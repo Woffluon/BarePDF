@@ -20,4 +20,5 @@ pub enum AppCommand {
         message: String,
         can_retry: bool,
     },
+    ToggleInvertColors,
 }

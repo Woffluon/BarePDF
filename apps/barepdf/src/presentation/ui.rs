@@ -357,6 +357,14 @@ pub(super) fn process_view_changes(
     }
 }
 
+pub(crate) fn invert_rgba_pixels(pixels: &mut [u8]) {
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk[0] = 255 - chunk[0];
+        chunk[1] = 255 - chunk[1];
+        chunk[2] = 255 - chunk[2];
+    }
+}
+
 pub(super) fn handle_render_event(
     event: RenderEvent,
     window: &AppWindow,
@@ -474,11 +482,14 @@ pub(super) fn handle_render_event(
             ) {
                 return;
             }
-            let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+            let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
                 bitmap.pixels(),
                 bitmap.width(),
                 bitmap.height(),
             );
+            if app.preferences.invert_colors {
+                invert_rgba_pixels(buffer.make_mut_bytes());
+            }
             let image = Image::from_rgba8(buffer);
             match kind {
                 RenderKind::Page => {
@@ -1500,6 +1511,7 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_developer, "settings.developer");
     set_text!(set_text_settings_website, "settings.project_website");
     set_text!(set_text_settings_about, "settings.about");
+    set_text!(set_text_settings_invert_colors, "settings_invert_colors");
     set_text!(set_text_tools_select_all, "tools.pages.select_all");
     set_text!(
         set_text_tools_clear_selection,
@@ -1727,6 +1739,20 @@ mod tests {
                 .saturating_mul(usize::try_from(height).unwrap())
                 .saturating_mul(std::mem::size_of::<Rgba8Pixel>())
                 <= PAGE_IMAGE_BUDGET
+        );
+    }
+
+    #[test]
+    fn invert_rgba_pixels_inverts_rgb_and_preserves_alpha() {
+        let mut pixels = [
+            0, 10, 200, 255, // Pixel 1
+            255, 245, 55, 128, // Pixel 2
+            128, 128, 128, 0, // Pixel 3
+        ];
+        invert_rgba_pixels(&mut pixels);
+        assert_eq!(
+            pixels,
+            [255, 245, 55, 255, 0, 10, 200, 128, 127, 127, 127, 0,]
         );
     }
 }

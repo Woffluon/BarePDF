@@ -2534,6 +2534,27 @@ fn connect_niche_feature_callbacks(
             );
         }
     });
+
+    let weak = window.as_weak();
+    let state_invert = state.clone();
+    let scheduler_invert = scheduler.clone();
+    let path_invert = preferences_path.to_path_buf();
+    window.on_request_toggle_invert_colors(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut model = super::model::AppModel::from_app_state(&state_invert.borrow(), &window);
+        if let Some(cmd) = super::update(&mut model, super::message::Msg::ToggleInvertColors) {
+            super::view_binder::execute_command_effect(
+                cmd,
+                &model,
+                &state_invert,
+                &scheduler_invert,
+                &window,
+                &path_invert,
+            );
+        }
+    });
 }
 
 #[cfg(test)]

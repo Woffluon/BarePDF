@@ -72,6 +72,7 @@ pub struct AppModel {
     pub command_palette_query: String,
     pub zen_mode: bool,
     pub paper_tint: PaperTintColor,
+    pub invert_colors: bool,
     pub preferences: UserPreferences,
 }
 
@@ -89,6 +90,7 @@ impl Default for AppModel {
             command_palette_query: String::new(),
             zen_mode: false,
             paper_tint: PaperTintColor::from_u8(preferences.paper_tint),
+            invert_colors: preferences.invert_colors,
             preferences,
         }
     }
@@ -142,6 +144,7 @@ impl AppModel {
             command_palette_query: window.get_command_palette_query().to_string(),
             zen_mode: window.get_zen_mode(),
             paper_tint: PaperTintColor::from_u8(app.preferences.paper_tint),
+            invert_colors: app.preferences.invert_colors,
             preferences: app.preferences.clone(),
         }
     }

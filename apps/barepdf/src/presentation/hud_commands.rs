@@ -16,6 +16,11 @@ pub const ALL_HUD_COMMANDS: &[HudCommandItem] = &[
         subtitle: "Focus view without distractions",
     },
     HudCommandItem {
+        id: "invert_colors",
+        title: "Toggle Inverted Page Colors (Ctrl+I)",
+        subtitle: "High contrast inverted reading mode",
+    },
+    HudCommandItem {
         id: "tint_sepia",
         title: "Paper Tint: Warm Sepia",
         subtitle: "Eye comfort mode for book reading",
@@ -107,6 +112,10 @@ pub fn handle_hud_query(model: &mut AppModel, query: &str) -> Option<AppCommand>
             model.sidebar_open = false;
         }
         Some(AppCommand::SyncWindowChrome)
+    } else if lower.contains("invert") || lower.contains("ters") {
+        model.invert_colors = !model.invert_colors;
+        model.preferences.invert_colors = model.invert_colors;
+        Some(AppCommand::ToggleInvertColors)
     } else if lower.contains("sepia") || lower.contains("sepya") {
         model.paper_tint = PaperTintColor::WarmSepia;
         model.preferences.paper_tint = 1;
@@ -183,5 +192,20 @@ mod tests {
             })
         );
         assert_eq!(model.tabs[0].current_page.get(), 41);
+    }
+
+    #[test]
+    fn handle_hud_query_matches_invert_and_ters_queries() {
+        let mut model = AppModel::default();
+        assert!(!model.invert_colors);
+        let cmd_invert = handle_hud_query(&mut model, "invert colors");
+        assert_eq!(cmd_invert, Some(AppCommand::ToggleInvertColors));
+        assert!(model.invert_colors);
+        assert!(model.preferences.invert_colors);
+
+        let cmd_ters = handle_hud_query(&mut model, "ters çevir");
+        assert_eq!(cmd_ters, Some(AppCommand::ToggleInvertColors));
+        assert!(!model.invert_colors);
+        assert!(!model.preferences.invert_colors);
     }
 }

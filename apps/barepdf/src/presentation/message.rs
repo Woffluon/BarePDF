@@ -26,6 +26,7 @@ pub enum Msg {
 
     // Visual ergonomics and niche features
     ToggleZenMode,
+    ToggleInvertColors,
     ToggleCommandPalette,
     CommandPaletteQueryChanged(String),
     ExecuteCommand(String),
