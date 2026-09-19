@@ -484,7 +484,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "barepdf"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "barepdf-core",
  "barepdf-i18n",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-core"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "barepdf-i18n",
  "serde",
@@ -522,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-i18n"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "serde",
  "windows-sys 0.59.0",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-pdf"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "barepdf-core",
  "pdfium-render",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "barepdf-core",
  "thiserror 2.0.19",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform-windows"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "arboard",
  "barepdf-core",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-render"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "barepdf-core",
  "barepdf-pdf",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-thumbnail"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "pdfium-render",
  "windows 0.58.0",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-ui"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "slint",
 ]
@@ -1363,7 +1363,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2925,7 +2925,7 @@ dependencies = [
  "once_cell",
  "png",
  "thiserror 2.0.19",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2986,7 +2986,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4082,14 +4082,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
@@ -4139,7 +4139,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4150,9 +4150,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4791,10 +4791,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5105,7 +5105,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5194,9 +5194,9 @@ checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
 
 [[package]]
 name = "ureq"
-version = "3.4.0"
+version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "972d7902c8735f2695410b8aed7df6ed12a47394aa1c8d7af49f0497b731a94d"
+checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -5212,9 +5212,9 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.1"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da5f78b09e6941e1a0f2e30e695e4b120377b54d5e0aec11b594bb57b3971613"
+checksum = "f86fd172ccca569e458f61b6bdd6220965a9ef36e672a6852953b51a0e1583be"
 dependencies = [
  "base64 0.23.1",
  "http",
@@ -5626,7 +5626,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6102,7 +6102,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
