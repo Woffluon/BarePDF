@@ -841,6 +841,8 @@ slint::slint! {
         in property <string> text-settings-dark: "Dark";
         in property <string> text-settings-developer: "Developer";
         in property <string> text-settings-website: "Website";
+        in property <string> text-settings-manifesto: "Manifesto";
+        in property <string> text-settings-manifesto-button: "Read the Manifesto ↗";
         in property <string> text-settings-invert-colors: "Invert page colors";
         in property <string> text-new-tab: "New tab";
         in property <string> text-print: "Print";
@@ -1555,7 +1557,7 @@ slint::slint! {
 
                                     // Header with Logo
                                     HorizontalLayout {
-                                        alignment: center;
+                                        alignment: start;
                                         spacing: 12px;
                                         Image {
                                             source: @image-url("../../../assets/logo.svg");
@@ -1564,19 +1566,21 @@ slint::slint! {
                                             image-fit: contain;
                                         }
                                         VerticalLayout {
-                                            alignment: center;
+                                            alignment: start;
                                             spacing: 2px;
                                             Text {
                                                 text: "BarePDF";
                                                 color: ThemeTokens.accent;
                                                 font-size: 13px;
                                                 font-weight: 700;
+                                                horizontal-alignment: left;
                                             }
                                             Text {
                                                 text: root.text-empty-title;
                                                 color: ThemeTokens.text;
                                                 font-size: 18px;
                                                 font-weight: 700;
+                                                horizontal-alignment: left;
                                             }
                                         }
                                     }
@@ -1858,6 +1862,11 @@ slint::slint! {
                                             alignment: space-between;
                                             Text { text: root.text-settings-website; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
                                             TextButton { text: "BarePDF Web ↗"; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/"); } }
+                                        }
+                                        HorizontalLayout {
+                                            alignment: space-between;
+                                            Text { text: root.text-settings-manifesto; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            TextButton { text: root.text-settings-manifesto-button; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/manifesto/"); } }
                                         }
                                         Rectangle { height: 4px; }
                                     }

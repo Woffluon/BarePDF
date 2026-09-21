@@ -61,6 +61,8 @@ const PAGE_GAP: f32 = 14.0;
 pub(super) const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
 const PRESENTATION_MAX_RENDER_EDGE: u32 = 2560;
 pub(super) const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
+const WELCOME_DOCUMENT_NAME: &str = "BarePDF Welcome.pdf";
+const WELCOME_PDF: &[u8] = include_bytes!("../../../../assets/barepdf-welcome.pdf");
 
 use super::callbacks::{
     clear_document_transients, close_worker_document, consume_print_preview_render,
@@ -163,12 +165,17 @@ pub(crate) fn run() -> Result<(), AppError> {
         );
     }
 
-    if let Some(argument) = env::args_os().nth(1) {
+    let argument = env::args_os().nth(1);
+    let has_saved_tabs = !state.borrow().preferences.open_tabs.is_empty();
+    let welcome_seen = state.borrow().preferences.welcome_manifesto_seen;
+    let should_open_welcome =
+        should_open_welcome_document(argument.is_some(), has_saved_tabs, welcome_seen);
+    if let Some(argument) = argument {
         let path = PathBuf::from(argument);
         if path.is_file() {
             begin_open(path, None, &state, &scheduler, &window);
         }
-    } else if !state.borrow().preferences.open_tabs.is_empty() {
+    } else if has_saved_tabs {
         let saved_tabs = state.borrow().preferences.open_tabs.clone();
         let active_index = state.borrow().preferences.active_tab_index;
         for session in saved_tabs {
@@ -181,6 +188,10 @@ pub(crate) fn run() -> Result<(), AppError> {
             let tab_id = state.borrow().application.tabs.tabs()[active_index].id;
             state.borrow_mut().application.tabs.activate(tab_id);
             super::models::refresh_tab_model(&state.borrow(), &window);
+        }
+    } else if should_open_welcome {
+        if let Some(path) = ensure_welcome_document() {
+            begin_open(path, None, &state, &scheduler, &window);
         }
     }
 
@@ -370,7 +381,7 @@ pub(super) fn handle_render_event(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
-    _preferences_path: &Path,
+    preferences_path: &Path,
 ) {
     match event {
         RenderEvent::DocumentOpened {
@@ -426,8 +437,16 @@ pub(super) fn handle_render_event(
             app.last_scroll_y = 0.0;
             app.last_thumbnail_scroll_y = 0.0;
             app.last_user_scroll_at = None;
-            app.preferences
-                .add_recent_file(path.to_string_lossy().into_owned());
+            let is_welcome_document =
+                path.file_name().and_then(|name| name.to_str()) == Some(WELCOME_DOCUMENT_NAME);
+            if !is_welcome_document {
+                app.preferences
+                    .add_recent_file(path.to_string_lossy().into_owned());
+            }
+            if is_welcome_document && !app.preferences.welcome_manifesto_seen {
+                app.preferences.welcome_manifesto_seen = true;
+                persist_preferences(&app.preferences, preferences_path, Some(window));
+            }
 
             window.set_has_document(true);
             window.set_password_required(false);
@@ -721,6 +740,31 @@ pub(super) fn begin_open(
         window.set_visual_effects_ready(false);
     }
     refresh_tab_model(&app, window);
+}
+
+fn should_open_welcome_document(
+    has_explicit_argument: bool,
+    has_saved_tabs: bool,
+    welcome_seen: bool,
+) -> bool {
+    !has_explicit_argument && !has_saved_tabs && !welcome_seen
+}
+
+fn ensure_welcome_document() -> Option<PathBuf> {
+    let config_path = default_config_path();
+    let parent = config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let path = parent.join(WELCOME_DOCUMENT_NAME);
+
+    if matches!(std::fs::read(&path), Ok(bytes) if bytes == WELCOME_PDF) {
+        return Some(path);
+    }
+
+    std::fs::create_dir_all(parent).ok()?;
+    std::fs::write(&path, WELCOME_PDF).ok()?;
+    Some(path)
 }
 
 pub(super) fn send_render_command(
@@ -1510,6 +1554,11 @@ pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_effects_help, "settings.effects.help");
     set_text!(set_text_settings_developer, "settings.developer");
     set_text!(set_text_settings_website, "settings.project_website");
+    set_text!(set_text_settings_manifesto, "settings.manifesto");
+    set_text!(
+        set_text_settings_manifesto_button,
+        "settings.manifesto.button"
+    );
     set_text!(set_text_settings_about, "settings.about");
     set_text!(set_text_settings_invert_colors, "settings_invert_colors");
     set_text!(set_text_tools_select_all, "tools.pages.select_all");
@@ -1587,6 +1636,18 @@ fn unique_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_opens_welcome_when_no_document_was_requested() {
+        assert!(should_open_welcome_document(false, false, false));
+        assert!(!should_open_welcome_document(false, false, true));
+    }
+
+    #[test]
+    fn startup_preserves_explicit_and_saved_documents() {
+        assert!(!should_open_welcome_document(true, false, false));
+        assert!(!should_open_welcome_document(false, true, false));
+    }
 
     #[test]
     fn generation_refresh_requeues_each_visible_surface_once() {

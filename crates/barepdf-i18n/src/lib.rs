@@ -97,6 +97,8 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     );
     m.insert("settings.developer", "Developer");
     m.insert("settings.project_website", "Website");
+    m.insert("settings.manifesto", "Manifesto");
+    m.insert("settings.manifesto.button", "Read the Manifesto ↗");
     m.insert("settings.about", "About");
     m.insert("language.english", "English");
     m.insert("language.turkish", "Türkçe");
@@ -215,6 +217,8 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     );
     m.insert("settings.developer", "Geliştirici");
     m.insert("settings.project_website", "Web Sitesi");
+    m.insert("settings.manifesto", "Bildiri");
+    m.insert("settings.manifesto.button", "Manifestoyu oku ↗");
     m.insert("settings.about", "Hakkında");
     m.insert("language.english", "İngilizce");
     m.insert("language.turkish", "Türkçe");
@@ -717,6 +721,8 @@ mod tests {
             "print.preview.continue",
             "settings.developer",
             "settings.project_website",
+            "settings.manifesto",
+            "settings.manifesto.button",
             "settings.about",
             "tools.convert",
             "tools.convert.desc",

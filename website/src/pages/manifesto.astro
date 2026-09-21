@@ -1,0 +1,279 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<BaseLayout
+  title="BarePDF Manifesto | A Small Refusal"
+  description="A personal manifesto by Efe Arabacı for quiet, local, user-first PDF reading."
+  currentPath={`${baseUrl}/manifesto`}
+  ogImage={`${baseUrl}/images/manifesto-cover.png`}
+>
+  <article class="manifesto-shell">
+    <div class="manifesto-container">
+      <section class="manifesto-hero" aria-labelledby="manifesto-title">
+        <div class="manifesto-hero-copy">
+          <p class="manifesto-kicker">A PERSONAL NOTE FROM EFE ARABACI</p>
+          <h1 id="manifesto-title">I built BarePDF for the part of you that just wants to read.</h1>
+          <p class="manifesto-lead">
+            A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a small tribute to a company that has mistaken your attention for property.
+          </p>
+          <a class="manifesto-link" href="#the-refusal">Read the refusal <span aria-hidden="true">↓</span></a>
+        </div>
+
+        <figure class="manifesto-art">
+          <img src={`${baseUrl}/images/manifesto-cover.png`} alt="A surreal collage of a server tower, a knight, and people carrying technology across a barren landscape." width="1024" height="1536" />
+          <figcaption>Somewhere between convenience and custody, the reader remains.</figcaption>
+        </figure>
+      </section>
+
+      <div class="manifesto-rule" aria-hidden="true"></div>
+
+      <section class="manifesto-grid" id="the-refusal">
+        <div class="manifesto-prose">
+          <p class="manifesto-index">01 / THE LITTLE KINGDOM OF SOFTWARE</p>
+          <h2>Techno-feudalism, now with better onboarding.</h2>
+          <p>
+            We have entered an age of techno-feudalism. A handful of landlords rent us tools that used to be ordinary objects. They collect our data at the gate, ask us to sign in before we may see our own files, and call the resulting dependence convenience. The castle is often a dashboard. The tax is often a notification.
+          </p>
+
+          <p class="manifesto-index">02 / BARE MEANS ENOUGH</p>
+          <h2>A quiet reader is a political position.</h2>
+          <p>
+            BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising squeezed into the margins. Update checks are optional. The reader should spend its resources on the page, not on a feature parade built to justify a subscription.
+          </p>
+
+          <p class="manifesto-index">03 / THE SMALL REFUSAL</p>
+          <h2>Less theater. More ownership.</h2>
+          <p>
+            There will be no loyalty program for opening a file, no badge for surviving a settings panel, and no cloud-shaped moat around a local document. I am not trying to make reading feel like a social network. I am trying to leave enough room for the document, the machine, and the person in front of it.
+          </p>
+        </div>
+
+        <aside class="manifesto-aside" aria-label="Manifesto closing statement">
+          <div class="manifesto-stamp">BAREPDF<br />LOCAL BY DEFAULT</div>
+          <blockquote>“You are not the product. You are the person who opened the file. That should be enough.”</blockquote>
+          <p class="manifesto-signature">Efe Arabacı</p>
+        </aside>
+      </section>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .manifesto-shell {
+    --manifesto-bg: #0d0f12;
+    --manifesto-surface: #15181d;
+    --manifesto-text: #f2eee6;
+    --manifesto-muted: #a9aeb8;
+    --manifesto-accent: #f69423;
+    background: var(--manifesto-bg);
+    color: var(--manifesto-text);
+    min-height: calc(100vh - 72px);
+    overflow: hidden;
+  }
+
+  .manifesto-container {
+    width: min(1180px, 100% - 3rem);
+    margin: 0 auto;
+    padding: clamp(4rem, 8vw, 8rem) 0;
+  }
+
+  .manifesto-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
+    align-items: center;
+    gap: clamp(3rem, 9vw, 9rem);
+  }
+
+  .manifesto-hero-copy {
+    max-width: 670px;
+  }
+
+  .manifesto-kicker,
+  .manifesto-index {
+    color: var(--manifesto-accent);
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    line-height: 1.4;
+    margin-bottom: 1.25rem;
+    text-transform: uppercase;
+  }
+
+  .manifesto-hero h1 {
+    color: var(--manifesto-text);
+    font-size: clamp(3.2rem, 7vw, 6.6rem);
+    font-weight: 800;
+    letter-spacing: -0.065em;
+    line-height: 0.94;
+    margin-bottom: 2rem;
+    max-width: 760px;
+  }
+
+  .manifesto-lead {
+    color: var(--manifesto-muted);
+    font-size: clamp(1.1rem, 1.7vw, 1.45rem);
+    line-height: 1.55;
+    margin-bottom: 2.25rem;
+    max-width: 620px;
+  }
+
+  .manifesto-link {
+    align-items: center;
+    border-bottom: 1px solid var(--manifesto-accent);
+    color: var(--manifesto-text);
+    display: inline-flex;
+    font-size: 0.95rem;
+    font-weight: 700;
+    gap: 0.8rem;
+    padding-bottom: 0.45rem;
+  }
+
+  .manifesto-link:hover {
+    color: var(--manifesto-accent);
+    text-decoration: none;
+  }
+
+  .manifesto-art {
+    margin: 0;
+    max-width: 440px;
+    justify-self: end;
+    position: relative;
+  }
+
+  .manifesto-art::after {
+    border: 1px solid var(--manifesto-accent);
+    content: '';
+    inset: 1rem -1rem -1rem 1rem;
+    pointer-events: none;
+    position: absolute;
+    z-index: 0;
+  }
+
+  .manifesto-art img {
+    aspect-ratio: 2 / 3;
+    display: block;
+    object-fit: cover;
+    position: relative;
+    width: 100%;
+    z-index: 1;
+  }
+
+  .manifesto-art figcaption {
+    color: var(--manifesto-muted);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    margin-top: 1.2rem;
+    max-width: 280px;
+  }
+
+  .manifesto-rule {
+    background: var(--manifesto-accent);
+    height: 1px;
+    margin: clamp(5rem, 10vw, 10rem) 0 clamp(3rem, 7vw, 7rem);
+    opacity: 0.75;
+    width: 100%;
+  }
+
+  .manifesto-grid {
+    display: grid;
+    gap: clamp(3rem, 9vw, 9rem);
+    grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr);
+  }
+
+  .manifesto-prose {
+    max-width: 700px;
+  }
+
+  .manifesto-prose .manifesto-index:not(:first-child) {
+    margin-top: 4rem;
+  }
+
+  .manifesto-prose h2 {
+    color: var(--manifesto-text);
+    font-size: clamp(1.7rem, 3vw, 2.6rem);
+    letter-spacing: -0.04em;
+    line-height: 1.05;
+    margin: 0 0 1rem;
+  }
+
+  .manifesto-prose p:not(.manifesto-index) {
+    color: var(--manifesto-muted);
+    font-size: 1.05rem;
+    line-height: 1.8;
+    margin: 0;
+  }
+
+  .manifesto-aside {
+    align-self: start;
+    background: var(--manifesto-surface);
+    border-left: 3px solid var(--manifesto-accent);
+    padding: 2rem;
+    position: sticky;
+    top: 7rem;
+  }
+
+  .manifesto-stamp {
+    color: var(--manifesto-accent);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    line-height: 1.5;
+    margin-bottom: 3.5rem;
+  }
+
+  .manifesto-aside blockquote {
+    color: var(--manifesto-text);
+    font-size: clamp(1.45rem, 2.4vw, 2.2rem);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1.08;
+    margin: 0 0 2rem;
+  }
+
+  .manifesto-signature {
+    color: var(--manifesto-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    margin: 0;
+  }
+
+  @media (max-width: 800px) {
+    .manifesto-container {
+      width: min(100% - 2rem, 620px);
+    }
+
+    .manifesto-hero,
+    .manifesto-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .manifesto-art {
+      justify-self: start;
+      max-width: 380px;
+    }
+
+    .manifesto-aside {
+      position: static;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .manifesto-container {
+      padding: 3rem 0 5rem;
+    }
+
+    .manifesto-hero h1 {
+      font-size: 3.25rem;
+    }
+
+    .manifesto-art::after {
+      inset: 0.6rem -0.6rem -0.6rem 0.6rem;
+    }
+  }
+</style>

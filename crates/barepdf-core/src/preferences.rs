@@ -53,6 +53,7 @@ pub struct UserPreferences {
     pub open_tabs: Vec<DocumentSession>,
     pub paper_tint: u8,
     pub invert_colors: bool,
+    pub welcome_manifesto_seen: bool,
 }
 
 pub type AppPreferences = UserPreferences;
@@ -77,6 +78,7 @@ impl Default for UserPreferences {
             open_tabs: Vec::new(),
             paper_tint: 0,
             invert_colors: false,
+            welcome_manifesto_seen: false,
         }
     }
 }
@@ -128,10 +130,13 @@ mod tests {
     #[test]
     fn legacy_preferences_default_to_efficient_ui() {
         let preferences = UserPreferences::default();
+        let legacy_preferences: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(!preferences.enhanced_ui);
         assert_eq!(preferences.paper_tint, 0);
         assert!(preferences.open_tabs.is_empty());
+        assert!(!preferences.welcome_manifesto_seen);
+        assert!(!legacy_preferences.welcome_manifesto_seen);
     }
 
     #[test]
