@@ -52,15 +52,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub(super) const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
-pub(super) const PAGE_IMAGE_BUDGET: usize = 16 * 1024 * 1024;
-pub(super) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
+pub(crate) const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
+pub(crate) const PAGE_IMAGE_BUDGET: usize = 16 * 1024 * 1024;
+pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
 const THUMB_ROW_HEIGHT: f32 = 188.0;
 const THUMBNAIL_PREFETCH_ROWS: u32 = 2;
 const PAGE_GAP: f32 = 14.0;
-pub(super) const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
+pub(crate) const SCROLL_IDLE_DELAY: Duration = Duration::from_millis(180);
 const PRESENTATION_MAX_RENDER_EDGE: u32 = 2560;
-pub(super) const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
+pub(crate) const TEXT_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
 const WELCOME_DOCUMENT_NAME: &str = "BarePDF Welcome.pdf";
 const WELCOME_PDF: &[u8] = include_bytes!("../../../../assets/barepdf-welcome.pdf");
 
@@ -232,7 +232,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     Ok(())
 }
 
-pub(super) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize) {
+pub(crate) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize) {
     let active_id = app.application.tabs.active_id();
     let mut active_index = 0;
     let mut sessions = Vec::new();
@@ -254,9 +254,25 @@ pub(super) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize)
 }
 
 fn initialize_window(window: &AppWindow, state: &AppState) {
-    let model = super::model::AppModel::from_app_state(state, window);
-    super::view_binder::sync_model_to_window(&model, window);
+    window.set_paper_tint(state.preferences.paper_tint as i32);
+    window.set_zen_mode(false); // Default starting state, or read from somewhere? Zen mode wasn't persisted.
     window.set_sidebar_visible(state.preferences.sidebar_visible);
+    window.set_invert_page_colors(state.preferences.invert_colors);
+
+    window.set_command_palette_open(false);
+    window.set_command_palette_query(slint::SharedString::from(""));
+    let matching = crate::presentation::hud_commands::filter_hud_commands("");
+    let titles: Vec<slint::SharedString> = matching
+        .iter()
+        .map(|c| slint::SharedString::from(c.title))
+        .collect();
+    let subtitles: Vec<slint::SharedString> = matching
+        .iter()
+        .map(|c| slint::SharedString::from(c.subtitle))
+        .collect();
+    window.set_command_palette_titles(slint::ModelRc::new(slint::VecModel::from(titles)));
+    window.set_command_palette_subtitles(slint::ModelRc::new(slint::VecModel::from(subtitles)));
+
     window.set_current_language(language_index(state.preferences.language));
     window.set_view_mode(view_mode_index(state.viewing_mode));
     window.set_view_mode_label(SharedString::from(view_mode_label(
@@ -277,14 +293,14 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     render_update_ui(window, state);
 }
 
-pub(super) fn install_native_file_drop(
+pub(crate) fn install_native_file_drop(
     window: &AppWindow,
 ) -> Option<std::sync::mpsc::Receiver<Vec<PathBuf>>> {
     let window_handle = window.window().window_handle();
     install_file_drop(window_handle.window_handle().ok()?)
 }
 
-pub(super) fn native_window_handle(window: &AppWindow) -> Option<isize> {
+pub(crate) fn native_window_handle(window: &AppWindow) -> Option<isize> {
     let window_handle = window.window().window_handle();
     let handle = window_handle.window_handle().ok()?;
     match handle.as_raw() {
@@ -293,7 +309,7 @@ pub(super) fn native_window_handle(window: &AppWindow) -> Option<isize> {
     }
 }
 
-pub(super) fn process_view_changes(
+pub(crate) fn process_view_changes(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
@@ -376,7 +392,7 @@ pub(crate) fn invert_rgba_pixels(pixels: &mut [u8]) {
     }
 }
 
-pub(super) fn handle_render_event(
+pub(crate) fn handle_render_event(
     event: RenderEvent,
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -670,7 +686,7 @@ pub(super) fn handle_render_event(
     }
 }
 
-pub(super) fn begin_open(
+pub(crate) fn begin_open(
     path: PathBuf,
     password: Option<SecretPassword>,
     state: &Rc<RefCell<AppState>>,
@@ -767,7 +783,7 @@ fn ensure_welcome_document() -> Option<PathBuf> {
     Some(path)
 }
 
-pub(super) fn send_render_command(
+pub(crate) fn send_render_command(
     app: &mut AppState,
     scheduler: &RenderScheduler,
     command: RenderCommand,
@@ -779,7 +795,7 @@ pub(super) fn send_render_command(
     sent
 }
 
-pub(super) fn navigate_to_page(
+pub(crate) fn navigate_to_page(
     page: u32,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
@@ -794,7 +810,7 @@ fn set_scroll_position(app: &mut AppState, window: &AppWindow, scroll_y: f32) {
     window.set_current_scroll_y(scroll_y);
 }
 
-pub(super) fn navigate_to_page_inner(
+pub(crate) fn navigate_to_page_inner(
     page: u32,
     app: &mut AppState,
     scheduler: &RenderScheduler,
@@ -828,7 +844,7 @@ pub(super) fn navigate_to_page_inner(
     refresh_thumbnail_selection(app, window, previous_page);
 }
 
-pub(super) fn invalidate_layout_and_render(
+pub(crate) fn invalidate_layout_and_render(
     app: &mut AppState,
     scheduler: &RenderScheduler,
     window: &AppWindow,
@@ -858,7 +874,7 @@ pub(super) fn invalidate_layout_and_render(
     refresh_generation_bound_views(app, scheduler, window);
 }
 
-fn refresh_generation_bound_views(
+pub(crate) fn refresh_generation_bound_views(
     app: &mut AppState,
     scheduler: &RenderScheduler,
     window: &AppWindow,
@@ -882,7 +898,7 @@ fn run_generation_refreshes<T>(
     refresh_print_preview(target);
 }
 
-pub(super) fn ensure_layout(app: &mut AppState) {
+pub(crate) fn ensure_layout(app: &mut AppState) {
     let key = LayoutKey {
         width: app.viewport_width,
         height: app.viewport_height,
@@ -903,7 +919,7 @@ pub(super) fn ensure_layout(app: &mut AppState) {
     app.layout_key = Some(key);
 }
 
-pub(super) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u32> {
+pub(crate) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u32> {
     if app.page_count() == 0 {
         return Vec::new();
     }
@@ -946,7 +962,7 @@ fn user_is_scrolling(last_scroll: Option<Instant>, now: Instant) -> bool {
     last_scroll.is_some_and(|last| now.saturating_duration_since(last) < SCROLL_IDLE_DELAY)
 }
 
-pub(super) fn render_visible_pages(
+pub(crate) fn render_visible_pages(
     app: &mut AppState,
     scheduler: &RenderScheduler,
     window: &AppWindow,
@@ -1029,7 +1045,7 @@ pub(super) fn render_visible_pages(
     refresh_page_model(app, window);
 }
 
-pub(super) fn request_visible_thumbnails(
+pub(crate) fn request_visible_thumbnails(
     app: &mut AppState,
     scheduler: &RenderScheduler,
     window: &AppWindow,
@@ -1119,7 +1135,7 @@ fn start_deferred_document_work(
     }
 }
 
-fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler) {
+pub(crate) fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler) {
     if app.dimensions_request_pending || app.next_dimensions_start >= app.page_count() {
         return;
     }
@@ -1136,7 +1152,7 @@ fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler
     }
 }
 
-pub(super) fn refresh_outline_model(app: &mut AppState, window: &AppWindow) {
+pub(crate) fn refresh_outline_model(app: &mut AppState, window: &AppWindow) {
     let mut items = Vec::new();
     let mut flat = Vec::new();
     flatten_outline(&app.outline, &app.expanded_outline, &mut items, &mut flat);
@@ -1229,7 +1245,7 @@ fn refresh_recent_files(app: &mut AppState, window: &AppWindow) {
     window.set_recent_files(ModelRc::new(VecModel::from(items)));
 }
 
-pub(super) fn pointer_to_pdf(app: &AppState, page: u32, x: f32, y: f32) -> (f32, f32) {
+pub(crate) fn pointer_to_pdf(app: &AppState, page: u32, x: f32, y: f32) -> (f32, f32) {
     let (page_width, page_height) = app
         .page_dimensions
         .get(page as usize)
@@ -1247,7 +1263,7 @@ pub(super) fn pointer_to_pdf(app: &AppState, page: u32, x: f32, y: f32) -> (f32,
     )
 }
 
-pub(super) fn compute_selection_boxes(
+pub(crate) fn compute_selection_boxes(
     app: &mut AppState,
     page: u32,
     target_width: f32,
@@ -1284,7 +1300,40 @@ pub(super) fn compute_selection_boxes(
         .collect()
 }
 
-pub(super) fn sync_effective_zoom(app: &mut AppState) {
+pub(crate) fn compute_search_highlights(
+    app: &AppState,
+    page: u32,
+    target_width: f32,
+    target_height: f32,
+) -> Vec<SelectionBox> {
+    if app.search_matches.is_empty() {
+        return Vec::new();
+    }
+    let (page_width, page_height) = app
+        .page_dimensions
+        .get(page as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    let mut boxes = Vec::new();
+    for m in &app.search_matches {
+        if m.page_index.get() == page {
+            for glyph in &m.glyph_boxes {
+                if glyph.width > 0.0 && glyph.height > 0.0 {
+                    boxes.push(SelectionBox {
+                        x: glyph.x * target_width / page_width.max(1.0),
+                        y: (page_height - glyph.y - glyph.height) * target_height
+                            / page_height.max(1.0),
+                        width: glyph.width * target_width / page_width.max(1.0),
+                        height: glyph.height * target_height / page_height.max(1.0),
+                    });
+                }
+            }
+        }
+    }
+    boxes
+}
+
+pub(crate) fn sync_effective_zoom(app: &mut AppState) {
     if matches!(app.zoom_mode, ZoomMode::Custom(_)) {
         return;
     }
@@ -1301,7 +1350,7 @@ pub(super) fn sync_effective_zoom(app: &mut AppState) {
     app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
 }
 
-pub(super) fn zoom_mode_index(mode: ZoomMode) -> i32 {
+pub(crate) fn zoom_mode_index(mode: ZoomMode) -> i32 {
     match mode {
         ZoomMode::FitWidth => 1,
         ZoomMode::FitPage => 2,
@@ -1309,16 +1358,16 @@ pub(super) fn zoom_mode_index(mode: ZoomMode) -> i32 {
     }
 }
 
-pub(super) fn zoom_percentage(factor: ZoomFactor) -> String {
+pub(crate) fn zoom_percentage(factor: ZoomFactor) -> String {
     format!("{}%", (factor.get() * 100.0).round())
 }
 
-pub(super) fn update_zoom_ui(window: &AppWindow, mode: ZoomMode, factor: ZoomFactor) {
+pub(crate) fn update_zoom_ui(window: &AppWindow, mode: ZoomMode, factor: ZoomFactor) {
     window.set_zoom_mode(zoom_mode_index(mode));
     window.set_zoom_str(SharedString::from(zoom_percentage(factor)));
 }
 
-pub(super) fn save_zoom_preference(app: &mut AppState) {
+pub(crate) fn save_zoom_preference(app: &mut AppState) {
     app.preferences.zoom_mode = app.zoom_mode;
 }
 
@@ -1337,14 +1386,14 @@ fn record_first_page_profile(app: &mut AppState) {
     }
 }
 
-pub(super) fn apply_theme(window: &AppWindow, theme: ThemeMode) {
+pub(crate) fn apply_theme(window: &AppWindow, theme: ThemeMode) {
     window.set_current_theme(theme_index(theme));
     window
         .global::<ThemeTokens>()
         .set_theme_mode(theme_index(theme));
 }
 
-pub(super) fn show_banner(window: &AppWindow, message: impl Into<SharedString>, can_retry: bool) {
+pub(crate) fn show_banner(window: &AppWindow, message: impl Into<SharedString>, can_retry: bool) {
     window.set_banner_text(message.into());
     window.set_banner_can_retry(can_retry);
     window.set_banner_update_action(false);
@@ -1353,7 +1402,7 @@ pub(super) fn show_banner(window: &AppWindow, message: impl Into<SharedString>, 
     window.set_banner_visible(true);
 }
 
-pub(super) fn persist_preferences(
+pub(crate) fn persist_preferences(
     preferences: &UserPreferences,
     preferences_path: &Path,
     window: Option<&AppWindow>,
@@ -1366,7 +1415,7 @@ pub(super) fn persist_preferences(
     }
 }
 
-pub(super) fn parse_drop_paths(text: &str) -> Option<Result<PathBuf, &'static str>> {
+pub(crate) fn parse_drop_paths(text: &str) -> Option<Result<PathBuf, &'static str>> {
     let paths = text
         .lines()
         .map(str::trim)
@@ -1393,13 +1442,13 @@ pub(super) fn parse_drop_paths(text: &str) -> Option<Result<PathBuf, &'static st
     Some(Ok(path))
 }
 
-pub(super) fn is_pdf_path(path: &Path) -> bool {
+pub(crate) fn is_pdf_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
 }
 
-pub(super) fn validated_page_input(input: &str, page_count: u32) -> Option<u32> {
+pub(crate) fn validated_page_input(input: &str, page_count: u32) -> Option<u32> {
     input
         .trim()
         .parse::<u32>()
@@ -1408,14 +1457,14 @@ pub(super) fn validated_page_input(input: &str, page_count: u32) -> Option<u32> 
         .map(|page| page - 1)
 }
 
-pub(super) fn normalize_viewing_mode(mode: ViewingMode) -> ViewingMode {
+pub(crate) fn normalize_viewing_mode(mode: ViewingMode) -> ViewingMode {
     match mode {
         ViewingMode::SinglePage => ViewingMode::SinglePage,
         _ => ViewingMode::ContinuousVertical,
     }
 }
 
-pub(super) fn theme_from_index(index: i32) -> ThemeMode {
+pub(crate) fn theme_from_index(index: i32) -> ThemeMode {
     match index {
         1 => ThemeMode::Light,
         2 => ThemeMode::Dark,
@@ -1439,11 +1488,11 @@ fn language_index(language: Language) -> i32 {
     }
 }
 
-pub(super) fn view_mode_index(mode: ViewingMode) -> i32 {
+pub(crate) fn view_mode_index(mode: ViewingMode) -> i32 {
     i32::from(mode == ViewingMode::SinglePage)
 }
 
-pub(super) fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> &'static str {
+pub(crate) fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> &'static str {
     barepdf_i18n::t(
         language,
         if mode == ViewingMode::SinglePage {
@@ -1460,7 +1509,7 @@ fn opened_document_status(language: ResolvedLanguage, name: &str, pages: u32) ->
         .replace("{pages}", &pages.to_string())
 }
 
-pub(super) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) {
+pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) {
     macro_rules! set_text {
         ($setter:ident, $key:literal) => {
             window.$setter(SharedString::from(barepdf_i18n::t(language, $key)))

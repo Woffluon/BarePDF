@@ -6,6 +6,7 @@ pub mod limits;
 pub mod page_range;
 pub mod password;
 pub mod preferences;
+pub mod search;
 pub mod selection;
 pub mod types;
 

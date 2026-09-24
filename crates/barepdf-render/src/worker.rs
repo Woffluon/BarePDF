@@ -46,7 +46,7 @@ pub(crate) fn emit_critical(
 
 pub(crate) struct RenderWorker<B> {
     backend: B,
-    active_doc: Option<(DocumentId, Box<dyn PdfDocument>)>,
+    active_docs: lru::LruCache<DocumentId, Box<dyn PdfDocument>>,
     cache: BitmapCache,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
@@ -68,7 +68,9 @@ impl<B: PdfBackend> RenderWorker<B> {
     ) -> Self {
         Self {
             backend,
-            active_doc: None,
+            active_docs: lru::LruCache::new(
+                std::num::NonZeroUsize::new(4).unwrap_or(std::num::NonZeroUsize::MIN),
+            ),
             cache: BitmapCache::new(budget),
             current_generation,
             pending_renders,
@@ -153,8 +155,7 @@ impl<B: PdfBackend> RenderWorker<B> {
         });
         match result {
             Ok((document, (count, first_page_dimensions))) => {
-                self.active_doc = Some((document_id, document));
-                self.cache.clear();
+                self.active_docs.put(document_id, document);
                 emit_critical(
                     &self.shutdown_receiver,
                     &self.critical_event_sender,
@@ -204,14 +205,10 @@ impl<B: PdfBackend> RenderWorker<B> {
             return self.emit_rendered(job, bitmap);
         }
         self.observability.cache_miss();
-        let Some((document_id, document)) = self.active_doc.as_ref() else {
-            self.observability.stale_work("no_active_document");
-            return true;
-        };
-        if *document_id != job.document_id {
+        let Some(document) = self.active_docs.get(&job.document_id) else {
             self.observability.stale_work("document_replaced");
             return true;
-        }
+        };
         match document.render_page(
             job.page_index,
             job.target_width,
@@ -260,7 +257,7 @@ impl<B: PdfBackend> RenderWorker<B> {
         )
     )]
     fn extract_text(
-        &self,
+        &mut self,
         document_id: DocumentId,
         generation: u64,
         page_index: PageIndex,
@@ -269,14 +266,10 @@ impl<B: PdfBackend> RenderWorker<B> {
             self.observability.stale_work("generation");
             return true;
         }
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            self.observability.stale_work("no_active_document");
-            return true;
-        };
-        if *active_document_id != document_id {
+        let Some(document) = self.active_docs.get(&document_id) else {
             self.observability.stale_work("document_replaced");
             return true;
-        }
+        };
         match document.extract_text(page_index).and_then(|text| {
             document
                 .extract_text_spans(page_index)
@@ -308,7 +301,7 @@ impl<B: PdfBackend> RenderWorker<B> {
         )
     )]
     fn fetch_text_geometry(
-        &self,
+        &mut self,
         document_id: DocumentId,
         generation: u64,
         page_index: PageIndex,
@@ -317,14 +310,10 @@ impl<B: PdfBackend> RenderWorker<B> {
             self.observability.stale_work("generation");
             return true;
         }
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            self.observability.stale_work("no_active_document");
-            return true;
-        };
-        if *active_document_id != document_id {
+        let Some(document) = self.active_docs.get(&document_id) else {
             self.observability.stale_work("document_replaced");
             return true;
-        }
+        };
         match document.get_page_text_geometry(page_index) {
             Ok(geometry) => emit_lossy_event(
                 &self.shutdown_receiver,
@@ -341,15 +330,11 @@ impl<B: PdfBackend> RenderWorker<B> {
         }
     }
 
-    fn fetch_outline(&self, document_id: DocumentId) -> bool {
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            self.observability.stale_work("no_active_document");
-            return true;
-        };
-        if *active_document_id != document_id {
+    fn fetch_outline(&mut self, document_id: DocumentId) -> bool {
+        let Some(document) = self.active_docs.get(&document_id) else {
             self.observability.stale_work("document_replaced");
             return true;
-        }
+        };
         match document.get_outline() {
             Ok(outline) => emit_critical(
                 &self.shutdown_receiver,
@@ -363,15 +348,11 @@ impl<B: PdfBackend> RenderWorker<B> {
         }
     }
 
-    fn fetch_page_dimensions(&self, document_id: DocumentId, start: u32, count: u32) -> bool {
-        let Some((active_document_id, document)) = self.active_doc.as_ref() else {
-            self.observability.stale_work("no_active_document");
-            return true;
-        };
-        if *active_document_id != document_id {
+    fn fetch_page_dimensions(&mut self, document_id: DocumentId, start: u32, count: u32) -> bool {
+        let Some(document) = self.active_docs.get(&document_id) else {
             self.observability.stale_work("document_replaced");
             return true;
-        }
+        };
         let dimensions = document.page_count().and_then(|page_count| {
             let end = start.saturating_add(count).min(page_count.get());
             (start..end)
@@ -393,14 +374,8 @@ impl<B: PdfBackend> RenderWorker<B> {
     }
 
     fn close_document(&mut self, document_id: DocumentId) -> bool {
-        if self
-            .active_doc
-            .as_ref()
-            .is_some_and(|(id, _)| *id == document_id)
-        {
-            self.active_doc = None;
-            self.cache.clear();
-        }
+        self.active_docs.pop(&document_id);
+        self.cache.evict_document(document_id);
         true
     }
 

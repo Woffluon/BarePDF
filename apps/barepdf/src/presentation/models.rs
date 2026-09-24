@@ -1,13 +1,15 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
 
 use super::state::AppState;
-use super::ui::{compute_selection_boxes, ensure_layout, visible_page_indices};
+use super::ui::{
+    compute_search_highlights, compute_selection_boxes, ensure_layout, visible_page_indices,
+};
 use barepdf_i18n::{t, ResolvedLanguage};
 use barepdf_render::RenderKind;
 use barepdf_ui::{AppWindow, PageItem, TabItem, ThumbnailItem};
 use slint::{Model, ModelRc, SharedString, VecModel};
 
-pub(super) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
+pub(crate) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
     ensure_layout(app);
     let indices = visible_page_indices(app, window);
     app.visible_page_indices.clone_from(&indices);
@@ -27,6 +29,12 @@ pub(super) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
             layout_page.width as f32,
             layout_page.height as f32,
         );
+        let search_highlights = compute_search_highlights(
+            app,
+            index,
+            layout_page.width as f32,
+            layout_page.height as f32,
+        );
         model.push(PageItem {
             page_index: index as i32,
             page_number: SharedString::from((index + 1).to_string()),
@@ -36,6 +44,7 @@ pub(super) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
             bitmap: image.unwrap_or_default(),
             has_bitmap,
             selection_boxes: ModelRc::new(VecModel::from(selection_boxes)),
+            search_highlights: ModelRc::new(VecModel::from(search_highlights)),
         });
     }
     window.set_visible_pages(ModelRc::new(model));
@@ -56,7 +65,7 @@ pub(super) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
     }
 }
 
-pub(super) fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
+pub(crate) fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
     let model = VecModel::default();
     for index in 0..app.page_count() {
         model.push(thumbnail_item(app, index));
@@ -64,7 +73,7 @@ pub(super) fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
     window.set_thumbnail_items(ModelRc::new(model));
 }
 
-pub(super) fn refresh_tool_thumbnails(
+pub(crate) fn refresh_tool_thumbnails(
     window: &AppWindow,
     app: &mut AppState,
     selected_range: &str,
@@ -96,7 +105,7 @@ pub(super) fn refresh_tool_thumbnails(
     window.set_thumbnail_items(ModelRc::new(model));
 }
 
-pub(super) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
+pub(crate) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
     let active = app.application.tabs.active_id();
     let items = app
         .application
@@ -113,14 +122,36 @@ pub(super) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
     window.set_tab_items(ModelRc::new(VecModel::from(items)));
 }
 
-pub(super) fn refresh_thumbnail_row(app: &mut AppState, window: &AppWindow, index: u32) {
+#[allow(dead_code)]
+pub(crate) fn refresh_bookmark_model(app: &AppState, window: &AppWindow) {
+    use barepdf_ui::BookmarkItem;
+    let model = VecModel::default();
+
+    if let Some(active_tab) = app.application.tabs.active() {
+        if let Some(path) = &active_tab.path {
+            if let Some(session) = app.preferences.open_tabs.iter().find(|s| &s.path == path) {
+                for bookmark in &session.bookmarks {
+                    model.push(BookmarkItem {
+                        title: SharedString::from(bookmark.title.as_str()),
+                        page_index: bookmark.page_index as i32,
+                        page_number: SharedString::from((bookmark.page_index + 1).to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    window.set_bookmark_items(ModelRc::new(model));
+}
+
+pub(crate) fn refresh_thumbnail_row(app: &mut AppState, window: &AppWindow, index: u32) {
     let model = window.get_thumbnail_items();
     if index < app.page_count() && (index as usize) < model.row_count() {
         model.set_row_data(index as usize, thumbnail_item(app, index));
     }
 }
 
-pub(super) fn refresh_thumbnail_selection(
+pub(crate) fn refresh_thumbnail_selection(
     app: &mut AppState,
     window: &AppWindow,
     previous_page: u32,

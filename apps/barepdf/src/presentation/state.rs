@@ -29,18 +29,18 @@ use std::time::{Duration, Instant};
 const MAX_TEXT_GEOMETRIES: usize = 32;
 
 #[derive(Clone, PartialEq)]
-pub(super) struct LayoutKey {
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) zoom_mode: ZoomMode,
-    pub(super) dimensions_revision: u64,
+pub(crate) struct LayoutKey {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) zoom_mode: ZoomMode,
+    pub(crate) dimensions_revision: u64,
 }
 
 #[derive(Clone)]
-pub(super) struct FlatOutlineEntry {
-    pub(super) path: Vec<usize>,
-    pub(super) page_index: Option<u32>,
-    pub(super) has_children: bool,
+pub(crate) struct FlatOutlineEntry {
+    pub(crate) path: Vec<usize>,
+    pub(crate) page_index: Option<u32>,
+    pub(crate) has_children: bool,
 }
 
 struct CachedImage {
@@ -48,7 +48,7 @@ struct CachedImage {
     bytes: usize,
 }
 
-pub(super) struct UiImageCache {
+pub(crate) struct UiImageCache {
     entries: LruCache<(DocumentId, u32, RenderKind), CachedImage>,
     bytes: usize,
     budget: usize,
@@ -59,14 +59,14 @@ struct CachedTextGeometry {
     bytes: usize,
 }
 
-pub(super) struct TextGeometryCache {
+pub(crate) struct TextGeometryCache {
     entries: HashMap<(DocumentId, u32), CachedTextGeometry>,
     insertion_order: VecDeque<(DocumentId, u32)>,
     bytes: usize,
 }
 
 impl TextGeometryCache {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             entries: HashMap::new(),
             insertion_order: VecDeque::new(),
@@ -74,11 +74,11 @@ impl TextGeometryCache {
         }
     }
 
-    pub(super) fn contains_key(&self, document: DocumentId, page_index: u32) -> bool {
+    pub(crate) fn contains_key(&self, document: DocumentId, page_index: u32) -> bool {
         self.entries.contains_key(&(document, page_index))
     }
 
-    pub(super) fn get(
+    pub(crate) fn get(
         &mut self,
         document: DocumentId,
         page_index: u32,
@@ -91,7 +91,7 @@ impl TextGeometryCache {
         self.entries.get(&key).map(|entry| &entry.geometry)
     }
 
-    pub(super) fn insert(
+    pub(crate) fn insert(
         &mut self,
         document: DocumentId,
         page_index: u32,
@@ -129,7 +129,7 @@ impl TextGeometryCache {
             .insert(key, CachedTextGeometry { geometry, bytes });
     }
 
-    pub(super) fn remove_document(&mut self, document: DocumentId) {
+    pub(crate) fn remove_document(&mut self, document: DocumentId) {
         let keys = self
             .entries
             .keys()
@@ -144,7 +144,7 @@ impl TextGeometryCache {
         }
     }
 
-    pub(super) fn in_page_order(&self, document: DocumentId) -> Vec<&PageTextGeometry> {
+    pub(crate) fn in_page_order(&self, document: DocumentId) -> Vec<&PageTextGeometry> {
         let mut geometries = self
             .entries
             .iter()
@@ -158,7 +158,7 @@ impl TextGeometryCache {
 }
 
 impl UiImageCache {
-    pub(super) fn new(budget: usize) -> Self {
+    pub(crate) fn new(budget: usize) -> Self {
         Self {
             entries: LruCache::new(NonZeroUsize::new(512).unwrap_or(NonZeroUsize::MIN)),
             bytes: 0,
@@ -166,7 +166,7 @@ impl UiImageCache {
         }
     }
 
-    pub(super) fn get(
+    pub(crate) fn get(
         &mut self,
         document: DocumentId,
         page: u32,
@@ -177,11 +177,11 @@ impl UiImageCache {
             .map(|cached| cached.image.clone())
     }
 
-    pub(super) fn contains_key(&self, document: DocumentId, page: u32, kind: RenderKind) -> bool {
+    pub(crate) fn contains_key(&self, document: DocumentId, page: u32, kind: RenderKind) -> bool {
         self.entries.contains(&(document, page, kind))
     }
 
-    pub(super) fn insert(
+    pub(crate) fn insert(
         &mut self,
         document: DocumentId,
         page: u32,
@@ -207,7 +207,7 @@ impl UiImageCache {
         }
     }
 
-    pub(super) fn remove_document(&mut self, document: DocumentId) {
+    pub(crate) fn remove_document(&mut self, document: DocumentId) {
         let keys = self
             .entries
             .iter()
@@ -220,7 +220,7 @@ impl UiImageCache {
         }
     }
 
-    pub(super) fn remove_page(&mut self, document: DocumentId, page: u32) {
+    pub(crate) fn remove_page(&mut self, document: DocumentId, page: u32) {
         let keys = self
             .entries
             .iter()
@@ -234,60 +234,63 @@ impl UiImageCache {
     }
 }
 
-pub(super) struct AppState {
-    pub(super) application: Application,
-    pub(super) current_page: u32,
-    pub(super) viewing_mode: ViewingMode,
-    pub(super) zoom_mode: ZoomMode,
-    pub(super) zoom_factor: ZoomFactor,
-    pub(super) rotation: Rotation,
-    pub(super) first_page_dimensions: (f32, f32),
-    pub(super) page_dimensions: Vec<(f32, f32)>,
-    pub(super) dimensions_revision: u64,
-    pub(super) next_dimensions_start: u32,
-    pub(super) dimensions_request_pending: bool,
-    pub(super) layout: ContinuousLayout,
-    pub(super) layout_key: Option<LayoutKey>,
-    pub(super) visible_page_indices: Vec<u32>,
-    pub(super) generation: u64,
-    pub(super) first_page_ready: bool,
-    pub(super) profile_recorded: bool,
-    pub(super) open_started_at: Option<Instant>,
-    pub(super) window_mode: WindowMode,
-    pub(super) preferences: UserPreferences,
-    pub(super) text_geometries: TextGeometryCache,
-    pub(super) selection: Option<TextSelection>,
-    pub(super) is_selecting: bool,
-    pub(super) last_click_time: Instant,
-    pub(super) click_count: u32,
-    pub(super) last_scroll_y: f32,
-    pub(super) last_thumbnail_scroll_y: f32,
-    pub(super) last_user_scroll_at: Option<Instant>,
-    pub(super) viewport_width: u32,
-    pub(super) viewport_height: u32,
-    pub(super) scale_factor: f32,
-    pub(super) resize_changed_at: Option<Instant>,
-    pub(super) outline: Vec<OutlineNode>,
-    pub(super) outline_requested: bool,
-    pub(super) expanded_outline: HashSet<Vec<usize>>,
-    pub(super) flat_outline: Vec<FlatOutlineEntry>,
-    pub(super) page_images: UiImageCache,
-    pub(super) thumbnail_images: UiImageCache,
-    pub(super) update: UpdateController,
-    pub(super) tools_merge_files: Vec<PathBuf>,
-    pub(super) tools_source_path: Option<PathBuf>,
-    pub(super) tool_password_source: Option<PathBuf>,
-    pub(super) tool_source_token: u64,
-    pub(super) next_tool_job_id: u64,
-    pub(super) active_tool_job: Option<ActiveToolJob>,
-    pub(super) tool_worker: Option<ToolWorker>,
-    pub(super) tool_event_timer: Option<Rc<Timer>>,
+pub(crate) struct AppState {
+    pub(crate) application: Application,
+    pub(crate) current_page: u32,
+    pub(crate) viewing_mode: ViewingMode,
+    pub(crate) zoom_mode: ZoomMode,
+    pub(crate) zoom_factor: ZoomFactor,
+    pub(crate) rotation: Rotation,
+    pub(crate) first_page_dimensions: (f32, f32),
+    pub(crate) page_dimensions: Vec<(f32, f32)>,
+    pub(crate) dimensions_revision: u64,
+    pub(crate) next_dimensions_start: u32,
+    pub(crate) dimensions_request_pending: bool,
+    pub(crate) layout: ContinuousLayout,
+    pub(crate) layout_key: Option<LayoutKey>,
+    pub(crate) visible_page_indices: Vec<u32>,
+    pub(crate) generation: u64,
+    pub(crate) first_page_ready: bool,
+    pub(crate) profile_recorded: bool,
+    pub(crate) open_started_at: Option<Instant>,
+    pub(crate) window_mode: WindowMode,
+    pub(crate) preferences: UserPreferences,
+    pub(crate) text_geometries: TextGeometryCache,
+    pub(crate) selection: Option<TextSelection>,
+    pub(crate) is_selecting: bool,
+    pub(crate) last_click_time: Instant,
+    pub(crate) click_count: u32,
+    pub(crate) last_scroll_y: f32,
+    pub(crate) last_thumbnail_scroll_y: f32,
+    pub(crate) last_user_scroll_at: Option<Instant>,
+    pub(crate) viewport_width: u32,
+    pub(crate) viewport_height: u32,
+    pub(crate) scale_factor: f32,
+    pub(crate) resize_changed_at: Option<Instant>,
+    pub(crate) outline: Vec<OutlineNode>,
+    pub(crate) outline_requested: bool,
+    pub(crate) expanded_outline: HashSet<Vec<usize>>,
+    pub(crate) flat_outline: Vec<FlatOutlineEntry>,
+    pub(crate) page_images: UiImageCache,
+    pub(crate) thumbnail_images: UiImageCache,
+    pub(crate) update: UpdateController,
+    pub(crate) tools_merge_files: Vec<PathBuf>,
+    pub(crate) tools_source_path: Option<PathBuf>,
+    pub(crate) tool_password_source: Option<PathBuf>,
+    pub(crate) tool_source_token: u64,
+    pub(crate) next_tool_job_id: u64,
+    pub(crate) active_tool_job: Option<ActiveToolJob>,
+    pub(crate) tool_worker: Option<ToolWorker>,
+    pub(crate) tool_event_timer: Option<Rc<Timer>>,
+    pub(crate) search_query: Option<barepdf_core::search::SearchQuery>,
+    pub(crate) search_matches: Vec<barepdf_core::search::SearchMatch>,
+    pub(crate) active_search_match: usize,
     pump_timer: Option<Rc<Timer>>,
     pump_active_until: Option<Instant>,
 }
 
 impl AppState {
-    pub(super) fn new(mut preferences: UserPreferences) -> Self {
+    pub(crate) fn new(mut preferences: UserPreferences) -> Self {
         preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
         Self {
             application: Application::default(),
@@ -337,35 +340,38 @@ impl AppState {
             active_tool_job: None,
             tool_worker: None,
             tool_event_timer: None,
+            search_query: None,
+            search_matches: Vec::new(),
+            active_search_match: 0,
             pump_timer: None,
             pump_active_until: None,
         }
     }
 
-    pub(super) fn active_document(&self) -> Option<DocumentId> {
+    pub(crate) fn active_document(&self) -> Option<DocumentId> {
         self.application
             .ready_document()
             .map(crate::application::ReadyDocument::id)
     }
 
-    pub(super) fn page_count(&self) -> u32 {
+    pub(crate) fn page_count(&self) -> u32 {
         self.application
             .ready_document()
             .map_or(0, |document| document.page_count().get())
     }
 
-    pub(super) fn attach_pump_timer(&mut self, timer: Rc<Timer>) {
+    pub(crate) fn attach_pump_timer(&mut self, timer: Rc<Timer>) {
         self.pump_timer = Some(timer);
     }
 
-    pub(super) fn wake_pump(&mut self) {
+    pub(crate) fn wake_pump(&mut self) {
         self.pump_active_until = Some(Instant::now() + Duration::from_millis(500));
         if let Some(timer) = self.pump_timer.as_ref() {
             timer.set_interval(super::event_pump::ACTIVE_INTERVAL);
         }
     }
 
-    pub(super) fn pump_requires_active(&self, now: Instant) -> bool {
+    pub(crate) fn pump_requires_active(&self, now: Instant) -> bool {
         self.update.is_busy()
             || self.dimensions_request_pending
             || self.resize_changed_at.is_some()
@@ -386,12 +392,12 @@ impl AppState {
     }
 }
 
-pub(super) struct ActiveToolJob {
-    pub(super) key: ToolJobKey,
-    pub(super) cancellation: CancellationToken,
+pub(crate) struct ActiveToolJob {
+    pub(crate) key: ToolJobKey,
+    pub(crate) cancellation: CancellationToken,
 }
 
-pub(super) fn fit_bitmap_to_budget(width: u32, height: u32, budget: usize) -> (u32, u32) {
+pub(crate) fn fit_bitmap_to_budget(width: u32, height: u32, budget: usize) -> (u32, u32) {
     let max_pixels = u64::try_from(budget / size_of::<Rgba8Pixel>()).unwrap_or(u64::MAX);
     let pixels = u64::from(width).saturating_mul(u64::from(height));
     if pixels <= max_pixels {

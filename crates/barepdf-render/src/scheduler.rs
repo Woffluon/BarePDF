@@ -575,10 +575,10 @@ mod tests {
     }
 
     #[test]
-    fn render_for_replaced_document_is_ignored() {
+    fn render_for_closed_document_is_ignored() {
         let scheduler = scheduler(Duration::ZERO);
         open_document(&scheduler, DocumentId::new(7));
-        open_document(&scheduler, DocumentId::new(8));
+        assert!(scheduler.send_command(RenderCommand::CloseDocument(DocumentId::new(7))));
         let mut request = job(scheduler.current_generation(), RenderKind::Page);
         request.document_id = DocumentId::new(7);
         assert!(scheduler.send_command(RenderCommand::RenderPage(request)));

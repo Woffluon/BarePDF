@@ -1,0 +1,88 @@
+import { LineEdit, Palette } from "std-widgets.slint";
+import { ThemeTokens } from "../tokens.slint";
+import { TextButton } from "./button.slint";
+
+export component SearchBar inherits Rectangle {
+    in-out property <string> query: "";
+    in property <string> match_counter: "";
+    in property <bool> case_sensitive: false;
+    in property <bool> whole_word: false;
+    in property <bool> has_matches: false;
+    
+    in property <string> placeholder: "Find in document...";
+    in property <string> match_case_text: "Match Case";
+    in property <string> whole_word_text: "Whole Word";
+    
+    callback query_changed(string);
+    callback next_clicked();
+    callback prev_clicked();
+    callback close_clicked();
+    callback toggle_case();
+    callback toggle_whole_word();
+
+    height: 44px;
+    width: 480px;
+    border-radius: ThemeTokens.flyout-radius;
+    background: ThemeTokens.surface-flyout;
+    border-width: 1px;
+    border-color: ThemeTokens.border;
+    drop-shadow-blur: ThemeTokens.effects-active ? 16px : 8px;
+    drop-shadow-offset-y: ThemeTokens.effects-active ? 4px : 2px;
+    drop-shadow-color: ThemeTokens.warm-shadow;
+
+    HorizontalLayout {
+        padding: ThemeTokens.space-2;
+        spacing: ThemeTokens.space-2;
+        alignment: space-between;
+
+        input := LineEdit {
+            horizontal-stretch: 1;
+            text <=> root.query;
+            placeholder-text: root.placeholder;
+            edited => { root.query_changed(self.text); }
+            accepted => { root.next_clicked(); }
+        }
+
+        if root.match_counter != "" : Text {
+            text: root.match_counter;
+            color: root.has_matches ? ThemeTokens.text-muted : ThemeTokens.danger;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        HorizontalLayout {
+            spacing: 4px;
+            TextButton {
+                text: "↑";
+                clicked => { root.prev_clicked(); }
+            }
+            TextButton {
+                text: "↓";
+                clicked => { root.next_clicked(); }
+            }
+        }
+
+        Rectangle { width: 1px; background: ThemeTokens.border; }
+
+        HorizontalLayout {
+            spacing: 4px;
+            TextButton {
+                text: "Aa";
+                active: root.case_sensitive;
+                clicked => { root.toggle_case(); }
+            }
+            TextButton {
+                text: "W";
+                active: root.whole_word;
+                clicked => { root.toggle_whole_word(); }
+            }
+        }
+
+        Rectangle { width: 1px; background: ThemeTokens.border; }
+
+        TextButton {
+            text: "✕";
+            clicked => { root.close_clicked(); }
+        }
+    }
+}

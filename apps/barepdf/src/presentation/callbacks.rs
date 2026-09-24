@@ -44,13 +44,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::models::{
-    refresh_page_model, refresh_tab_model, refresh_thumbnail_model, refresh_tool_thumbnails,
+    refresh_bookmark_model, refresh_page_model, refresh_tab_model, refresh_thumbnail_model,
+    refresh_tool_thumbnails,
 };
 use super::state::AppState;
 use super::ui::{
     apply_theme, begin_open, invalidate_layout_and_render, native_window_handle, navigate_to_page,
     navigate_to_page_inner, parse_drop_paths, persist_preferences, pointer_to_pdf,
-    refresh_outline_model, render_visible_pages, request_visible_thumbnails, save_zoom_preference,
+    refresh_generation_bound_views, refresh_outline_model, render_visible_pages,
+    request_next_dimensions_batch, request_visible_thumbnails, save_zoom_preference,
     send_render_command, show_banner, sync_effective_zoom, theme_from_index, update_ui_strings,
     update_zoom_ui, validated_page_input, view_mode_index, view_mode_label, zoom_mode_index,
     zoom_percentage,
@@ -901,7 +903,7 @@ fn connect_tab_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let path = {
+        let (path, already_ready) = {
             let mut app = state_activate.borrow_mut();
             let Some(id) = app.application.tabs.find_id(raw_id) else {
                 return;
@@ -910,17 +912,30 @@ fn connect_tab_callbacks(
                 return;
             }
             snapshot_active_view(&mut app, &window);
-            let previous_document = app.active_document();
             app.generation = scheduler_activate.bump_generation();
-            close_worker_document(&mut app, &scheduler_activate, previous_document);
             clear_document_transients(&mut app, &window);
             if !app.application.tabs.activate(id) {
                 return;
             }
             restore_active_view(&mut app, &window);
-            app.application.tabs.path(id).map(Path::to_path_buf)
+            let already_ready = matches!(
+                app.application
+                    .tabs
+                    .active()
+                    .and_then(|t| t.document.as_ref()),
+                Some(crate::application::DocumentState::Ready(_))
+            );
+            (
+                app.application.tabs.path(id).map(Path::to_path_buf),
+                already_ready,
+            )
         };
-        if let Some(path) = path {
+        if already_ready {
+            let mut app = state_activate.borrow_mut();
+            refresh_generation_bound_views(&mut app, &scheduler_activate, &window);
+            refresh_bookmark_model(&app, &window);
+            request_next_dimensions_batch(&mut app, &scheduler_activate);
+        } else if let Some(path) = path {
             if path.is_file() {
                 begin_open(path, None, &state_activate, &scheduler_activate, &window);
             } else {
@@ -1261,7 +1276,7 @@ fn connect_view_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
-    _preferences_path: &Path,
+    preferences_path: &Path,
 ) {
     let weak = window.as_weak();
     let state_view = state.clone();
@@ -1340,6 +1355,223 @@ fn connect_view_callbacks(
         }
         if let (Some(page), Some(window)) = (target, weak.upgrade()) {
             navigate_to_page(page, &state_outline, &scheduler_outline, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_bookmark = state.clone();
+    let scheduler_bookmark = scheduler.clone();
+    window.on_bookmark_selected(move |index| {
+        let page = {
+            let app = state_bookmark.borrow();
+            let mut target_page = None;
+            if let Some(active_tab) = app.application.tabs.active() {
+                if let Some(path) = &active_tab.path {
+                    if let Some(session) =
+                        app.preferences.open_tabs.iter().find(|s| &s.path == path)
+                    {
+                        if let Some(bookmark) = session.bookmarks.get(index as usize) {
+                            target_page = Some(bookmark.page_index);
+                        }
+                    }
+                }
+            }
+            target_page
+        };
+        if let (Some(page), Some(window)) = (page, weak.upgrade()) {
+            navigate_to_page(page, &state_bookmark, &scheduler_bookmark, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_toggle_bm = state.clone();
+    let preferences_path_bm = preferences_path.to_path_buf();
+    window.on_request_toggle_bookmark(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_toggle_bm.borrow_mut();
+        let current_page = app.current_page;
+        let active_path = app.application.tabs.active().and_then(|t| t.path.clone());
+        let Some(path) = active_path else {
+            return;
+        };
+
+        let zoom_mode = app.zoom_mode;
+        let pos = if let Some(pos) = app
+            .preferences
+            .open_tabs
+            .iter()
+            .position(|s| s.path == path)
+        {
+            pos
+        } else {
+            app.preferences
+                .open_tabs
+                .push(barepdf_core::DocumentSession {
+                    path: path.clone(),
+                    page_index: current_page,
+                    scroll_y: 0.0,
+                    zoom_mode,
+                    bookmarks: Vec::new(),
+                });
+            app.preferences.open_tabs.len() - 1
+        };
+        let session = &mut app.preferences.open_tabs[pos];
+
+        let added = crate::controllers::bookmark_controller::BookmarkController::toggle_bookmark(
+            &mut session.bookmarks,
+            barepdf_core::types::PageIndex::from_raw(current_page),
+            None,
+        );
+
+        refresh_bookmark_model(&app, &window);
+        persist_preferences(&app.preferences, &preferences_path_bm, Some(&window));
+
+        let msg = if added {
+            barepdf_i18n::t(app.preferences.language.resolve(), "bookmark.added")
+        } else {
+            barepdf_i18n::t(app.preferences.language.resolve(), "bookmark.removed")
+        };
+        show_banner(&window, msg, false);
+    });
+
+    let weak = window.as_weak();
+    let state_search = state.clone();
+    let scheduler_search = scheduler.clone();
+    window.on_request_search_query(move |query_str| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_search.borrow_mut();
+        let query_text = query_str.as_str().trim();
+        if query_text.is_empty() {
+            app.search_query = None;
+            app.search_matches.clear();
+            app.active_search_match = 0;
+            window.set_search_has_matches(false);
+            window.set_search_match_counter(SharedString::from("0 / 0"));
+            refresh_page_model(&mut app, &window);
+            return;
+        }
+
+        let case_sensitive = window.get_search_case_sensitive();
+        let whole_word = window.get_search_whole_word();
+        let query = barepdf_core::search::SearchQuery::new(
+            query_text.to_string(),
+            case_sensitive,
+            whole_word,
+        );
+        let Some(query) = query else {
+            app.search_query = None;
+            app.search_matches.clear();
+            app.active_search_match = 0;
+            window.set_search_has_matches(false);
+            window.set_search_match_counter(SharedString::from("0 / 0"));
+            refresh_page_model(&mut app, &window);
+            return;
+        };
+
+        let matches = if let Some(doc) = app.active_document() {
+            let geoms = app
+                .text_geometries
+                .in_page_order(doc)
+                .into_iter()
+                .map(|g| (g.page_index.get(), g.clone()))
+                .collect::<std::collections::HashMap<_, _>>();
+            crate::controllers::search_controller::SearchController::execute_search(
+                &query,
+                &geoms,
+                app.page_count(),
+            )
+        } else {
+            Vec::new()
+        };
+
+        let total = matches.len();
+        let has_matches = total > 0;
+        app.search_query = Some(query);
+        app.search_matches = matches;
+        app.active_search_match = 0;
+
+        window.set_search_has_matches(has_matches);
+        window.set_search_match_counter(SharedString::from(
+            crate::controllers::search_controller::SearchController::match_summary(0, total),
+        ));
+        refresh_page_model(&mut app, &window);
+
+        if has_matches {
+            if let Some(target_match) = app.search_matches.first() {
+                let target_page = target_match.page_index.get();
+                drop(app);
+                navigate_to_page(target_page, &state_search, &scheduler_search, &window);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_search_next = state.clone();
+    let scheduler_search_next = scheduler.clone();
+    window.on_request_search_next(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_search_next.borrow_mut();
+        let total = app.search_matches.len();
+        if total == 0 {
+            return;
+        }
+        app.active_search_match =
+            crate::controllers::search_controller::SearchController::next_match(
+                app.active_search_match,
+                total,
+            );
+        let current = app.active_search_match;
+        window.set_search_match_counter(SharedString::from(
+            crate::controllers::search_controller::SearchController::match_summary(current, total),
+        ));
+        let target_page = app.search_matches.get(current).map(|m| m.page_index.get());
+        if let Some(target_page) = target_page {
+            drop(app);
+            navigate_to_page(
+                target_page,
+                &state_search_next,
+                &scheduler_search_next,
+                &window,
+            );
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_search_prev = state.clone();
+    let scheduler_search_prev = scheduler.clone();
+    window.on_request_search_prev(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_search_prev.borrow_mut();
+        let total = app.search_matches.len();
+        if total == 0 {
+            return;
+        }
+        app.active_search_match =
+            crate::controllers::search_controller::SearchController::prev_match(
+                app.active_search_match,
+                total,
+            );
+        let current = app.active_search_match;
+        window.set_search_match_counter(SharedString::from(
+            crate::controllers::search_controller::SearchController::match_summary(current, total),
+        ));
+        let target_page = app.search_matches.get(current).map(|m| m.page_index.get());
+        if let Some(target_page) = target_page {
+            drop(app);
+            navigate_to_page(
+                target_page,
+                &state_search_prev,
+                &scheduler_search_prev,
+                &window,
+            );
         }
     });
 
@@ -2425,89 +2657,54 @@ fn connect_niche_feature_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
-    preferences_path: &Path,
+    _preferences_path: &Path,
 ) {
     let weak = window.as_weak();
     let state_zen = state.clone();
-    let scheduler_zen = scheduler.clone();
-    let path_zen = preferences_path.to_path_buf();
     window.on_request_toggle_zen_mode(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut model = super::model::AppModel::from_app_state(&state_zen.borrow(), &window);
-        if let Some(cmd) = super::update(&mut model, super::message::Msg::ToggleZenMode) {
-            super::view_binder::execute_command_effect(
-                cmd,
-                &model,
-                &state_zen,
-                &scheduler_zen,
-                &window,
-                &path_zen,
-            );
-        }
+        let is_zen = !window.get_zen_mode();
+        window.set_zen_mode(is_zen);
+        window.set_sidebar_visible(!is_zen && state_zen.borrow().preferences.sidebar_visible);
     });
 
     let weak = window.as_weak();
-    let state_pal = state.clone();
     window.on_request_toggle_command_palette(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut model = super::model::AppModel::from_app_state(&state_pal.borrow(), &window);
-        let _ = super::update(&mut model, super::message::Msg::ToggleCommandPalette);
-        super::view_binder::sync_hud_palette(&model, &window);
+        let open = !window.get_command_palette_open();
+        window.set_command_palette_open(open);
+        if open {
+            window.set_command_palette_query(slint::SharedString::from(""));
+        }
     });
 
     let weak = window.as_weak();
     let state_cmd = state.clone();
     let scheduler_cmd = scheduler.clone();
-    let path_cmd = preferences_path.to_path_buf();
     window.on_request_execute_command(move |query| {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut model = super::model::AppModel::from_app_state(&state_cmd.borrow(), &window);
-        if let Some(cmd) = super::update(
-            &mut model,
-            super::message::Msg::ExecuteCommand(query.to_string()),
-        ) {
-            super::view_binder::execute_command_effect(
-                cmd,
-                &model,
-                &state_cmd,
-                &scheduler_cmd,
-                &window,
-                &path_cmd,
-            );
-        }
-        window.set_command_palette_open(false);
+        let mut app = state_cmd.borrow_mut();
+        super::hud_commands::handle_hud_query(&mut app, &scheduler_cmd, &window, &query);
     });
 
     let weak = window.as_weak();
     let state_sel = state.clone();
     let scheduler_sel = scheduler.clone();
-    let path_sel = preferences_path.to_path_buf();
     window.on_request_command_selected(move |idx| {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut model = super::model::AppModel::from_app_state(&state_sel.borrow(), &window);
-        let matching = super::hud_commands::filter_hud_commands(&model.command_palette_query);
+        let matching =
+            super::hud_commands::filter_hud_commands(window.get_command_palette_query().as_str());
         if let Some(item) = matching.get(idx as usize) {
-            if let Some(cmd) = super::update(
-                &mut model,
-                super::message::Msg::ExecuteCommand(item.id.to_string()),
-            ) {
-                super::view_binder::execute_command_effect(
-                    cmd,
-                    &model,
-                    &state_sel,
-                    &scheduler_sel,
-                    &window,
-                    &path_sel,
-                );
-            }
+            let mut app = state_sel.borrow_mut();
+            super::hud_commands::handle_hud_query(&mut app, &scheduler_sel, &window, item.id);
         }
         window.set_command_palette_open(false);
     });
@@ -2515,45 +2712,27 @@ fn connect_niche_feature_callbacks(
     let weak = window.as_weak();
     let state_tint = state.clone();
     let scheduler_tint = scheduler.clone();
-    let path_tint = preferences_path.to_path_buf();
     window.on_request_set_paper_tint(move |tint| {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let color = super::model::PaperTintColor::from_u8(tint as u8);
-        let mut model = super::model::AppModel::from_app_state(&state_tint.borrow(), &window);
-        if let Some(cmd) = super::update(&mut model, super::message::Msg::SetPaperTint(color)) {
-            window.set_paper_tint(tint);
-            super::view_binder::execute_command_effect(
-                cmd,
-                &model,
-                &state_tint,
-                &scheduler_tint,
-                &window,
-                &path_tint,
-            );
-        }
+        let mut app = state_tint.borrow_mut();
+        app.preferences.paper_tint = tint as u8;
+        window.set_paper_tint(tint);
+        super::ui::invalidate_layout_and_render(&mut app, &scheduler_tint, &window, false);
     });
 
     let weak = window.as_weak();
     let state_invert = state.clone();
     let scheduler_invert = scheduler.clone();
-    let path_invert = preferences_path.to_path_buf();
     window.on_request_toggle_invert_colors(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut model = super::model::AppModel::from_app_state(&state_invert.borrow(), &window);
-        if let Some(cmd) = super::update(&mut model, super::message::Msg::ToggleInvertColors) {
-            super::view_binder::execute_command_effect(
-                cmd,
-                &model,
-                &state_invert,
-                &scheduler_invert,
-                &window,
-                &path_invert,
-            );
-        }
+        let mut app = state_invert.borrow_mut();
+        app.preferences.invert_colors = !app.preferences.invert_colors;
+        window.set_invert_page_colors(app.preferences.invert_colors);
+        super::ui::invalidate_layout_and_render(&mut app, &scheduler_invert, &window, true);
     });
 }
 

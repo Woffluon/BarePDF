@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 /// Side-effects and asynchronous commands produced by pure `update` transitions.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum AppCommand {
     RequestPageRender {
         document_id: DocumentId,

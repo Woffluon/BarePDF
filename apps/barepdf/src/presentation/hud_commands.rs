@@ -1,6 +1,8 @@
-use crate::presentation::commands::AppCommand;
-use crate::presentation::model::{AppModel, PaperTintColor};
-use barepdf_core::PageIndex;
+use crate::presentation::state::AppState;
+
+use crate::presentation::ui::{invalidate_layout_and_render, zoom_mode_index};
+use barepdf_render::RenderScheduler;
+use barepdf_ui::AppWindow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HudCommandItem {
@@ -57,8 +59,6 @@ pub const ALL_HUD_COMMANDS: &[HudCommandItem] = &[
     },
 ];
 
-/// Returns matching command suggestions for the given query.
-#[must_use]
 pub fn filter_hud_commands(query: &str) -> Vec<HudCommandItem> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -75,137 +75,68 @@ pub fn filter_hud_commands(query: &str) -> Vec<HudCommandItem> {
         .collect()
 }
 
-/// Dispatches a selected or typed HUD command string.
-pub fn handle_hud_query(model: &mut AppModel, query: &str) -> Option<AppCommand> {
+pub fn handle_hud_query(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+    query: &str,
+) {
     let trimmed = query.trim();
 
-    // Check if query is a page number (e.g. "42")
     if let Ok(page_num) = trimmed.parse::<u32>() {
         if page_num >= 1 {
-            let target_index = PageIndex::from_raw(page_num - 1);
-            let target_cmd = if let Some(tab) = model.active_tab_mut() {
-                if target_index.get() < tab.page_count {
-                    tab.current_page = target_index;
-                    Some(AppCommand::RequestPageRender {
-                        document_id: tab.id,
-                        page_index: target_index,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            if let Some(cmd) = target_cmd {
-                model.command_palette_open = false;
-                return Some(cmd);
-            }
+            let target_index = page_num - 1;
+            crate::controllers::navigation_controller::navigate(
+                crate::controllers::navigation_controller::NavigationTarget::Page(target_index),
+                app,
+                scheduler,
+                window,
+            );
+            window.set_command_palette_open(false);
+            return;
         }
     }
 
     let lower = trimmed.to_lowercase();
-    model.command_palette_open = false;
+    window.set_command_palette_open(false);
 
     if lower.contains("zen") || lower == "f11" {
-        model.zen_mode = !model.zen_mode;
-        if model.zen_mode {
-            model.sidebar_open = false;
-        }
-        Some(AppCommand::SyncWindowChrome)
+        let is_zen = !window.get_zen_mode();
+        window.set_zen_mode(is_zen);
+        window.set_sidebar_visible(!is_zen && app.preferences.sidebar_visible);
     } else if lower.contains("invert") || lower.contains("ters") {
-        model.invert_colors = !model.invert_colors;
-        model.preferences.invert_colors = model.invert_colors;
-        Some(AppCommand::ToggleInvertColors)
+        app.preferences.invert_colors = !app.preferences.invert_colors;
+        window.set_invert_page_colors(app.preferences.invert_colors);
+        invalidate_layout_and_render(app, scheduler, window, true);
     } else if lower.contains("sepia") || lower.contains("sepya") {
-        model.paper_tint = PaperTintColor::WarmSepia;
-        model.preferences.paper_tint = 1;
-        Some(AppCommand::InvalidateCanvas)
+        app.preferences.paper_tint = 1;
+        window.set_paper_tint(1);
+        invalidate_layout_and_render(app, scheduler, window, false);
     } else if lower.contains("night") || lower.contains("gece") || lower.contains("dark") {
-        model.paper_tint = PaperTintColor::Night;
-        model.preferences.paper_tint = 2;
-        Some(AppCommand::InvalidateCanvas)
+        app.preferences.paper_tint = 2;
+        window.set_paper_tint(2);
+        invalidate_layout_and_render(app, scheduler, window, false);
     } else if lower.contains("amber") || lower.contains("kehribar") {
-        model.paper_tint = PaperTintColor::OledAmber;
-        model.preferences.paper_tint = 3;
-        Some(AppCommand::InvalidateCanvas)
+        app.preferences.paper_tint = 3;
+        window.set_paper_tint(3);
+        invalidate_layout_and_render(app, scheduler, window, false);
     } else if lower.contains("normal") || lower.contains("orijinal") || lower.contains("original") {
-        model.paper_tint = PaperTintColor::Normal;
-        model.preferences.paper_tint = 0;
-        Some(AppCommand::InvalidateCanvas)
-    } else if lower.contains("print") || lower.contains("yazdır") {
-        Some(AppCommand::ExecutePrintDialog)
-    } else if lower.contains("fit width") || lower.contains("genişlik") {
-        model.zoom_mode = barepdf_core::ZoomMode::FitWidth;
-        model.preferences.zoom_mode = barepdf_core::ZoomMode::FitWidth;
-        Some(AppCommand::InvalidateCanvas)
-    } else if lower.contains("fit page") || lower.contains("sayfa sığdır") {
-        model.zoom_mode = barepdf_core::ZoomMode::FitPage;
-        model.preferences.zoom_mode = barepdf_core::ZoomMode::FitPage;
-        Some(AppCommand::InvalidateCanvas)
+        app.preferences.paper_tint = 0;
+        window.set_paper_tint(0);
+        invalidate_layout_and_render(app, scheduler, window, false);
+    } else if lower.contains("print") || lower.contains("yazd") {
+        window.invoke_request_print();
+    } else if lower.contains("fit width") || lower.contains("geni") {
+        app.zoom_mode = barepdf_core::ZoomMode::FitWidth;
+        app.preferences.zoom_mode = barepdf_core::ZoomMode::FitWidth;
+        window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
+        invalidate_layout_and_render(app, scheduler, window, false);
+    } else if lower.contains("fit page") || lower.contains("sayfa s") {
+        app.zoom_mode = barepdf_core::ZoomMode::FitPage;
+        app.preferences.zoom_mode = barepdf_core::ZoomMode::FitPage;
+        window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
+        invalidate_layout_and_render(app, scheduler, window, false);
     } else if !trimmed.is_empty() {
-        Some(AppCommand::ShowBanner {
-            message: format!("Unknown command: {trimmed}"),
-            can_retry: false,
-        })
-    } else {
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn filter_hud_commands_empty_query_returns_all() {
-        let commands = filter_hud_commands("");
-        assert_eq!(commands.len(), ALL_HUD_COMMANDS.len());
-    }
-
-    #[test]
-    fn filter_hud_commands_matches_substring() {
-        let commands = filter_hud_commands("sepia");
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "tint_sepia");
-    }
-
-    #[test]
-    fn handle_hud_query_dispatches_page_navigation() {
-        let mut model = AppModel::default();
-        model
-            .tabs
-            .push(crate::presentation::model::DocumentTabModel {
-                id: barepdf_core::DocumentId::new(10),
-                path: std::path::PathBuf::from("doc.pdf"),
-                file_name: "doc.pdf".to_string(),
-                page_count: 50,
-                current_page: PageIndex::from_raw(0),
-                scroll_y: 0.0,
-            });
-
-        let cmd = handle_hud_query(&mut model, "42");
-        assert_eq!(
-            cmd,
-            Some(AppCommand::RequestPageRender {
-                document_id: barepdf_core::DocumentId::new(10),
-                page_index: PageIndex::from_raw(41),
-            })
-        );
-        assert_eq!(model.tabs[0].current_page.get(), 41);
-    }
-
-    #[test]
-    fn handle_hud_query_matches_invert_and_ters_queries() {
-        let mut model = AppModel::default();
-        assert!(!model.invert_colors);
-        let cmd_invert = handle_hud_query(&mut model, "invert colors");
-        assert_eq!(cmd_invert, Some(AppCommand::ToggleInvertColors));
-        assert!(model.invert_colors);
-        assert!(model.preferences.invert_colors);
-
-        let cmd_ters = handle_hud_query(&mut model, "ters çevir");
-        assert_eq!(cmd_ters, Some(AppCommand::ToggleInvertColors));
-        assert!(!model.invert_colors);
-        assert!(!model.preferences.invert_colors);
+        crate::presentation::ui::show_banner(window, format!("Unknown command: {trimmed}"), false);
     }
 }

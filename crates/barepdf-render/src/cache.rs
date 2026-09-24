@@ -59,6 +59,20 @@ impl BitmapCache {
         }
     }
 
+    pub fn evict_document(&mut self, document_id: DocumentId) {
+        let mut keys_to_remove = Vec::new();
+        for (k, _) in self.cache.iter() {
+            if k.document_id == document_id {
+                keys_to_remove.push(k.clone());
+            }
+        }
+        for k in keys_to_remove {
+            if let Some(popped) = self.cache.pop(&k) {
+                self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.cache.clear();
         self.current_bytes = 0;
@@ -110,5 +124,19 @@ mod tests {
         assert_eq!(bitmap.pixels().len(), 4);
         assert_eq!(cache.current_bytes(), 0);
         assert!(cache.get(&key(1)).is_none());
+    }
+    #[test]
+    fn evict_document_removes_only_target_document() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(100));
+        cache.insert(key(1), bitmap());
+        let mut key2 = key(2);
+        key2.document_id = DocumentId::new(2);
+        cache.insert(key2.clone(), bitmap());
+
+        assert_eq!(cache.current_bytes(), 8);
+        cache.evict_document(DocumentId::new(1));
+        assert_eq!(cache.current_bytes(), 4);
+        assert!(cache.get(&key(1)).is_none());
+        assert!(cache.get(&key2).is_some());
     }
 }

@@ -3,6 +3,7 @@
 
 mod app_error;
 mod application;
+mod controllers;
 mod diagnostics;
 mod infrastructure;
 mod presentation;

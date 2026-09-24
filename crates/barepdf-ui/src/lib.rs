@@ -8,6 +8,7 @@ slint::slint! {
     import { ZenOverlay } from "../ui/views/zen_overlay.slint";
     import { Scrubber } from "../ui/components/scrubber.slint";
     import { FilterPill } from "../ui/components/filter_pill.slint";
+    import { SearchBar } from "../ui/components/search_bar.slint";
     import { PasswordDialog as PasswordPopover } from "../ui/dialogs/password_dialog.slint";
     import { PreferencesDialog } from "../ui/dialogs/preferences_dialog.slint";
     import { PrintPreviewDialog as PrintPreview } from "../ui/dialogs/print_preview_dialog.slint";
@@ -21,6 +22,12 @@ slint::slint! {
         height: length,
     }
 
+    export struct BookmarkItem {
+        title: string,
+        page_index: int,
+        page_number: string,
+    }
+
     export struct PageItem {
         page_index: int,
         page_number: string,
@@ -30,6 +37,7 @@ slint::slint! {
         bitmap: image,
         has_bitmap: bool,
         selection_boxes: [SelectionBox],
+        search_highlights: [SelectionBox],
     }
 
     export struct ThumbnailItem {
@@ -712,6 +720,9 @@ slint::slint! {
         in property <[PageItem]> visible-pages: [];
         in property <[ThumbnailItem]> thumbnail-items: [];
         in property <[OutlineItem]> outline-items: [];
+        in property <[BookmarkItem]> bookmark-items: [];
+        in property <string> text-bookmarks: "Bookmarks";
+        in property <string> text-no-bookmarks: "No bookmarks.";
         in property <[RecentFileItem]> recent-files: [];
         in property <[TabItem]> tab-items: [];
         in-out property <length> current-scroll-y: 0px;
@@ -739,6 +750,15 @@ slint::slint! {
         in-out property <bool> invert-page-colors: false;
         in-out property <bool> preferences-open: false;
         in-out property <bool> command-palette-open: false;
+        in-out property <bool> search-open: false;
+        in-out property <string> search-query: "";
+        in property <string> search-match-counter: "";
+        in-out property <bool> search-case-sensitive: false;
+        in-out property <bool> search-whole-word: false;
+        in property <bool> search-has-matches: false;
+        callback request-search-next();
+        callback request-search-prev();
+        callback request-search-query(string);
         in-out property <string> command-palette-query: "";
         in property <[string]> command-palette-titles: [];
         in property <[string]> command-palette-subtitles: [];
@@ -924,6 +944,8 @@ slint::slint! {
         callback request-toggle-sidebar();
         callback request-sidebar-tab(int);
         callback request-toggle-outline(int);
+        callback bookmark-selected(int);
+        callback request-toggle-bookmark();
         callback request-toggle-fullscreen();
         callback request-presentation-mode();
         callback request-exit-special-mode();
@@ -996,6 +1018,7 @@ slint::slint! {
         FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}") {
+                    if (root.search-open) { root.search-open = false; return accept; }
                     if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                     if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
                     if (root.tools-open) {
@@ -1011,6 +1034,14 @@ slint::slint! {
                     if (root.settings-open) { root.settings-open = false; return accept; }
                     if (root.preferences-open) { root.preferences-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
+                }
+                if (event.modifiers.control && (event.text == "f" || event.text == "F")) {
+                    root.search-open = !root.search-open;
+                    return accept;
+                }
+                if (event.modifiers.control && (event.text == "d" || event.text == "D")) {
+                    root.request-toggle-bookmark();
+                    return accept;
                 }
                 if (event.modifiers.control && (event.text == "k" || event.text == "K")) {
                     root.command-palette-open = !root.command-palette-open;
@@ -1451,6 +1482,11 @@ slint::slint! {
                                     active: root.sidebar-tab == 1;
                                     clicked => { root.sidebar-tab = 1; root.request-sidebar-tab(1); }
                                 }
+                                TextButton {
+                                    text: root.text-bookmarks;
+                                    active: root.sidebar-tab == 2;
+                                    clicked => { root.sidebar-tab = 2; root.request-sidebar-tab(2); }
+                                }
                             }
                         }
 
@@ -1486,6 +1522,24 @@ slint::slint! {
                                         font-weight: thumb.is-selected ? 700 : 500;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            if root.sidebar-tab == 2 && root.bookmark-items.length == 0 : Text {
+                                text: root.text-no-bookmarks; color: ThemeTokens.text-muted; font-size: 12px;
+                                wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
+                            }
+                            if root.sidebar-tab == 2 && root.bookmark-items.length > 0 : ListView {
+                                for item[index] in root.bookmark-items : Rectangle {
+                                    height: 32px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: bookmark-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                                    bookmark-touch := TouchArea { clicked => { root.bookmark-selected(index); } }
+                                    HorizontalLayout {
+                                        padding-left: 12px; padding-right: 8px; spacing: 8px;
+                                        Text { text: item.title; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                        Text { text: item.page-number; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
                                     }
                                 }
                             }
@@ -1709,6 +1763,7 @@ slint::slint! {
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
+                            for highlight in page.search-highlights : Rectangle { x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B; }
                             TouchArea {
                                 pointer-event(event) => {
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1); }
@@ -2070,6 +2125,22 @@ slint::slint! {
                     }
                 }
             }
+        }
+
+        if root.search-open : SearchBar {
+            x: root.width - self.width - 24px;
+            y: 64px;
+            query <=> root.search-query;
+            match-counter: root.search-match-counter;
+            case-sensitive <=> root.search-case-sensitive;
+            whole-word <=> root.search-whole-word;
+            has-matches: root.search-has-matches;
+            query-changed(q) => { root.request-search-query(q); }
+            next-clicked => { root.request-search-next(); }
+            prev-clicked => { root.request-search-prev(); }
+            close-clicked => { root.search-open = false; }
+            toggle-case => { root.search-case-sensitive = !root.search-case-sensitive; }
+            toggle-whole-word => { root.search-whole-word = !root.search-whole-word; }
         }
 
         // HUD Command Palette (Ctrl+K)

@@ -14,7 +14,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(super) fn queue_update_check(
+pub(crate) fn queue_update_check(
     sender: &std::sync::mpsc::Sender<UpdateCommand>,
     canceller: &UpdateCheckCanceller,
     state: &Rc<RefCell<AppState>>,
@@ -37,7 +37,7 @@ pub(super) fn queue_update_check(
     }
 }
 
-pub(super) fn handle_update_event(
+pub(crate) fn handle_update_event(
     event: UpdateEvent,
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -58,7 +58,7 @@ pub(super) fn handle_update_event(
     render_update_ui(window, &app);
 }
 
-pub(super) fn render_update_ui(window: &AppWindow, app: &AppState) {
+pub(crate) fn render_update_ui(window: &AppWindow, app: &AppState) {
     let language = app.preferences.language.resolve();
     let (status, action, enabled, show_banner) = match app.update.ui_state() {
         UpdateUiState::Ready => (
@@ -172,13 +172,13 @@ fn update_check_is_due(preferences: &UserPreferences, now: u64) -> bool {
         .is_none_or(|last| last > now || now - last >= AUTO_CHECK_INTERVAL_SECONDS)
 }
 
-pub(super) fn startup_update_check_should_run(app: &AppState, now: u64) -> bool {
+pub(crate) fn startup_update_check_should_run(app: &AppState, now: u64) -> bool {
     app.update
         .allows_automatic_checks(app.preferences.update_checks_enabled)
         && update_check_is_due(&app.preferences, now)
 }
 
-pub(super) fn unix_timestamp() -> u64 {
+pub(crate) fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())

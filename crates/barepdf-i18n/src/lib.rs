@@ -145,6 +145,14 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("updates.action.download", "Download update");
     m.insert("updates.action.install", "Install update");
     m.insert("updates.action.release", "View release");
+    m.insert("search.placeholder", "Find in document...");
+    m.insert("search.no_matches", "No matches found");
+    m.insert("search.counter", "{current} / {total}");
+    m.insert("search.match_case", "Match Case");
+    m.insert("search.whole_word", "Whole Word");
+    m.insert("sidebar.bookmarks", "Bookmarks");
+    m.insert("bookmark.added", "Bookmark added");
+    m.insert("bookmark.removed", "Bookmark removed");
     m.insert("password.title", "Password Required");
     m.insert(
         "password.desc",
@@ -265,6 +273,14 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("updates.action.download", "Güncellemeyi indir");
     m.insert("updates.action.install", "Güncellemeyi kur");
     m.insert("updates.action.release", "Sürümü görüntüle");
+    m.insert("search.placeholder", "Belgede ara...");
+    m.insert("search.no_matches", "Eşleşme bulunamadı");
+    m.insert("search.counter", "{current} / {total}");
+    m.insert("search.match_case", "Büyük/Küçük Harf Duyarlı");
+    m.insert("search.whole_word", "Tam Sözcük");
+    m.insert("sidebar.bookmarks", "Yer İmleri");
+    m.insert("bookmark.added", "Yer imi eklendi");
+    m.insert("bookmark.removed", "Yer imi kaldırıldı");
     m.insert("password.title", "Parola Gerekli");
     m.insert(
         "password.desc",

@@ -31,6 +31,8 @@ pub const fn validate_document_page_count(page_count: PageCount) -> Result<(), R
     }
 }
 
+pub const MAX_SAFE_RENDER_DIMENSION: u32 = 8192;
+
 /// Validates the current number of tabs before another tab is inserted.
 ///
 /// # Errors
@@ -43,6 +45,31 @@ pub const fn validate_tab_count(current_count: usize) -> Result<(), ResourceLimi
         Err(ResourceLimitError::TooManyTabs {
             count: current_count,
         })
+    }
+}
+
+/// Sanitizes requested render dimensions against maximum safe limits
+///
+/// # Errors
+/// Returns [`crate::error::PdfError::RenderingFailed`] if dimensions are 0 or exceed the safety limit
+pub fn sanitize_render_dimensions(
+    width: u32,
+    height: u32,
+) -> Result<(u32, u32), crate::error::PdfError> {
+    if width == 0
+        || height == 0
+        || width > MAX_SAFE_RENDER_DIMENSION
+        || height > MAX_SAFE_RENDER_DIMENSION
+    {
+        Err(crate::error::PdfError::RenderingFailed {
+            page_index: 0,
+            reason: format!(
+                "Dimensions {}x{} are out of safe rendering bounds",
+                width, height
+            ),
+        })
+    } else {
+        Ok((width, height))
     }
 }
 
