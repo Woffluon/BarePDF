@@ -19,7 +19,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 mod printing;
-pub(crate) use printing::{show_print_dialog, DialogPrinter, PrinterDevice, PrinterJob};
+pub(crate) use printing::{
+    create_direct_printer_device, show_print_dialog, DialogPrinter, PrinterDevice, PrinterJob,
+};
 
 struct DropTarget {
     sender: SyncSender<Vec<PathBuf>>,

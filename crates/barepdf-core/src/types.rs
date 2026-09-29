@@ -84,7 +84,7 @@ pub struct ZoomFactor(f32);
 
 impl ZoomFactor {
     pub const MIN: f32 = 0.25;
-    pub const MAX: f32 = 2.0;
+    pub const MAX: f32 = 3.5;
     pub const DEFAULT: f32 = 1.0;
     pub const STEP: f32 = 0.25;
 
@@ -370,7 +370,8 @@ mod tests {
         assert_eq!(ZoomFactor::new(0.25).zoom_out(), ZoomFactor::new(0.25));
         assert_eq!(ZoomFactor::new(0.25).zoom_in(), ZoomFactor::new(0.5));
         assert_eq!(ZoomFactor::new(1.75).zoom_in(), ZoomFactor::new(2.0));
-        assert_eq!(ZoomFactor::new(2.0).zoom_in(), ZoomFactor::new(2.0));
+        assert_eq!(ZoomFactor::new(3.25).zoom_in(), ZoomFactor::new(3.5));
+        assert_eq!(ZoomFactor::new(3.5).zoom_in(), ZoomFactor::new(3.5));
     }
 
     #[test]
@@ -380,7 +381,7 @@ mod tests {
         >::new(10.0))
         .expect("valid persisted zoom");
 
-        assert_eq!(zoom, ZoomFactor::new(2.0));
+        assert_eq!(zoom, ZoomFactor::new(3.5));
     }
 
     #[test]

@@ -705,6 +705,7 @@ slint::slint! {
         min-width: 760px;
         min-height: 520px;
         background: ThemeTokens.window;
+        forward-focus: main-focus;
 
         in property <string> document-title: "";
         in property <string> status-text: "Ready";
@@ -790,6 +791,12 @@ slint::slint! {
         in-out property <int> print-preview-orientation: 0;
         in property <image> print-preview-image;
         in property <bool> print-preview-has-image: false;
+        in property <[string]> print-preview-printers: ["Microsoft Print to PDF", "OneNote (Desktop)", "Varsayılan Yazıcı"];
+        in-out property <int> print-preview-selected-printer: 0;
+        in-out property <int> print-preview-copies: 1;
+        in-out property <int> print-preview-range-mode: 0;
+        in-out property <int> print-preview-paper-size: 0;
+        in-out property <int> print-preview-duplex: 0;
         in-out property <bool> tools-open: false;
         in-out property <int> current-tool: -1;
         in-out property <[string]> merge-files: [];
@@ -928,6 +935,7 @@ slint::slint! {
         in property <string> text-tools-btn-convert-all: "Convert All Pages";
         in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
         in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
+        in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc) ✕" : "Exit (Esc) ✕";
 
         callback request-open-file();
         callback request-next-page();
@@ -1015,9 +1023,9 @@ slint::slint! {
         changed system-reduce-effects => { ThemeTokens.system-reduce-effects = root.system-reduce-effects; }
         changed visual-effects-ready => { ThemeTokens.enhanced = root.enhanced-ui && root.visual-effects-ready; }
 
-        FocusScope {
+        main-focus := FocusScope {
             key-pressed(event) => {
-                if (event.text == "\u{001b}") {
+                if (event.text == "\u{001b}" || event.text == Key.Escape) {
                     if (root.search-open) { root.search-open = false; return accept; }
                     if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                     if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
@@ -1048,9 +1056,8 @@ slint::slint! {
                     root.request-toggle-command-palette();
                     return accept;
                 }
-                if (event.text == "\u{f11}" || event.text == "F11") {
-                    root.zen-mode = !root.zen-mode;
-                    root.request-toggle-zen-mode();
+                if (event.text == "\u{f11}" || event.text == "F11" || event.text == Key.F11) {
+                    root.request-toggle-fullscreen();
                     return accept;
                 }
                 if (event.text == "\u{f5}" || event.text == "F5") { root.request-presentation-mode(); return accept; }
@@ -1080,6 +1087,67 @@ slint::slint! {
                 border-width: 1px;
                 border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                 Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
+            }
+
+            // Bottom hover trigger area for Floating HUD
+            pres-bottom-zone := TouchArea {
+                x: 0px;
+                y: parent.height - 120px;
+                width: parent.width;
+                height: 120px;
+            }
+
+            // Floating Presentation HUD Capsule
+            pres-hud := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: parent.height - self.height - 24px;
+                width: 380px;
+                height: 44px;
+                border-radius: 22px;
+                background: ThemeTokens.dark ? #18191dee : #fffffffa;
+                border-width: 1px;
+                border-color: ThemeTokens.dark ? #ffffff22 : #00000022;
+                drop-shadow-blur: 20px;
+                drop-shadow-offset-y: 6px;
+                drop-shadow-color: #00000088;
+                opacity: (pres-hud-touch.has-hover || pres-bottom-zone.has-hover) ? 1.0 : 0.0;
+                animate opacity { duration: 180ms; easing: ease-out; }
+
+                pres-hud-touch := TouchArea { }
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
+                    alignment: center;
+
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
+                        tooltip: root.text-prev-page;
+                        clicked => { root.request-prev-page(); }
+                    }
+
+                    Text {
+                        text: root.current-page-str + " / " + root.total-pages-str;
+                        color: ThemeTokens.text;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
+                        tooltip: root.text-next-page;
+                        clicked => { root.request-next-page(); }
+                    }
+
+                    Rectangle { width: 1px; height: 18px; background: ThemeTokens.border; }
+
+                    TextButton {
+                        text: root.text-exit-presentation;
+                        clicked => { root.request-exit-special-mode(); }
+                    }
+                }
             }
         }
 
@@ -1186,7 +1254,7 @@ slint::slint! {
                         clicked => { root.request-prev-page(); }
                     }
                     Rectangle {
-                        width: 88px;
+                        width: 96px;
                         height: ThemeTokens.control-height;
                         border-radius: ThemeTokens.control-radius;
                         background: ThemeTokens.control;
@@ -1197,11 +1265,11 @@ slint::slint! {
                             padding-right: 7px;
                             spacing: 3px;
                             LineEdit {
-                                width: 42px;
+                                width: 56px;
                                 enabled: root.has-document;
                                 text <=> root.current-page-str;
                                 input-type: number;
-                                horizontal-alignment: right;
+                                horizontal-alignment: center;
                                 accepted => { root.request-go-to-page(self.text); }
                             }
                             Text {
@@ -1230,7 +1298,7 @@ slint::slint! {
                         clicked => { root.request-zoom-out(); }
                     }
                     zoom-field := Rectangle {
-                        width: 62px;
+                        min-width: 68px;
                         height: ThemeTokens.control-height;
                         border-radius: ThemeTokens.control-radius;
                         background: ThemeTokens.control;
@@ -1495,10 +1563,12 @@ slint::slint! {
                                 viewport-y <=> root.thumbnail-scroll-y;
                                 for thumb in root.thumbnail-items : Rectangle {
                                     height: 188px;
-                                    border-radius: ThemeTokens.control-radius;
+                                    border-radius: 8px;
                                     background: thumb.is-selected ? ThemeTokens.selection : (thumb-touch.has-hover ? ThemeTokens.control-hover : #00000000);
                                     border-width: thumb.is-selected ? 2px : 1px;
                                     border-color: thumb.is-selected ? ThemeTokens.accent : (thumb-touch.has-hover ? ThemeTokens.border : #00000000);
+                                    drop-shadow-blur: thumb.is-selected ? (ThemeTokens.effects-active ? 8px : 4px) : 0px;
+                                    drop-shadow-color: ThemeTokens.accent.with-alpha(0.35);
                                     thumb-touch := TouchArea { clicked => { root.request-select-page(thumb.page-index); } }
                                     if thumb.is-selected : Rectangle {
                                         x: 0px; y: 8px; width: 3px; height: parent.height - 16px;
@@ -1509,9 +1579,13 @@ slint::slint! {
                                         y: 8px + (150px - self.height) / 2;
                                         width: Math.min(140px, thumb.width);
                                         height: Math.min(150px, thumb.height);
+                                        border-radius: 4px;
                                         background: white;
                                         border-width: 1px;
                                         border-color: #00000020;
+                                        drop-shadow-blur: 4px;
+                                        drop-shadow-offset-y: 1px;
+                                        drop-shadow-color: #00000015;
                                         if thumb.has-bitmap : Image { source: thumb.bitmap; width: 100%; height: 100%; image-fit: contain; }
                                     }
                                     Text {
@@ -1728,6 +1802,18 @@ slint::slint! {
                     if root.has-document && root.view-mode == 1 : ScrollView {
                         viewport-width: Math.max(self.width, root.page-display-width + 48px);
                         viewport-height: Math.max(self.height, root.page-display-height + 48px);
+                        TouchArea {
+                            width: parent.viewport-width;
+                            height: parent.viewport-height;
+                            scroll-event(event) => {
+                                if (event.modifiers.control) {
+                                    if (event.delta-y > 0) { root.request-zoom-in(); }
+                                    else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
                         Rectangle {
                             width: root.page-display-width; height: root.page-display-height;
                             x: Math.max(24px, (parent.viewport-width - self.width) / 2);
@@ -1747,6 +1833,14 @@ slint::slint! {
                                     if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) { root.pointer-up(root.visible-pages[0].page-index, self.mouse-x, self.mouse-y); }
                                     if (event.kind == PointerEventKind.move) { root.pointer-move(root.visible-pages[0].page-index, self.mouse-x, self.mouse-y); }
                                 }
+                                scroll-event(event) => {
+                                    if (event.modifiers.control) {
+                                        if (event.delta-y > 0) { root.request-zoom-in(); }
+                                        else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
                             }
                         }
                     }
@@ -1755,6 +1849,18 @@ slint::slint! {
                         viewport-width: Math.max(self.width, root.page-display-width + 48px);
                         viewport-height: Math.max(self.height, root.document-total-height + 48px);
                         viewport-y <=> root.current-scroll-y;
+                        TouchArea {
+                            width: parent.viewport-width;
+                            height: parent.viewport-height;
+                            scroll-event(event) => {
+                                if (event.modifiers.control) {
+                                    if (event.delta-y > 0) { root.request-zoom-in(); }
+                                    else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
                         for page in root.visible-pages : Rectangle {
                             width: page.width; height: page.height;
                             x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
@@ -1769,6 +1875,14 @@ slint::slint! {
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1); }
                                     if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) { root.pointer-up(page.page-index, self.mouse-x, self.mouse-y); }
                                     if (event.kind == PointerEventKind.move) { root.pointer-move(page.page-index, self.mouse-x, self.mouse-y); }
+                                }
+                                scroll-event(event) => {
+                                    if (event.modifiers.control) {
+                                        if (event.delta-y > 0) { root.request-zoom-in(); }
+                                        else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                        return accept;
+                                    }
+                                    return reject;
                                 }
                             }
                             if !page.has-bitmap : Text { text: root.text-loading + " " + page.page-number; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
@@ -2029,6 +2143,12 @@ slint::slint! {
                         image: root.print-preview-image;
                         has-image: root.print-preview-has-image;
                         total-pages: root.total-pages-str;
+                        printers: root.print-preview-printers;
+                        selected-printer <=> root.print-preview-selected-printer;
+                        copies <=> root.print-preview-copies;
+                        range-mode <=> root.print-preview-range-mode;
+                        paper-size <=> root.print-preview-paper-size;
+                        duplex <=> root.print-preview-duplex;
                         text-title: root.text-print-preview-title;
                         text-cancel-tooltip: root.text-print-preview-cancel-tooltip;
                         text-empty: root.text-print-preview-empty;

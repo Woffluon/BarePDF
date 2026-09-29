@@ -29,6 +29,31 @@ impl Default for Copies {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPrinter {
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrintOrientation {
+    #[default]
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+impl PrintOrientation {
+    #[must_use]
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Portrait,
+            2 => Self::Landscape,
+            _ => Self::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrintRange {
     first: PageIndex,
@@ -285,5 +310,28 @@ mod tests {
         assert!(sink.write_page(page).is_ok());
         assert!(sink.finish().is_ok());
         assert!(PrintJobId::new(0).is_none());
+    }
+
+    #[test]
+    fn print_orientation_from_index_maps_correctly() {
+        use super::PrintOrientation;
+        assert_eq!(PrintOrientation::from_index(1), PrintOrientation::Portrait);
+        assert_eq!(PrintOrientation::from_index(2), PrintOrientation::Landscape);
+        assert_eq!(PrintOrientation::from_index(0), PrintOrientation::Auto);
+        assert_eq!(PrintOrientation::from_index(99), PrintOrientation::Auto);
+        assert_eq!(PrintOrientation::default(), PrintOrientation::Auto);
+    }
+
+    #[test]
+    fn installed_printer_struct_holds_expected_values() {
+        use super::InstalledPrinter;
+        let printer = InstalledPrinter {
+            name: "Test Printer".to_string(),
+            is_default: true,
+        };
+        assert_eq!(printer.name, "Test Printer");
+        assert!(printer.is_default);
+        let printer2 = printer.clone();
+        assert_eq!(printer, printer2);
     }
 }

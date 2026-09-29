@@ -1,5 +1,6 @@
 use super::DocumentState;
 use barepdf_core::{PageIndex, Rotation, ZoomFactor, ZoomMode, MAX_OPEN_TABS};
+use barepdf_pdf::OutlineNode;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
@@ -39,12 +40,34 @@ impl Default for ViewState {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct TabDocumentLayout {
+    pub(crate) page_dimensions: Vec<(f32, f32)>,
+    pub(crate) first_page_dimensions: (f32, f32),
+    pub(crate) dimensions_revision: u64,
+    pub(crate) next_dimensions_start: u32,
+    pub(crate) outline: Vec<OutlineNode>,
+}
+
+impl Default for TabDocumentLayout {
+    fn default() -> Self {
+        Self {
+            page_dimensions: Vec::new(),
+            first_page_dimensions: (612.0, 792.0),
+            dimensions_revision: 0,
+            next_dimensions_start: 1,
+            outline: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct TabState {
     pub(crate) id: TabId,
     pub(crate) path: Option<PathBuf>,
     pub(crate) title: String,
     pub(crate) document: Option<DocumentState>,
     pub(crate) view: ViewState,
+    pub(crate) layout: TabDocumentLayout,
 }
 
 impl TabState {
@@ -107,6 +130,7 @@ impl TabSet {
             tab.path = Some(path);
             tab.title = title;
             tab.document = None;
+            tab.layout = TabDocumentLayout::default();
             return OpenTab::Existing(tab.id);
         }
         if self.tabs.len() >= MAX_OPEN_TABS {
@@ -121,6 +145,7 @@ impl TabSet {
             title,
             document: None,
             view: ViewState::default(),
+            layout: TabDocumentLayout::default(),
         });
         self.active = Some(id);
         OpenTab::Created(id)
@@ -137,6 +162,7 @@ impl TabSet {
             title: "New tab".to_string(),
             document: None,
             view: ViewState::default(),
+            layout: TabDocumentLayout::default(),
         });
         self.active = Some(id);
         Some(id)
@@ -385,5 +411,53 @@ mod tests {
 
         assert_eq!(tabs.active_id(), Some(plain));
         assert!(!tabs.active().is_some_and(TabState::is_loading));
+    }
+
+    #[test]
+    fn tabs_maintain_independent_document_layouts() {
+        let mut tabs = TabSet::default();
+        let OpenTab::Created(first) = tabs.open(PathBuf::from("first.pdf"), "first".into()) else {
+            panic!("failed to open first tab");
+        };
+        if let Some(tab) = tabs.active_mut() {
+            tab.layout.page_dimensions = vec![(500.0, 700.0); 15];
+            tab.layout.first_page_dimensions = (500.0, 700.0);
+            tab.layout.dimensions_revision = 3;
+            tab.layout.next_dimensions_start = 16;
+            tab.layout.outline = vec![OutlineNode {
+                title: "Chapter 1".into(),
+                page_index: Some(0),
+                children: Vec::new(),
+            }];
+        }
+
+        let OpenTab::Created(second) = tabs.open(PathBuf::from("second.pdf"), "second".into())
+        else {
+            panic!("failed to open second tab");
+        };
+        if let Some(tab) = tabs.active_mut() {
+            tab.layout.page_dimensions = vec![(612.0, 792.0); 3];
+            tab.layout.first_page_dimensions = (612.0, 792.0);
+            tab.layout.dimensions_revision = 1;
+            tab.layout.next_dimensions_start = 4;
+        }
+
+        let active = tabs.active().expect("active tab");
+        assert_eq!(active.id, second);
+        assert_eq!(active.layout.page_dimensions.len(), 3);
+        assert_eq!(active.layout.first_page_dimensions, (612.0, 792.0));
+        assert_eq!(active.layout.dimensions_revision, 1);
+        assert_eq!(active.layout.next_dimensions_start, 4);
+        assert!(active.layout.outline.is_empty());
+
+        assert!(tabs.activate(first));
+        let active = tabs.active().expect("active tab");
+        assert_eq!(active.id, first);
+        assert_eq!(active.layout.page_dimensions.len(), 15);
+        assert_eq!(active.layout.first_page_dimensions, (500.0, 700.0));
+        assert_eq!(active.layout.dimensions_revision, 3);
+        assert_eq!(active.layout.next_dimensions_start, 16);
+        assert_eq!(active.layout.outline.len(), 1);
+        assert_eq!(active.layout.outline[0].title, "Chapter 1");
     }
 }

@@ -28,14 +28,15 @@ use barepdf_core::{
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::conversion::{ConversionDpi, ConversionFormat};
-use barepdf_platform::printing::PrintRange;
+use barepdf_platform::printing::{Copies, PrintOrientation, PrintRange};
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
-    is_installed_build, open_url, WindowsClipboard, WindowsFileDialogs, WindowsPrinterDialog,
+    enumerate_installed_printers, is_installed_build, open_url, WindowsClipboard,
+    WindowsFileDialogs, WindowsPrinterSink,
 };
 use barepdf_render::{Priority, RenderCommand, RenderJob, RenderKind, RenderScheduler};
 use barepdf_ui::AppWindow;
-use slint::{ComponentHandle, Image, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -49,7 +50,7 @@ use super::models::{
 };
 use super::state::AppState;
 use super::ui::{
-    apply_theme, begin_open, invalidate_layout_and_render, native_window_handle, navigate_to_page,
+    apply_theme, begin_open, ensure_layout, invalidate_layout_and_render, navigate_to_page,
     navigate_to_page_inner, parse_drop_paths, persist_preferences, pointer_to_pdf,
     refresh_generation_bound_views, refresh_outline_model, render_visible_pages,
     request_next_dimensions_batch, request_visible_thumbnails, save_zoom_preference,
@@ -623,6 +624,24 @@ fn connect_print_callbacks(
         window.set_print_preview_has_image(false);
         window.set_print_preview_image(Image::default());
         window.set_print_preview_open(true);
+
+        let installed = enumerate_installed_printers();
+        let mut names = Vec::new();
+        let mut default_idx = 0;
+        for (i, p) in installed.iter().enumerate() {
+            names.push(SharedString::from(p.name.clone()));
+            if p.is_default {
+                default_idx = i;
+            }
+        }
+        if names.is_empty() {
+            names.push(SharedString::from("Microsoft Print to PDF"));
+        }
+        window.set_print_preview_printers(ModelRc::new(VecModel::from(names)));
+        window.set_print_preview_selected_printer(default_idx as i32);
+        window.set_print_preview_copies(1);
+        window.set_print_preview_range_mode(0);
+
         PRINT_PREVIEW.with(|state| *state.borrow_mut() = Some(preview));
         request_print_preview_render(&mut app, &scheduler_print, &window);
     });
@@ -706,7 +725,7 @@ fn connect_print_callbacks(
                     )
                 })
         });
-        let Some((document_id, generation, page_count, orientation, range_input)) = preview_target
+        let Some((document_id, generation, page_count, _orientation, range_input)) = preview_target
         else {
             return;
         };
@@ -729,22 +748,50 @@ fn connect_print_callbacks(
             close_print_preview(&window);
             return;
         };
-        let Some((first, last)) = parse_print_preview_range(&range_input, page_count) else {
-            show_banner(
-                &window,
-                barepdf_i18n::t(language, "print.start_failed"),
-                false,
-            );
-            return;
+        let selected_printer_idx = window.get_print_preview_selected_printer().max(0) as usize;
+        let printer_model = window.get_print_preview_printers();
+        let printer_name = printer_model
+            .row_data(selected_printer_idx)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Microsoft Print to PDF".to_string());
+
+        let range_mode = window.get_print_preview_range_mode();
+        let range = match range_mode {
+            1 => {
+                let cur = {
+                    let app = state_confirm.borrow();
+                    PageIndex::from_raw(app.current_page.min(page_count.get().saturating_sub(1)))
+                };
+                PrintRange::new(cur, cur, page_count)
+                    .unwrap_or_else(|_| PrintRange::all(page_count))
+            }
+            2 => {
+                let Some((first, last)) = parse_print_preview_range(&range_input, page_count)
+                else {
+                    show_banner(
+                        &window,
+                        barepdf_i18n::t(language, "print.start_failed"),
+                        false,
+                    );
+                    return;
+                };
+                let Ok(range) = PrintRange::new(first, last, page_count) else {
+                    show_banner(
+                        &window,
+                        barepdf_i18n::t(language, "print.start_failed"),
+                        false,
+                    );
+                    return;
+                };
+                range
+            }
+            _ => PrintRange::all(page_count),
         };
-        let Ok(range) = PrintRange::new(first, last, page_count) else {
-            show_banner(
-                &window,
-                barepdf_i18n::t(language, "print.start_failed"),
-                false,
-            );
-            return;
-        };
+
+        let copies_num = (window.get_print_preview_copies() as u16).clamp(1, 99);
+        let copies = Copies::new(copies_num).unwrap_or_default();
+        let orientation = PrintOrientation::from_index(window.get_print_preview_orientation());
+
         let job_id = match controller.borrow_mut().reserve_job() {
             Ok(job_id) => job_id,
             Err(PrintControllerError::Busy) => {
@@ -760,46 +807,29 @@ fn connect_print_callbacks(
                 return;
             }
         };
-        let Some(hwnd) = native_window_handle(&window) else {
-            controller.borrow_mut().release_reservation(job_id);
-            show_banner(
-                &window,
-                barepdf_i18n::t(language, "print.dialog_unavailable"),
-                false,
-            );
-            return;
-        };
-        let selection = WindowsPrinterDialog::new(hwnd as _).select_with_defaults(
-            job_id,
-            page_count,
-            range,
-            orientation,
-        );
-        let selection = match selection {
-            Ok(Some(selection)) => selection,
-            Ok(None) => {
-                controller.borrow_mut().release_reservation(job_id);
-                return;
-            }
-            Err(_) => {
-                controller.borrow_mut().release_reservation(job_id);
-                show_banner(
-                    &window,
-                    barepdf_i18n::t(language, "print.dialog_failed"),
-                    false,
-                );
-                return;
-            }
-        };
+
+        let sink =
+            match WindowsPrinterSink::direct(job_id, 300, &printer_name, orientation, copies_num) {
+                Ok(sink) => sink,
+                Err(e) => {
+                    controller.borrow_mut().release_reservation(job_id);
+                    show_banner(
+                        &window,
+                        format!(
+                            "{}: {:?}",
+                            barepdf_i18n::t(language, "print.dialog_failed"),
+                            e
+                        ),
+                        false,
+                    );
+                    return;
+                }
+            };
         close_print_preview(&window);
-        match controller.borrow_mut().submit(
-            job_id,
-            path,
-            title,
-            selection.range,
-            selection.copies,
-            Box::new(selection.sink),
-        ) {
+        match controller
+            .borrow_mut()
+            .submit(job_id, path, title, range, copies, Box::new(sink))
+        {
             Ok(()) => {
                 window.set_print_active(true);
                 window.set_print_progress(0.0);
@@ -932,8 +962,34 @@ fn connect_tab_callbacks(
         };
         if already_ready {
             let mut app = state_activate.borrow_mut();
+            window.set_has_document(true);
+            let title = app
+                .application
+                .tabs
+                .active()
+                .map(|tab| tab.title.clone())
+                .unwrap_or_default();
+            window.set_document_title(SharedString::from(title));
+            let page_count = app.page_count();
+            window.set_total_pages_str(SharedString::from(page_count.to_string()));
+            app.layout_key = None;
+            ensure_layout(&mut app);
+            refresh_thumbnail_model(&mut app, &window);
+            refresh_page_model(&mut app, &window);
+            refresh_tab_model(&app, &window);
             refresh_generation_bound_views(&mut app, &scheduler_activate, &window);
             refresh_bookmark_model(&app, &window);
+            if !app.outline.is_empty() {
+                refresh_outline_model(&mut app, &window);
+            }
+            let current_page = app.current_page;
+            let active_doc = app.active_document();
+            if let Some(image) = active_doc.and_then(|document| {
+                app.page_images
+                    .get(document, current_page, RenderKind::Page)
+            }) {
+                window.set_page_bitmap(image);
+            }
             request_next_dimensions_batch(&mut app, &scheduler_activate);
         } else if let Some(path) = path {
             if path.is_file() {
@@ -1007,9 +1063,7 @@ fn connect_tab_callbacks(
         };
         let mut app = state_new.borrow_mut();
         snapshot_active_view(&mut app, &window);
-        let previous_document = app.active_document();
         app.generation = scheduler_new.bump_generation();
-        close_worker_document(&mut app, &scheduler_new, previous_document);
         clear_document_transients(&mut app, &window);
         if app.application.tabs.new_empty().is_none() {
             show_banner(
@@ -1035,20 +1089,46 @@ pub(super) fn snapshot_active_view(app: &mut AppState, window: &AppWindow) {
         sidebar_visible: window.get_sidebar_visible(),
         sidebar_tab: window.get_sidebar_tab(),
     };
+    let layout = crate::application::TabDocumentLayout {
+        page_dimensions: app.page_dimensions.clone(),
+        first_page_dimensions: app.first_page_dimensions,
+        dimensions_revision: app.dimensions_revision,
+        next_dimensions_start: app.next_dimensions_start,
+        outline: app.outline.clone(),
+    };
     if let Some(tab) = app.application.tabs.active_mut() {
         tab.view = view;
+        tab.layout = layout;
     }
 }
 
 pub(super) fn restore_active_view(app: &mut AppState, window: &AppWindow) {
-    let Some(view) = app.application.tabs.active().map(|tab| tab.view.clone()) else {
+    let Some(tab) = app.application.tabs.active() else {
         return;
     };
+    let view = tab.view.clone();
+    let layout = tab.layout.clone();
+
     app.current_page = view.current_page.get();
     app.zoom_mode = view.zoom_mode;
     app.zoom_factor = view.zoom_factor;
     app.rotation = view.rotation;
     app.last_scroll_y = view.scroll_y;
+
+    app.page_dimensions = layout.page_dimensions;
+    app.first_page_dimensions = layout.first_page_dimensions;
+    app.dimensions_revision = layout.dimensions_revision;
+    app.next_dimensions_start = layout.next_dimensions_start;
+    app.outline = layout.outline;
+    app.outline_requested = !app.outline.is_empty();
+    app.expanded_outline.clear();
+    for index in 0..app.outline.len() {
+        if !app.outline[index].children.is_empty() {
+            app.expanded_outline.insert(vec![index]);
+        }
+    }
+    app.flat_outline.clear();
+
     window.set_current_scroll_y(view.scroll_y);
     window.set_sidebar_visible(view.sidebar_visible);
     window.set_sidebar_tab(view.sidebar_tab);

@@ -9,5 +9,5 @@ pub(crate) use document_controller::{DocumentController, OpenTransition};
 pub(crate) use print_controller::{PrintController, PrintControllerError};
 pub(crate) use render_controller::RenderController;
 pub(crate) use state::{Application, DocumentState, ReadyDocument};
-pub(crate) use tabs::{OpenTab, TabSet, ViewState};
+pub(crate) use tabs::{OpenTab, TabDocumentLayout, TabSet, ViewState};
 pub(crate) use update_controller::{UpdateController, UpdateUiState};

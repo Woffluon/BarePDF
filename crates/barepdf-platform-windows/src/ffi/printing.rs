@@ -2,18 +2,23 @@ use crate::printing::{PrintDialogOptions, PrintOrientation};
 use barepdf_platform::printing::{PrintError, PrintPage};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HGLOBAL, HWND};
+use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows_sys::Win32::Graphics::Gdi::{
-    DeleteDC, GetDeviceCaps, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEVMODEW,
-    DIB_RGB_COLORS, DMORIENT_LANDSCAPE, DMORIENT_PORTRAIT, DM_ORIENTATION, GDI_ERROR, HDC, HORZRES,
-    RGBQUAD, SRCCOPY, VERTRES,
+    CreateDCW, DeleteDC, GetDeviceCaps, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DEVMODEW, DIB_RGB_COLORS, DMORIENT_LANDSCAPE, DMORIENT_PORTRAIT, DM_ORIENTATION, GDI_ERROR,
+    HDC, HORZRES, RGBQUAD, SRCCOPY, VERTRES,
 };
+use windows_sys::Win32::Graphics::Printing::{ClosePrinter, DocumentPropertiesW, OpenPrinterW};
 use windows_sys::Win32::Storage::Xps::{AbortDoc, EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::Controls::Dialogs::{
     CommDlgExtendedError, PrintDlgW, PD_ALLPAGES, PD_NOSELECTION, PD_PAGENUMS, PD_RETURNDC,
     PD_RETURNDEFAULT, PRINTDLGW,
 };
+
+const DM_COPIES: u32 = 0x0000_0100;
+const DM_IN_BUFFER: u32 = 8;
+const DM_OUT_BUFFER: u32 = 2;
 
 pub(crate) struct DialogPrinter {
     pub(crate) device: PrinterDevice,
@@ -171,6 +176,143 @@ fn apply_orientation(dev_mode: HGLOBAL, orientation: PrintOrientation) {
         (*pointer).Anonymous1.Anonymous1.dmOrientation = orientation;
         let _ = GlobalUnlock(dev_mode);
     }
+}
+
+pub(crate) fn create_direct_printer_device(
+    printer_name: &str,
+    orientation: PrintOrientation,
+    copies: u16,
+) -> Result<PrinterDevice, PrintError> {
+    if printer_name.trim().is_empty() {
+        return Err(PrintError::Platform {
+            operation: "create_direct_printer_device empty name",
+            code: 0,
+        });
+    }
+
+    let wide_name = wide_null(OsStr::new(printer_name));
+    let mut hprinter: HANDLE = std::ptr::null_mut();
+
+    // SAFETY: OpenPrinterW initializes hprinter handle on success.
+    let opened = unsafe {
+        OpenPrinterW(
+            wide_name.as_ptr() as *mut u16,
+            &raw mut hprinter,
+            std::ptr::null(),
+        )
+    };
+
+    let devmode_buf = if opened != 0 && !hprinter.is_null() {
+        struct PrinterGuard(HANDLE);
+        impl Drop for PrinterGuard {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: ClosePrinter is called once on a valid open printer handle.
+                    unsafe { ClosePrinter(self.0) };
+                }
+            }
+        }
+        let _guard = PrinterGuard(hprinter);
+
+        // Query required DEVMODE buffer size
+        // SAFETY: Passing NULL for output DEVMODE returns required buffer size in bytes.
+        let devmode_size = unsafe {
+            DocumentPropertiesW(
+                std::ptr::null_mut(),
+                hprinter,
+                wide_name.as_ptr() as *mut u16,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+
+        if devmode_size > 0 {
+            let mut buf = vec![0u8; devmode_size as usize];
+
+            // Retrieve current devmode
+            // SAFETY: Buffer is allocated with `devmode_size` bytes.
+            let get_res = unsafe {
+                DocumentPropertiesW(
+                    std::ptr::null_mut(),
+                    hprinter,
+                    wide_name.as_ptr() as *mut u16,
+                    buf.as_mut_ptr().cast(),
+                    std::ptr::null_mut(),
+                    DM_OUT_BUFFER,
+                )
+            };
+
+            if get_res >= 0 {
+                let devmode = buf.as_mut_ptr().cast::<DEVMODEW>();
+                if copies > 0 {
+                    // SAFETY: Pointer is within allocated devmode buffer.
+                    unsafe {
+                        (*devmode).dmFields |= DM_COPIES;
+                        (*devmode).Anonymous1.Anonymous1.dmCopies = copies as i16;
+                    }
+                }
+                match orientation {
+                    PrintOrientation::Portrait => {
+                        // SAFETY: Pointer is within allocated devmode buffer.
+                        unsafe {
+                            (*devmode).dmFields |= DM_ORIENTATION;
+                            (*devmode).Anonymous1.Anonymous1.dmOrientation =
+                                DMORIENT_PORTRAIT as i16;
+                        }
+                    }
+                    PrintOrientation::Landscape => {
+                        // SAFETY: Pointer is within allocated devmode buffer.
+                        unsafe {
+                            (*devmode).dmFields |= DM_ORIENTATION;
+                            (*devmode).Anonymous1.Anonymous1.dmOrientation =
+                                DMORIENT_LANDSCAPE as i16;
+                        }
+                    }
+                    PrintOrientation::Auto => {}
+                }
+
+                // Merge and validate with driver (without displaying any dialog)
+                // SAFETY: In and out buffers point to valid DEVMODEW data.
+                let _ = unsafe {
+                    DocumentPropertiesW(
+                        std::ptr::null_mut(),
+                        hprinter,
+                        wide_name.as_ptr() as *mut u16,
+                        buf.as_mut_ptr().cast(),
+                        buf.as_ptr().cast(),
+                        DM_IN_BUFFER | DM_OUT_BUFFER,
+                    )
+                };
+                Some(buf)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let pdm = devmode_buf
+        .as_ref()
+        .map_or(std::ptr::null(), |b| b.as_ptr().cast());
+
+    // SAFETY: CreateDCW creates a device context for the named printer.
+    let mut hdc = unsafe { CreateDCW(std::ptr::null(), wide_name.as_ptr(), std::ptr::null(), pdm) };
+
+    if hdc.is_null() {
+        let winspool = wide_null(OsStr::new("WINSPOOL"));
+        // SAFETY: Fallback with explicit WINSPOOL driver name.
+        hdc = unsafe { CreateDCW(winspool.as_ptr(), wide_name.as_ptr(), std::ptr::null(), pdm) };
+    }
+
+    if hdc.is_null() {
+        return Err(last_error("CreateDCW"));
+    }
+
+    Ok(PrinterDevice(hdc))
 }
 
 pub(crate) struct PrinterDevice(HDC);

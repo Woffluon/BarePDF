@@ -53,7 +53,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
-pub(crate) const PAGE_IMAGE_BUDGET: usize = 16 * 1024 * 1024;
+pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
+pub(crate) const PAGE_IMAGE_BUDGET: usize = 32 * 1024 * 1024;
 pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
 const THUMB_ROW_HEIGHT: f32 = 188.0;
 const THUMBNAIL_PREFETCH_ROWS: u32 = 2;
@@ -65,8 +66,8 @@ const WELCOME_DOCUMENT_NAME: &str = "BarePDF Welcome.pdf";
 const WELCOME_PDF: &[u8] = include_bytes!("../../../../assets/barepdf-welcome.pdf");
 
 use super::callbacks::{
-    clear_document_transients, close_worker_document, consume_print_preview_render,
-    requeue_print_preview_for_generation, restore_active_view, snapshot_active_view,
+    clear_document_transients, consume_print_preview_render, requeue_print_preview_for_generation,
+    restore_active_view, snapshot_active_view,
 };
 use super::models::{
     refresh_page_model, refresh_tab_model, refresh_thumbnail_model, refresh_thumbnail_row,
@@ -300,6 +301,7 @@ pub(crate) fn install_native_file_drop(
     install_file_drop(window_handle.window_handle().ok()?)
 }
 
+#[allow(dead_code)]
 pub(crate) fn native_window_handle(window: &AppWindow) -> Option<isize> {
     let window_handle = window.window().window_handle();
     let handle = window_handle.window_handle().ok()?;
@@ -441,6 +443,18 @@ pub(crate) fn handle_render_event(
             app.next_dimensions_start = 1;
             app.dimensions_request_pending = false;
             app.layout_key = None;
+            let page_dims = app.page_dimensions.clone();
+            let dims_rev = app.dimensions_revision;
+            let next_dims = app.next_dimensions_start;
+            if let Some(tab) = app.application.tabs.active_mut() {
+                tab.layout = crate::application::TabDocumentLayout {
+                    page_dimensions: page_dims,
+                    first_page_dimensions,
+                    dimensions_revision: dims_rev,
+                    next_dimensions_start: next_dims,
+                    outline: Vec::new(),
+                };
+            }
             app.visible_page_indices.clear();
             app.first_page_ready = false;
             app.profile_recorded = false;
@@ -709,7 +723,6 @@ pub(crate) fn begin_open(
         let mut app = state.borrow_mut();
         snapshot_active_view(&mut app, window);
         let previous_tab = app.application.tabs.active_id();
-        let previous_document = app.active_document();
         if matches!(
             app.application.tabs.open(path.clone(), title),
             OpenTab::Full
@@ -723,7 +736,6 @@ pub(crate) fn begin_open(
         }
         if app.application.tabs.active_id() != previous_tab {
             app.generation = scheduler.bump_generation();
-            close_worker_document(&mut app, scheduler, previous_document);
             clear_document_transients(&mut app, window);
         }
         restore_active_view(&mut app, window);
@@ -1850,6 +1862,18 @@ mod tests {
                 .saturating_mul(std::mem::size_of::<Rgba8Pixel>())
                 <= PAGE_IMAGE_BUDGET
         );
+        const { assert!(PAGE_IMAGE_BUDGET <= UI_IMAGE_CACHE_BUDGET) };
+    }
+
+    #[test]
+    fn zoom_350_percent_standard_page_fits_within_page_budget() {
+        // A4: 595 x 842 at 350% (3.5x) zoom = 2083 x 2947 pixels (~24.5 MB RGBA8)
+        let (width, height) = fit_bitmap_to_budget(2083, 2947, PAGE_IMAGE_BUDGET);
+        assert_eq!((width, height), (2083, 2947));
+
+        // Letter: 612 x 792 at 350% (3.5x) zoom = 2142 x 2772 pixels (~23.8 MB RGBA8)
+        let (width, height) = fit_bitmap_to_budget(2142, 2772, PAGE_IMAGE_BUDGET);
+        assert_eq!((width, height), (2142, 2772));
     }
 
     #[test]

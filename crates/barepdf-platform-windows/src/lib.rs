@@ -4,6 +4,7 @@ mod drop_target;
 mod executable;
 mod ffi;
 mod image_encoder;
+mod printers;
 mod printing;
 mod shell;
 
@@ -12,7 +13,8 @@ pub use dialogs::{ask_yes_no, show_fatal_error, WindowsFileDialogs};
 pub use drop_target::install_file_drop;
 pub use executable::{executable_file_version, is_installed_build, launch_installer};
 pub use image_encoder::WindowsImageEncoder;
-pub use printing::{WindowsPrinterDialog, WindowsPrinterSink};
+pub use printers::{enumerate_installed_printers, InstalledPrinter};
+pub use printing::{PrintOrientation, WindowsPrinterDialog, WindowsPrinterSink};
 pub use shell::open_url;
 
 #[must_use]

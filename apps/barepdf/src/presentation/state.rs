@@ -6,7 +6,7 @@
 )]
 
 use super::ui::{
-    normalize_viewing_mode, PAGE_IMAGE_BUDGET, TEXT_GEOMETRY_BUDGET, THUMB_IMAGE_BUDGET,
+    normalize_viewing_mode, TEXT_GEOMETRY_BUDGET, THUMB_IMAGE_BUDGET, UI_IMAGE_CACHE_BUDGET,
 };
 use crate::application::{Application, DocumentController, UpdateController};
 use crate::infrastructure::{ToolJobKey, ToolWorker};
@@ -329,7 +329,7 @@ impl AppState {
             outline_requested: false,
             expanded_outline: HashSet::new(),
             flat_outline: Vec::new(),
-            page_images: UiImageCache::new(PAGE_IMAGE_BUDGET),
+            page_images: UiImageCache::new(UI_IMAGE_CACHE_BUDGET),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             update: UpdateController::default(),
             tools_merge_files: Vec::new(),
@@ -405,10 +405,18 @@ pub(crate) fn fit_bitmap_to_budget(width: u32, height: u32, budget: usize) -> (u
     }
 
     let scale = (max_pixels as f64 / pixels as f64).sqrt();
-    (
-        (f64::from(width) * scale).round().max(1.0) as u32,
-        (f64::from(height) * scale).round().max(1.0) as u32,
-    )
+    let mut fitted_width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let mut fitted_height = (f64::from(height) * scale).round().max(1.0) as u32;
+    while u64::from(fitted_width).saturating_mul(u64::from(fitted_height)) > max_pixels {
+        if fitted_width >= fitted_height && fitted_width > 1 {
+            fitted_width -= 1;
+        } else if fitted_height > 1 {
+            fitted_height -= 1;
+        } else {
+            break;
+        }
+    }
+    (fitted_width, fitted_height)
 }
 
 #[cfg(test)]
@@ -490,5 +498,108 @@ mod tests {
 
         assert!(!cache.contains_key(first, 0, RenderKind::Thumbnail));
         assert!(cache.contains_key(first, 1, RenderKind::Thumbnail));
+    }
+
+    #[test]
+    fn page_image_cache_holds_multiple_large_pages_without_thrashing() {
+        let mut cache = UiImageCache::new(UI_IMAGE_CACHE_BUDGET);
+        let doc = DocumentId::new(1);
+        let page_bytes = 24 * 1024 * 1024; // ~24MB per 350% A4 page
+
+        cache.insert(doc, 0, RenderKind::Page, Image::default(), page_bytes);
+        cache.insert(doc, 1, RenderKind::Page, Image::default(), page_bytes);
+        cache.insert(doc, 2, RenderKind::Page, Image::default(), page_bytes);
+        cache.insert(doc, 3, RenderKind::Page, Image::default(), page_bytes);
+
+        assert!(cache.contains_key(doc, 0, RenderKind::Page));
+        assert!(cache.contains_key(doc, 1, RenderKind::Page));
+        assert!(cache.contains_key(doc, 2, RenderKind::Page));
+        assert!(cache.contains_key(doc, 3, RenderKind::Page));
+    }
+
+    #[test]
+    fn multi_tab_switch_preserves_dimensions_and_layout() {
+        let mut app = AppState::new(UserPreferences::default());
+        let doc1 = DocumentId::new(1);
+        DocumentController::begin_open(
+            &mut app.application,
+            doc1,
+            PathBuf::from("large.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc1, 50, 10_000);
+        app.page_dimensions = vec![(595.0, 842.0); 50];
+        app.first_page_dimensions = (595.0, 842.0);
+        app.dimensions_revision = 5;
+        app.next_dimensions_start = 51;
+        app.outline = vec![OutlineNode {
+            title: "Intro".into(),
+            page_index: Some(0),
+            children: Vec::new(),
+        }];
+
+        let tab1_id = app.application.tabs.active_id().unwrap();
+        if let Some(tab) = app.application.tabs.active_mut() {
+            tab.layout = crate::application::TabDocumentLayout {
+                page_dimensions: app.page_dimensions.clone(),
+                first_page_dimensions: app.first_page_dimensions,
+                dimensions_revision: app.dimensions_revision,
+                next_dimensions_start: app.next_dimensions_start,
+                outline: app.outline.clone(),
+            };
+        }
+
+        let doc2 = DocumentId::new(2);
+        let _ = app
+            .application
+            .tabs
+            .open(PathBuf::from("small.pdf"), "small".into());
+        let tab2_id = app.application.tabs.active_id().unwrap();
+        assert_ne!(tab1_id, tab2_id);
+        DocumentController::begin_open(
+            &mut app.application,
+            doc2,
+            PathBuf::from("small.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc2, 10, 10_000);
+        app.page_dimensions = vec![(612.0, 792.0); 10];
+        app.first_page_dimensions = (612.0, 792.0);
+        app.dimensions_revision = 1;
+        app.next_dimensions_start = 11;
+        app.outline.clear();
+
+        if let Some(tab) = app.application.tabs.active_mut() {
+            tab.layout = crate::application::TabDocumentLayout {
+                page_dimensions: app.page_dimensions.clone(),
+                first_page_dimensions: app.first_page_dimensions,
+                dimensions_revision: app.dimensions_revision,
+                next_dimensions_start: app.next_dimensions_start,
+                outline: app.outline.clone(),
+            };
+        }
+
+        assert_eq!(app.page_count(), 10);
+        assert_eq!(app.page_dimensions.len(), 10);
+
+        assert!(app.application.tabs.activate(tab1_id));
+        let tab1_layout = app.application.tabs.active().unwrap().layout.clone();
+        app.page_dimensions = tab1_layout.page_dimensions;
+        app.first_page_dimensions = tab1_layout.first_page_dimensions;
+        app.dimensions_revision = tab1_layout.dimensions_revision;
+        app.next_dimensions_start = tab1_layout.next_dimensions_start;
+        app.outline = tab1_layout.outline;
+
+        assert_eq!(app.page_count(), 50);
+        assert_eq!(app.page_dimensions.len(), 50);
+        assert_eq!(app.first_page_dimensions, (595.0, 842.0));
+        assert_eq!(app.dimensions_revision, 5);
+        assert_eq!(app.next_dimensions_start, 51);
+        assert_eq!(app.outline.len(), 1);
+        assert_eq!(app.outline[0].title, "Intro");
+
+        app.layout =
+            ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
+        assert_eq!(app.layout.pages.len(), 50);
     }
 }

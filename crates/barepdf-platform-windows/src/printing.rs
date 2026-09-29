@@ -11,22 +11,7 @@ pub struct WindowsPrinterDialog {
     target_dpi: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrintOrientation {
-    Auto,
-    Portrait,
-    Landscape,
-}
-
-impl PrintOrientation {
-    fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Portrait,
-            2 => Self::Landscape,
-            _ => Self::Auto,
-        }
-    }
-}
+pub use barepdf_platform::printing::PrintOrientation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PrintDialogOptions {
@@ -146,6 +131,31 @@ pub struct WindowsPrinterSink {
     job: Option<PrinterJob>,
 }
 
+impl WindowsPrinterSink {
+    pub const DEFAULT_DPI: u16 = 300;
+
+    /// Creates a printer sink targeting a specific printer directly, without showing any Windows dialog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the printer device context cannot be created.
+    pub fn direct(
+        job_id: PrintJobId,
+        target_dpi: u16,
+        printer_name: &str,
+        orientation: PrintOrientation,
+        copies: u16,
+    ) -> Result<Self, PrintError> {
+        let device = ffi::create_direct_printer_device(printer_name, orientation, copies)?;
+        Ok(Self {
+            job_id,
+            target_dpi,
+            device: Some(device),
+            job: None,
+        })
+    }
+}
+
 impl PrinterSink for WindowsPrinterSink {
     fn job_id(&self) -> PrintJobId {
         self.job_id
@@ -209,5 +219,36 @@ mod tests {
 
         assert_eq!(options.range(), range);
         assert_eq!(options.orientation(), PrintOrientation::Landscape);
+    }
+
+    #[test]
+    fn direct_sink_rejects_empty_printer_name() {
+        use super::WindowsPrinterSink;
+        use barepdf_platform::printing::PrintJobId;
+        let job_id = PrintJobId::new(1).unwrap();
+        let result = WindowsPrinterSink::direct(job_id, 300, "", PrintOrientation::Portrait, 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn direct_sink_creates_device_for_installed_printer_if_any() {
+        use super::WindowsPrinterSink;
+        use crate::printers::enumerate_installed_printers;
+        use barepdf_platform::printing::{PrintJobId, PrinterSink};
+        let printers = enumerate_installed_printers();
+        if let Some(printer) = printers.first() {
+            let job_id = PrintJobId::new(1).unwrap();
+            let sink = WindowsPrinterSink::direct(
+                job_id,
+                300,
+                &printer.name,
+                PrintOrientation::Landscape,
+                1,
+            );
+            assert!(sink.is_ok());
+            let sink = sink.unwrap();
+            assert_eq!(sink.job_id(), job_id);
+            assert_eq!(sink.target_dpi(), 300);
+        }
     }
 }
