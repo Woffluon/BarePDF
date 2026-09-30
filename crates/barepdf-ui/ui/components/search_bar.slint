@@ -1,6 +1,7 @@
 import { LineEdit, Palette } from "std-widgets.slint";
 import { ThemeTokens } from "../tokens.slint";
 import { TextButton } from "./button.slint";
+import { IconButton } from "./icon_button.slint";
 
 export component SearchBar inherits Rectangle {
     in-out property <string> query: "";
@@ -80,8 +81,9 @@ export component SearchBar inherits Rectangle {
 
         Rectangle { width: 1px; background: ThemeTokens.border; }
 
-        TextButton {
-            text: "✕";
+        IconButton {
+            icon: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+            tooltip: "Close";
             clicked => { root.close_clicked(); }
         }
     }

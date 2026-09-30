@@ -1,5 +1,6 @@
 import { ThemeTokens } from "../tokens.slint";
 import { TextButton } from "../components/button.slint";
+import { IconButton } from "../components/icon_button.slint";
 
 export component PreferencesDialog inherits Rectangle {
     in property <bool> is-open: false;
@@ -44,8 +45,9 @@ export component PreferencesDialog inherits Rectangle {
                     font-weight: 700;
                     vertical-alignment: center;
                 }
-                TextButton {
-                    text: "✕";
+                IconButton {
+                    icon: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                    tooltip: "Close";
                     clicked => { root.close(); }
                 }
             }

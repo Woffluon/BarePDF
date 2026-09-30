@@ -121,11 +121,12 @@ export component ZenOverlay inherits Rectangle {
                 height: 28px;
                 border-radius: 14px;
                 background: exit-touch.has-hover ? ThemeTokens.control-hover : #00000000;
-                Text {
-                    text: "✕";
-                    color: ThemeTokens.accent;
-                    font-size: 12px;
-                    font-weight: 700;
+                Image {
+                    source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                    width: 14px;
+                    height: 14px;
+                    colorize: ThemeTokens.accent;
+                    image-fit: contain;
                     vertical-alignment: center;
                     horizontal-alignment: center;
                 }

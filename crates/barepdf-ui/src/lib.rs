@@ -935,7 +935,7 @@ slint::slint! {
         in property <string> text-tools-btn-convert-all: "Convert All Pages";
         in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
         in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
-        in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc) ✕" : "Exit (Esc) ✕";
+        in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc)" : "Exit (Esc)";
 
         callback request-open-file();
         callback request-next-page();
@@ -1190,11 +1190,12 @@ slint::slint! {
                             padding-left: 10px;
                             padding-right: 10px;
 
-                            Text {
-                                text: "✕";
-                                color: #ffffff;
-                                font-size: 14px;
-                                font-weight: 700;
+                            Image {
+                                source: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: #ffffff;
+                                image-fit: contain;
                                 vertical-alignment: center;
                             }
 
