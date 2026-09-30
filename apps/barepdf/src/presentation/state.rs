@@ -181,6 +181,36 @@ impl UiImageCache {
         self.entries.contains(&(document, page, kind))
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn budget(&self) -> usize {
+        self.budget
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub(crate) fn set_budget(&mut self, new_budget: usize) {
+        self.budget = new_budget;
+        self.evict_to_budget();
+    }
+
+    pub(crate) fn evict_to_budget(&mut self) {
+        while self.bytes > self.budget {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.bytes);
+        }
+    }
+
+    pub(crate) fn update_cache_budget_for_zoom(&mut self, zoom: ZoomFactor) {
+        self.set_budget(adaptive_cache_budget(zoom));
+    }
+
     pub(crate) fn insert(
         &mut self,
         document: DocumentId,
@@ -199,12 +229,7 @@ impl UiImageCache {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        while self.bytes > self.budget {
-            let Some((_, evicted)) = self.entries.pop_lru() else {
-                break;
-            };
-            self.bytes = self.bytes.saturating_sub(evicted.bytes);
-        }
+        self.evict_to_budget();
     }
 
     pub(crate) fn remove_document(&mut self, document: DocumentId) {
@@ -292,12 +317,16 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(mut preferences: UserPreferences) -> Self {
         preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
+        let initial_zoom = match preferences.zoom_mode {
+            ZoomMode::Custom(factor) => factor,
+            _ => ZoomFactor::default(),
+        };
         Self {
             application: Application::default(),
             current_page: 0,
             viewing_mode: preferences.viewing_mode,
             zoom_mode: preferences.zoom_mode,
-            zoom_factor: ZoomFactor::default(),
+            zoom_factor: initial_zoom,
             rotation: Rotation::Degrees0,
             first_page_dimensions: (612.0, 792.0),
             page_dimensions: Vec::new(),
@@ -329,7 +358,7 @@ impl AppState {
             outline_requested: false,
             expanded_outline: HashSet::new(),
             flat_outline: Vec::new(),
-            page_images: UiImageCache::new(UI_IMAGE_CACHE_BUDGET),
+            page_images: UiImageCache::new(adaptive_cache_budget(initial_zoom)),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             update: UpdateController::default(),
             tools_merge_files: Vec::new(),
@@ -371,6 +400,10 @@ impl AppState {
         }
     }
 
+    pub(crate) fn update_cache_budget_for_zoom(&mut self, zoom: ZoomFactor) {
+        self.page_images.update_cache_budget_for_zoom(zoom);
+    }
+
     pub(crate) fn pump_requires_active(&self, now: Instant) -> bool {
         self.update.is_busy()
             || self.dimensions_request_pending
@@ -389,6 +422,76 @@ impl AppState {
             || self
                 .pump_active_until
                 .is_some_and(|deadline| now < deadline)
+    }
+
+    pub(crate) fn request_presentation_mode(&mut self) -> bool {
+        if self.window_mode != WindowMode::Presentation {
+            self.window_mode = WindowMode::Presentation;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn request_exit_special_mode(&mut self) -> bool {
+        if self.window_mode != WindowMode::Normal {
+            self.window_mode = WindowMode::Normal;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn request_toggle_fullscreen(&mut self) -> WindowMode {
+        self.window_mode = match self.window_mode {
+            WindowMode::Normal => WindowMode::FullScreen,
+            WindowMode::FullScreen | WindowMode::Presentation => WindowMode::Normal,
+        };
+        self.window_mode
+    }
+
+    pub(crate) fn snapshot_active_tab_layout(&mut self) {
+        let layout = crate::application::TabDocumentLayout {
+            page_dimensions: self.page_dimensions.clone(),
+            first_page_dimensions: self.first_page_dimensions,
+            dimensions_revision: self.dimensions_revision,
+            next_dimensions_start: self.next_dimensions_start,
+            outline: self.outline.clone(),
+        };
+        if let Some(tab) = self.application.tabs.active_mut() {
+            tab.layout = layout;
+        }
+    }
+
+    pub(crate) fn restore_active_tab_layout(&mut self) {
+        let Some(tab) = self.application.tabs.active() else {
+            return;
+        };
+        let layout = tab.layout.clone();
+        self.page_dimensions = layout.page_dimensions;
+        self.first_page_dimensions = layout.first_page_dimensions;
+        self.dimensions_revision = layout.dimensions_revision;
+        self.next_dimensions_start = layout.next_dimensions_start;
+        self.outline = layout.outline;
+        self.outline_requested = !self.outline.is_empty();
+        self.expanded_outline.clear();
+        for index in 0..self.outline.len() {
+            if !self.outline[index].children.is_empty() {
+                self.expanded_outline.insert(vec![index]);
+            }
+        }
+        self.flat_outline.clear();
+    }
+}
+
+#[must_use]
+pub(crate) fn adaptive_cache_budget(zoom: ZoomFactor) -> usize {
+    if zoom.factor() <= 1.25 {
+        32 * 1024 * 1024
+    } else if zoom.factor() <= 2.0 {
+        64 * 1024 * 1024
+    } else {
+        UI_IMAGE_CACHE_BUDGET
     }
 }
 
@@ -518,6 +621,111 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_budget_scales_correctly_with_zoom() {
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(1.0)),
+            32 * 1024 * 1024
+        );
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(1.25)),
+            32 * 1024 * 1024
+        );
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(1.5)),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(2.0)),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(2.5)),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            adaptive_cache_budget(ZoomFactor::new(3.5)),
+            128 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn cache_evicts_lru_pages_when_zoom_decreases() {
+        let mut app = AppState::new(UserPreferences::default());
+        let doc = DocumentId::new(1);
+        let page_bytes = 20 * 1024 * 1024; // 20 MB
+
+        // Set zoom to 350% -> 128 MB budget
+        app.update_cache_budget_for_zoom(ZoomFactor::new(3.5));
+        assert_eq!(app.page_images.budget(), 128 * 1024 * 1024);
+
+        // Insert 4 pages (4 * 20 MB = 80 MB, fits in 128 MB)
+        app.page_images
+            .insert(doc, 0, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc, 1, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc, 2, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc, 3, RenderKind::Page, Image::default(), page_bytes);
+
+        assert_eq!(app.page_images.bytes(), 80 * 1024 * 1024);
+        assert!(app.page_images.contains_key(doc, 0, RenderKind::Page));
+        assert!(app.page_images.contains_key(doc, 1, RenderKind::Page));
+        assert!(app.page_images.contains_key(doc, 2, RenderKind::Page));
+        assert!(app.page_images.contains_key(doc, 3, RenderKind::Page));
+
+        // Decrease zoom to 100% -> 32 MB budget
+        app.update_cache_budget_for_zoom(ZoomFactor::new(1.0));
+        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
+
+        // Under 32 MB budget, only 1 page of 20MB can fit (oldest 3 evicted)
+        assert!(app.page_images.bytes() <= 32 * 1024 * 1024);
+        assert_eq!(app.page_images.bytes(), 20 * 1024 * 1024);
+        assert!(!app.page_images.contains_key(doc, 0, RenderKind::Page));
+        assert!(!app.page_images.contains_key(doc, 1, RenderKind::Page));
+        assert!(!app.page_images.contains_key(doc, 2, RenderKind::Page));
+        assert!(app.page_images.contains_key(doc, 3, RenderKind::Page));
+    }
+
+    #[test]
+    fn tab_switch_evicts_cache_if_exceeding_new_tab_budget() {
+        let mut app = AppState::new(UserPreferences::default());
+        let doc1 = DocumentId::new(1);
+        let doc2 = DocumentId::new(2);
+
+        // Tab 1 at 350% zoom (128MB budget)
+        app.update_cache_budget_for_zoom(ZoomFactor::new(3.5));
+        let page_bytes = 20 * 1024 * 1024; // 20 MB each
+        app.page_images
+            .insert(doc1, 0, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc1, 1, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc1, 2, RenderKind::Page, Image::default(), page_bytes);
+        app.page_images
+            .insert(doc1, 3, RenderKind::Page, Image::default(), page_bytes);
+        assert_eq!(app.page_images.bytes(), 80 * 1024 * 1024);
+
+        // Switching to Tab 2 which is at 100% zoom (32MB budget)
+        let tab2_zoom = ZoomFactor::new(1.0);
+        app.update_cache_budget_for_zoom(tab2_zoom);
+        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
+        assert!(app.page_images.bytes() <= 32 * 1024 * 1024);
+        assert_eq!(app.page_images.bytes(), 20 * 1024 * 1024);
+
+        // Add page for doc2
+        app.page_images.insert(
+            doc2,
+            0,
+            RenderKind::Page,
+            Image::default(),
+            10 * 1024 * 1024,
+        );
+        assert_eq!(app.page_images.bytes(), 30 * 1024 * 1024);
+        assert!(app.page_images.contains_key(doc2, 0, RenderKind::Page));
+    }
+
+    #[test]
     fn multi_tab_switch_preserves_dimensions_and_layout() {
         let mut app = AppState::new(UserPreferences::default());
         let doc1 = DocumentId::new(1);
@@ -601,5 +809,177 @@ mod tests {
         app.layout =
             ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
         assert_eq!(app.layout.pages.len(), 50);
+    }
+
+    #[test]
+    fn window_mode_state_transitions_follow_contract() {
+        let mut app = AppState::new(UserPreferences::default());
+        assert_eq!(app.window_mode, WindowMode::Normal);
+
+        // WindowMode::Normal -> request_presentation_mode -> WindowMode::Presentation
+        assert!(app.request_presentation_mode());
+        assert_eq!(app.window_mode, WindowMode::Presentation);
+        // Redundant call is a no-op returning false
+        assert!(!app.request_presentation_mode());
+
+        // WindowMode::Presentation -> request_exit_special_mode -> WindowMode::Normal
+        assert!(app.request_exit_special_mode());
+        assert_eq!(app.window_mode, WindowMode::Normal);
+        // Redundant call is a no-op returning false
+        assert!(!app.request_exit_special_mode());
+
+        // WindowMode::Presentation -> request_toggle_fullscreen -> WindowMode::Normal
+        // (F11 in presentation mode returns directly to normal mode)
+        assert!(app.request_presentation_mode());
+        assert_eq!(app.window_mode, WindowMode::Presentation);
+        assert_eq!(app.request_toggle_fullscreen(), WindowMode::Normal);
+        assert_eq!(app.window_mode, WindowMode::Normal);
+
+        // WindowMode::Normal -> request_toggle_fullscreen -> WindowMode::FullScreen -> request_toggle_fullscreen -> WindowMode::Normal
+        assert_eq!(app.request_toggle_fullscreen(), WindowMode::FullScreen);
+        assert_eq!(app.window_mode, WindowMode::FullScreen);
+        assert_eq!(app.request_toggle_fullscreen(), WindowMode::Normal);
+        assert_eq!(app.window_mode, WindowMode::Normal);
+
+        // ESC from FullScreen returns to Normal
+        assert_eq!(app.request_toggle_fullscreen(), WindowMode::FullScreen);
+        assert!(app.request_exit_special_mode());
+        assert_eq!(app.window_mode, WindowMode::Normal);
+    }
+
+    #[test]
+    fn multi_tab_document_layout_isolation_across_multiple_switches() {
+        let mut app = AppState::new(UserPreferences::default());
+
+        // Setup Tab 1: 50 pages A4
+        let doc1 = DocumentId::new(101);
+        DocumentController::begin_open(
+            &mut app.application,
+            doc1,
+            PathBuf::from("doc1.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc1, 50, 10_000);
+        let tab1_id = app.application.tabs.active_id().unwrap();
+
+        app.page_dimensions = vec![(595.0, 842.0); 50];
+        app.first_page_dimensions = (595.0, 842.0);
+        app.dimensions_revision = 3;
+        app.next_dimensions_start = 51;
+        app.outline = vec![OutlineNode {
+            title: "Doc 1 Intro".into(),
+            page_index: Some(0),
+            children: Vec::new(),
+        }];
+        app.snapshot_active_tab_layout();
+
+        // Setup Tab 2: 10 pages Letter
+        let doc2 = DocumentId::new(202);
+        let _ = app
+            .application
+            .tabs
+            .open(PathBuf::from("doc2.pdf"), "doc2".into());
+        let tab2_id = app.application.tabs.active_id().unwrap();
+        assert_ne!(tab1_id, tab2_id);
+
+        DocumentController::begin_open(
+            &mut app.application,
+            doc2,
+            PathBuf::from("doc2.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc2, 10, 10_000);
+
+        app.page_dimensions = vec![(612.0, 792.0); 10];
+        app.first_page_dimensions = (612.0, 792.0);
+        app.dimensions_revision = 1;
+        app.next_dimensions_start = 11;
+        app.outline = vec![
+            OutlineNode {
+                title: "Chapter 1".into(),
+                page_index: Some(0),
+                children: Vec::new(),
+            },
+            OutlineNode {
+                title: "Chapter 2".into(),
+                page_index: Some(4),
+                children: Vec::new(),
+            },
+        ];
+        app.snapshot_active_tab_layout();
+
+        // Switch to Tab 1
+        assert!(app.application.tabs.activate(tab1_id));
+        app.restore_active_tab_layout();
+
+        assert_eq!(app.page_count(), 50);
+        assert_eq!(app.page_dimensions.len(), 50);
+        assert_eq!(app.first_page_dimensions, (595.0, 842.0));
+        assert_eq!(app.dimensions_revision, 3);
+        assert_eq!(app.next_dimensions_start, 51);
+        assert_eq!(app.outline.len(), 1);
+        assert_eq!(app.outline[0].title, "Doc 1 Intro");
+        app.layout =
+            ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
+        assert_eq!(app.layout.pages.len(), 50);
+
+        // Switch to Tab 2
+        assert!(app.application.tabs.activate(tab2_id));
+        app.restore_active_tab_layout();
+
+        assert_eq!(app.page_count(), 10);
+        assert_eq!(app.page_dimensions.len(), 10);
+        assert_eq!(app.first_page_dimensions, (612.0, 792.0));
+        assert_eq!(app.dimensions_revision, 1);
+        assert_eq!(app.next_dimensions_start, 11);
+        assert_eq!(app.outline.len(), 2);
+        assert_eq!(app.outline[0].title, "Chapter 1");
+        assert_eq!(app.outline[1].title, "Chapter 2");
+        app.layout =
+            ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
+        assert_eq!(app.layout.pages.len(), 10);
+
+        // Switch back to Tab 1 once more to prove idempotency
+        assert!(app.application.tabs.activate(tab1_id));
+        app.restore_active_tab_layout();
+        assert_eq!(app.page_count(), 50);
+        assert_eq!(app.page_dimensions.len(), 50);
+        assert_eq!(app.outline.len(), 1);
+    }
+
+    #[test]
+    fn adaptive_image_cache_eviction_and_oversized_rejection() {
+        let budget = 100;
+        let mut cache = UiImageCache::new(budget);
+        let doc = DocumentId::new(1);
+
+        // 1. Oversized image (> budget) must be rejected without increasing bytes
+        cache.insert(doc, 0, RenderKind::Page, Image::default(), 150);
+        assert!(!cache.contains_key(doc, 0, RenderKind::Page));
+        assert_eq!(cache.bytes, 0);
+
+        // 2. Insert two items within budget: 40 + 40 = 80 <= 100
+        cache.insert(doc, 1, RenderKind::Page, Image::default(), 40);
+        cache.insert(doc, 2, RenderKind::Page, Image::default(), 40);
+        assert_eq!(cache.bytes, 80);
+        assert!(cache.contains_key(doc, 1, RenderKind::Page));
+        assert!(cache.contains_key(doc, 2, RenderKind::Page));
+
+        // 3. Access page 1 to make it most-recently used
+        let _ = cache.get(doc, 1, RenderKind::Page);
+
+        // 4. Insert another item of 40 bytes: total becomes 80 + 40 = 120 > 100
+        // LRU entry (page 2, since page 1 was accessed) must be evicted!
+        cache.insert(doc, 3, RenderKind::Page, Image::default(), 40);
+        assert_eq!(cache.bytes, 80);
+        assert!(cache.contains_key(doc, 1, RenderKind::Page));
+        assert!(!cache.contains_key(doc, 2, RenderKind::Page));
+        assert!(cache.contains_key(doc, 3, RenderKind::Page));
+
+        // 5. Remove document purges all remaining entries and resets byte count
+        cache.remove_document(doc);
+        assert_eq!(cache.bytes, 0);
+        assert!(!cache.contains_key(doc, 1, RenderKind::Page));
+        assert!(!cache.contains_key(doc, 3, RenderKind::Page));
     }
 }

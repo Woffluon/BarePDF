@@ -114,4 +114,25 @@ mod tests {
             assert!(!p.name.is_empty());
         }
     }
+
+    #[test]
+    fn installed_printer_properties_and_defaults_are_consistent() {
+        let printers = enumerate_installed_printers();
+        let default_count = printers.iter().filter(|p| p.is_default).count();
+        // There can be at most one default printer in Windows.
+        assert!(default_count <= 1);
+
+        for p in &printers {
+            assert!(!p.name.trim().is_empty());
+            assert!(!p.name.contains('\0'));
+        }
+
+        let test_printer = InstalledPrinter {
+            name: "Test Printer".to_string(),
+            is_default: true,
+        };
+        assert_eq!(test_printer.clone(), test_printer);
+        assert_eq!(test_printer.name, "Test Printer");
+        assert!(test_printer.is_default);
+    }
 }

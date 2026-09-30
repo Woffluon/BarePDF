@@ -1022,10 +1022,23 @@ slint::slint! {
         changed enhanced-ui => { ThemeTokens.enhanced = root.enhanced-ui && root.visual-effects-ready; }
         changed system-reduce-effects => { ThemeTokens.system-reduce-effects = root.system-reduce-effects; }
         changed visual-effects-ready => { ThemeTokens.enhanced = root.enhanced-ui && root.visual-effects-ready; }
+        changed window-mode => { main-focus.focus(); }
+
+        public function focus-main() { main-focus.focus(); }
 
         main-focus := FocusScope {
             key-pressed(event) => {
                 if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                    if (root.window-mode != 0) {
+                        root.search-open = false;
+                        root.command-palette-open = false;
+                        root.toolbar-more-open = false;
+                        root.context-menu-open = false;
+                        root.settings-open = false;
+                        root.preferences-open = false;
+                        root.request-exit-special-mode();
+                        return accept;
+                    }
                     if (root.search-open) { root.search-open = false; return accept; }
                     if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                     if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
@@ -1079,73 +1092,197 @@ slint::slint! {
 
         if root.window-mode == 2 : Rectangle {
             background: #08090b;
-            TouchArea { clicked => { root.request-next-page(); } }
-            Rectangle {
-                width: Math.min(parent.width - 40px, root.page-display-width);
-                height: Math.min(parent.height - 40px, root.page-display-height);
-                background: white;
-                border-width: 1px;
-                border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
-                Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
-            }
 
-            // Bottom hover trigger area for Floating HUD
-            pres-bottom-zone := TouchArea {
+            pres-focus := FocusScope {
                 x: 0px;
-                y: parent.height - 120px;
-                width: parent.width;
-                height: 120px;
-            }
+                y: 0px;
+                width: 100%;
+                height: 100%;
 
-            // Floating Presentation HUD Capsule
-            pres-hud := Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: parent.height - self.height - 24px;
-                width: 380px;
-                height: 44px;
-                border-radius: 22px;
-                background: ThemeTokens.dark ? #18191dee : #fffffffa;
-                border-width: 1px;
-                border-color: ThemeTokens.dark ? #ffffff22 : #00000022;
-                drop-shadow-blur: 20px;
-                drop-shadow-offset-y: 6px;
-                drop-shadow-color: #00000088;
-                opacity: (pres-hud-touch.has-hover || pres-bottom-zone.has-hover) ? 1.0 : 0.0;
-                animate opacity { duration: 180ms; easing: ease-out; }
+                init => { self.focus(); }
 
-                pres-hud-touch := TouchArea { }
+                key-pressed(event) => {
+                    if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                        root.request-exit-special-mode();
+                        return accept;
+                    }
+                    if (event.text == "\u{f11}" || event.text == "F11" || event.text == Key.F11) {
+                        root.request-toggle-fullscreen();
+                        return accept;
+                    }
+                    if (event.text == Key.PageDown || event.text == Key.DownArrow || event.text == Key.RightArrow || event.text == " ") {
+                        root.request-next-page();
+                        return accept;
+                    }
+                    if (event.text == Key.PageUp || event.text == Key.UpArrow || event.text == Key.LeftArrow || event.text == Key.Backspace) {
+                        root.request-prev-page();
+                        return accept;
+                    }
+                    if (event.text == Key.Home) { root.request-first-page(); return accept; }
+                    if (event.text == Key.End) { root.request-last-page(); return accept; }
+                    return reject;
+                }
 
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
-                    spacing: 10px;
-                    alignment: center;
+                TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            root.request-exit-special-mode();
+                        }
+                    }
+                    clicked => {
+                        pres-focus.focus();
+                        root.request-next-page();
+                    }
+                }
 
-                    IconButton {
-                        icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
-                        tooltip: root.text-prev-page;
-                        clicked => { root.request-prev-page(); }
+                Rectangle {
+                    width: Math.min(parent.width - 40px, root.page-display-width);
+                    height: Math.min(parent.height - 40px, root.page-display-height);
+                    background: white;
+                    border-width: 1px;
+                    border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                    Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
+                }
+
+                // Top-right exit trigger & button (Fail-safe exit A)
+                pres-top-zone := TouchArea {
+                    x: parent.width - 180px;
+                    y: 0px;
+                    width: 180px;
+                    height: 70px;
+
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            root.request-exit-special-mode();
+                        }
+                    }
+                    clicked => {
+                        pres-focus.focus();
+                        root.request-next-page();
                     }
 
-                    Text {
-                        text: root.current-page-str + " / " + root.total-pages-str;
-                        color: ThemeTokens.text;
-                        font-size: 12px;
-                        font-weight: 600;
-                        vertical-alignment: center;
+                    pres-exit-btn := Rectangle {
+                        x: parent.width - self.width - 16px;
+                        y: 16px;
+                        width: pres-exit-btn-touch.has-hover ? 140px : 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: pres-exit-btn-touch.pressed ? #2d2e34 : (pres-exit-btn-touch.has-hover ? #222328.with-alpha(0.93) : #18191dcc);
+                        border-width: 1px;
+                        border-color: #ffffff22;
+                        drop-shadow-blur: 12px;
+                        drop-shadow-offset-y: 2px;
+                        drop-shadow-color: #00000066;
+                        opacity: (pres-top-zone.has-hover || pres-exit-btn-touch.has-hover) ? 1.0 : 0.0;
+                        animate opacity { duration: 180ms; easing: ease-out; }
+                        animate width { duration: 150ms; easing: ease-out; }
+                        clip: true;
+
+                        pres-exit-btn-touch := TouchArea {
+                            clicked => {
+                                root.request-exit-special-mode();
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            padding-left: 10px;
+                            padding-right: 10px;
+
+                            Text {
+                                text: "✕";
+                                color: #ffffff;
+                                font-size: 14px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+
+                            if pres-exit-btn-touch.has-hover : Text {
+                                text: root.current-language == 2 ? "Sunumdan Çık" : "Exit";
+                                color: #ffffff;
+                                font-size: 12px;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Bottom hover trigger area for Floating HUD
+                pres-bottom-zone := TouchArea {
+                    x: 0px;
+                    y: parent.height - 120px;
+                    width: parent.width;
+                    height: 120px;
+
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            root.request-exit-special-mode();
+                        }
+                    }
+                    clicked => {
+                        pres-focus.focus();
+                        root.request-next-page();
                     }
 
-                    IconButton {
-                        icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
-                        tooltip: root.text-next-page;
-                        clicked => { root.request-next-page(); }
-                    }
+                    // Floating Presentation HUD Capsule
+                    pres-hud := Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height - self.height - 24px;
+                        width: 380px;
+                        height: 44px;
+                        border-radius: 22px;
+                        background: ThemeTokens.dark ? #18191dee : #fffffffa;
+                        border-width: 1px;
+                        border-color: ThemeTokens.dark ? #ffffff22 : #00000022;
+                        drop-shadow-blur: 20px;
+                        drop-shadow-offset-y: 6px;
+                        drop-shadow-color: #00000088;
+                        opacity: pres-bottom-zone.has-hover ? 1.0 : 0.0;
+                        animate opacity { duration: 180ms; easing: ease-out; }
 
-                    Rectangle { width: 1px; height: 18px; background: ThemeTokens.border; }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            alignment: center;
 
-                    TextButton {
-                        text: root.text-exit-presentation;
-                        clicked => { root.request-exit-special-mode(); }
+                            IconButton {
+                                icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
+                                tooltip: root.text-prev-page;
+                                clicked => {
+                                    root.request-prev-page();
+                                    pres-focus.focus();
+                                }
+                            }
+
+                            Text {
+                                text: root.current-page-str + " / " + root.total-pages-str;
+                                color: ThemeTokens.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+
+                            IconButton {
+                                icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
+                                tooltip: root.text-next-page;
+                                clicked => {
+                                    root.request-next-page();
+                                    pres-focus.focus();
+                                }
+                            }
+
+                            Rectangle { width: 1px; height: 18px; background: ThemeTokens.border; }
+
+                            TextButton {
+                                text: root.text-exit-presentation;
+                                clicked => {
+                                    root.request-exit-special-mode();
+                                }
+                            }
+                        }
                     }
                 }
             }

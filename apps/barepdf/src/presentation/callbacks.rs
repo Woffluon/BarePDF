@@ -1089,16 +1089,9 @@ pub(super) fn snapshot_active_view(app: &mut AppState, window: &AppWindow) {
         sidebar_visible: window.get_sidebar_visible(),
         sidebar_tab: window.get_sidebar_tab(),
     };
-    let layout = crate::application::TabDocumentLayout {
-        page_dimensions: app.page_dimensions.clone(),
-        first_page_dimensions: app.first_page_dimensions,
-        dimensions_revision: app.dimensions_revision,
-        next_dimensions_start: app.next_dimensions_start,
-        outline: app.outline.clone(),
-    };
+    app.snapshot_active_tab_layout();
     if let Some(tab) = app.application.tabs.active_mut() {
         tab.view = view;
-        tab.layout = layout;
     }
 }
 
@@ -1107,27 +1100,15 @@ pub(super) fn restore_active_view(app: &mut AppState, window: &AppWindow) {
         return;
     };
     let view = tab.view.clone();
-    let layout = tab.layout.clone();
 
     app.current_page = view.current_page.get();
     app.zoom_mode = view.zoom_mode;
     app.zoom_factor = view.zoom_factor;
+    app.update_cache_budget_for_zoom(app.zoom_factor);
     app.rotation = view.rotation;
     app.last_scroll_y = view.scroll_y;
 
-    app.page_dimensions = layout.page_dimensions;
-    app.first_page_dimensions = layout.first_page_dimensions;
-    app.dimensions_revision = layout.dimensions_revision;
-    app.next_dimensions_start = layout.next_dimensions_start;
-    app.outline = layout.outline;
-    app.outline_requested = !app.outline.is_empty();
-    app.expanded_outline.clear();
-    for index in 0..app.outline.len() {
-        if !app.outline[index].children.is_empty() {
-            app.expanded_outline.insert(vec![index]);
-        }
-    }
-    app.flat_outline.clear();
+    app.restore_active_tab_layout();
 
     window.set_current_scroll_y(view.scroll_y);
     window.set_sidebar_visible(view.sidebar_visible);
@@ -1260,8 +1241,10 @@ fn connect_zoom_callbacks(
         if let Some(window) = weak.upgrade() {
             let mut app = state_in.borrow_mut();
             sync_effective_zoom(&mut app);
-            app.zoom_factor = app.zoom_factor.zoom_in();
-            app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+            let new_zoom = app.zoom_factor.zoom_in();
+            app.zoom_factor = new_zoom;
+            app.zoom_mode = ZoomMode::Custom(new_zoom);
+            app.update_cache_budget_for_zoom(new_zoom);
             save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
             update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
@@ -1275,8 +1258,10 @@ fn connect_zoom_callbacks(
         if let Some(window) = weak.upgrade() {
             let mut app = state_out.borrow_mut();
             sync_effective_zoom(&mut app);
-            app.zoom_factor = app.zoom_factor.zoom_out();
-            app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+            let new_zoom = app.zoom_factor.zoom_out();
+            app.zoom_factor = new_zoom;
+            app.zoom_mode = ZoomMode::Custom(new_zoom);
+            app.update_cache_budget_for_zoom(new_zoom);
             save_zoom_preference(&mut app);
             invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
             update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
@@ -1296,8 +1281,10 @@ fn connect_zoom_callbacks(
         let Some(percent) = parse_zoom_percent(input.as_str()) else {
             return SharedString::from(current);
         };
-        app.zoom_factor = ZoomFactor::new(percent as f32 / 100.0);
-        app.zoom_mode = ZoomMode::Custom(app.zoom_factor);
+        let new_zoom = ZoomFactor::new(percent as f32 / 100.0);
+        app.zoom_factor = new_zoom;
+        app.zoom_mode = ZoomMode::Custom(new_zoom);
+        app.update_cache_budget_for_zoom(new_zoom);
         save_zoom_preference(&mut app);
         invalidate_layout_and_render(&mut app, &scheduler_set, &window, true);
         update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
@@ -1660,14 +1647,17 @@ fn connect_view_callbacks(
     window.on_request_toggle_fullscreen(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_fullscreen.borrow_mut();
-            let enabled = app.window_mode != WindowMode::FullScreen;
-            app.window_mode = if enabled {
-                WindowMode::FullScreen
+            if app.window_mode == WindowMode::Presentation {
+                app.window_mode = WindowMode::Normal;
+                window.set_window_mode(0);
+                window.window().set_fullscreen(false);
             } else {
-                WindowMode::Normal
-            };
-            window.set_window_mode(if enabled { 1 } else { 0 });
-            window.window().set_fullscreen(enabled);
+                let new_mode = app.request_toggle_fullscreen();
+                let enabled = new_mode == WindowMode::FullScreen;
+                window.set_window_mode(if enabled { 1 } else { 0 });
+                window.window().set_fullscreen(enabled);
+            }
+            window.invoke_focus_main();
         }
     });
 
@@ -1677,11 +1667,13 @@ fn connect_view_callbacks(
     window.on_request_presentation_mode(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_presentation.borrow_mut();
-            app.window_mode = WindowMode::Presentation;
-            window.set_window_mode(2);
-            window.window().set_fullscreen(true);
-            app.generation = scheduler_presentation.bump_generation();
-            render_visible_pages(&mut app, &scheduler_presentation, &window);
+            if app.request_presentation_mode() {
+                window.set_window_mode(2);
+                window.window().set_fullscreen(true);
+                app.generation = scheduler_presentation.bump_generation();
+                render_visible_pages(&mut app, &scheduler_presentation, &window);
+            }
+            window.invoke_focus_main();
         }
     });
 
@@ -1690,11 +1682,11 @@ fn connect_view_callbacks(
     window.on_request_exit_special_mode(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_exit.borrow_mut();
-            if app.window_mode != WindowMode::Normal {
-                app.window_mode = WindowMode::Normal;
+            if app.request_exit_special_mode() {
                 window.set_window_mode(0);
                 window.window().set_fullscreen(false);
             }
+            window.invoke_focus_main();
         }
     });
 }

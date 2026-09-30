@@ -1347,6 +1347,8 @@ pub(crate) fn compute_search_highlights(
 
 pub(crate) fn sync_effective_zoom(app: &mut AppState) {
     if matches!(app.zoom_mode, ZoomMode::Custom(_)) {
+        let zoom = app.zoom_factor;
+        app.update_cache_budget_for_zoom(zoom);
         return;
     }
     ensure_layout(app);
@@ -1359,7 +1361,9 @@ pub(crate) fn sync_effective_zoom(app: &mut AppState) {
         .map(|dimensions| dimensions.0)
         .unwrap_or(app.first_page_dimensions.0)
         .max(1.0);
-    app.zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
+    let zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
+    app.zoom_factor = zoom_factor;
+    app.update_cache_budget_for_zoom(zoom_factor);
 }
 
 pub(crate) fn zoom_mode_index(mode: ZoomMode) -> i32 {

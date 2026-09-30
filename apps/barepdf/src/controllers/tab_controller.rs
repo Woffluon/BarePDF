@@ -13,7 +13,10 @@ pub fn activate_tab(
     if app.application.tabs.activate(tab_id) {
         app.generation = scheduler.bump_generation();
         if let Some(tab) = app.application.tabs.active() {
-            return tab.path.clone();
+            let zoom = tab.view.zoom_factor;
+            let path = tab.path.clone();
+            app.update_cache_budget_for_zoom(zoom);
+            return path;
         }
     }
     None

@@ -231,6 +231,34 @@ mod tests {
     }
 
     #[test]
+    fn direct_sink_rejects_empty_or_whitespace_printer_name() {
+        use super::WindowsPrinterSink;
+        use barepdf_platform::printing::PrintJobId;
+        let job_id = PrintJobId::new(1).unwrap();
+        assert!(
+            WindowsPrinterSink::direct(job_id, 300, "", PrintOrientation::Portrait, 1).is_err()
+        );
+        assert!(
+            WindowsPrinterSink::direct(job_id, 300, "   ", PrintOrientation::Portrait, 1).is_err()
+        );
+    }
+
+    #[test]
+    fn direct_sink_rejects_non_existent_printer_gracefully() {
+        use super::WindowsPrinterSink;
+        use barepdf_platform::printing::PrintJobId;
+        let job_id = PrintJobId::new(1).unwrap();
+        let result = WindowsPrinterSink::direct(
+            job_id,
+            300,
+            "__BarePDF_NonExistent_Printer_12345__",
+            PrintOrientation::Portrait,
+            1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn direct_sink_creates_device_for_installed_printer_if_any() {
         use super::WindowsPrinterSink;
         use crate::printers::enumerate_installed_printers;

@@ -103,6 +103,11 @@ impl ZoomFactor {
     }
 
     #[must_use]
+    pub fn factor(self) -> f32 {
+        self.0
+    }
+
+    #[must_use]
     pub fn zoom_in(self) -> Self {
         Self::new(self.0 + Self::STEP)
     }
