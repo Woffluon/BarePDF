@@ -162,6 +162,16 @@ impl Rotation {
             Self::Degrees270 => Self::Degrees0,
         }
     }
+
+    #[must_use]
+    pub const fn rotate_ccw(self) -> Self {
+        match self {
+            Self::Degrees0 => Self::Degrees270,
+            Self::Degrees90 => Self::Degrees0,
+            Self::Degrees180 => Self::Degrees90,
+            Self::Degrees270 => Self::Degrees180,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -354,10 +364,104 @@ pub struct GlyphRect {
     pub ch: char,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkTarget {
+    Url(String),
+    Page(PageIndex),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageLink {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub target: LinkTarget,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PageTextGeometry {
     pub page_index: PageIndex,
     pub glyphs: Vec<GlyphRect>,
+    #[serde(default)]
+    pub links: Vec<PageLink>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InkColor {
+    #[default]
+    Black,
+    Red,
+    Blue,
+    Yellow,
+}
+
+impl InkColor {
+    #[must_use]
+    pub const fn rgba(self) -> (u8, u8, u8, u8) {
+        match self {
+            Self::Black => (20, 20, 20, 255),
+            Self::Red => (220, 38, 38, 255),
+            Self::Blue => (37, 99, 235, 255),
+            Self::Yellow => (250, 204, 21, 140),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InkStroke {
+    pub page: PageIndex,
+    /// Normalized page coordinates in `[0.0, 1.0]` (top-left origin `(x_norm, y_norm)`).
+    pub points: Vec<(f32, f32)>,
+    pub color: InkColor,
+    pub width_pts: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HighlightQuad {
+    pub page: PageIndex,
+    /// Normalized top-left origin `(x_norm, y_norm, w_norm, h_norm)` in `[0.0, 1.0]`.
+    pub x_norm: f32,
+    pub y_norm: f32,
+    pub w_norm: f32,
+    pub h_norm: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SignaturePayload {
+    /// Normalized points in `[0.0, 1.0]` within the signature stamp box.
+    Drawn(Vec<Vec<(f32, f32)>>),
+    /// Raw RGBA pixels + dimensions.
+    Image {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignatureStamp {
+    pub page: PageIndex,
+    /// Normalized top-left origin box `(x_norm, y_norm, w_norm, h_norm)` in `[0.0, 1.0]`.
+    pub x_norm: f32,
+    pub y_norm: f32,
+    pub w_norm: f32,
+    pub h_norm: f32,
+    pub payload: SignaturePayload,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DocumentAnnotations {
+    pub strokes: Vec<InkStroke>,
+    pub highlights: Vec<HighlightQuad>,
+    pub signatures: Vec<SignatureStamp>,
+}
+
+impl DocumentAnnotations {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.strokes.is_empty() && self.highlights.is_empty() && self.signatures.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -398,5 +502,32 @@ mod tests {
 
         let first = PageIndex::from_raw(0);
         assert_eq!(first.prev(), None);
+    }
+
+    #[test]
+    fn rotation_ccw_cycles_correctly() {
+        assert_eq!(Rotation::Degrees0.rotate_ccw(), Rotation::Degrees270);
+        assert_eq!(Rotation::Degrees90.rotate_ccw(), Rotation::Degrees0);
+        assert_eq!(Rotation::Degrees180.rotate_ccw(), Rotation::Degrees90);
+        assert_eq!(Rotation::Degrees270.rotate_ccw(), Rotation::Degrees180);
+    }
+
+    #[test]
+    fn document_annotations_is_empty_and_ink_rgba() {
+        let mut annotations = DocumentAnnotations::default();
+        assert!(annotations.is_empty());
+        assert_eq!(InkColor::Black.rgba(), (20, 20, 20, 255));
+        assert_eq!(InkColor::Red.rgba(), (220, 38, 38, 255));
+        assert_eq!(InkColor::Blue.rgba(), (37, 99, 235, 255));
+        assert_eq!(InkColor::Yellow.rgba(), (250, 204, 21, 140));
+
+        annotations.highlights.push(HighlightQuad {
+            page: PageIndex::zero(),
+            x_norm: 0.1,
+            y_norm: 0.2,
+            w_norm: 0.3,
+            h_norm: 0.05,
+        });
+        assert!(!annotations.is_empty());
     }
 }

@@ -1,8 +1,43 @@
-use crate::types::{PageIndex, PageTextGeometry, TextPosition, TextSelection};
+use crate::types::{LinkTarget, PageIndex, PageTextGeometry, TextPosition, TextSelection};
+
+/// Hit-tests normalized top-left page coordinates `(norm_x, norm_y)` against `geometry.links`.
+#[must_use]
+pub fn hit_test_link(
+    geometry: &PageTextGeometry,
+    page_width_pts: f32,
+    page_height_pts: f32,
+    norm_x: f32,
+    norm_y: f32,
+) -> Option<&LinkTarget> {
+    let pdf_x = norm_x * page_width_pts;
+    let pdf_y = (1.0 - norm_y) * page_height_pts;
+    geometry
+        .links
+        .iter()
+        .find(|link| {
+            pdf_x >= link.x
+                && pdf_x <= link.x + link.width
+                && pdf_y >= link.y
+                && pdf_y <= link.y + link.height
+        })
+        .map(|link| &link.target)
+}
 
 pub struct SelectionEngine;
 
 impl SelectionEngine {
+    /// Hit-tests normalized top-left page coordinates `(norm_x, norm_y)` against `geometry.links`.
+    #[must_use]
+    pub fn hit_test_link(
+        geometry: &PageTextGeometry,
+        page_width_pts: f32,
+        page_height_pts: f32,
+        norm_x: f32,
+        norm_y: f32,
+    ) -> Option<&LinkTarget> {
+        hit_test_link(geometry, page_width_pts, page_height_pts, norm_x, norm_y)
+    }
+
     /// Hit-tests a point `(x, y)` in PDF page coordinates against page text glyphs.
     /// Returns the 0-based character index closest to the point.
     #[must_use]
@@ -167,7 +202,7 @@ impl SelectionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{GlyphRect, PageIndex};
+    use crate::types::{GlyphRect, PageIndex, PageLink};
 
     fn sample_geometry() -> PageTextGeometry {
         let text = "Hello BarePDF! Türkçe metin testi.";
@@ -186,6 +221,7 @@ mod tests {
         PageTextGeometry {
             page_index: PageIndex::zero(),
             glyphs,
+            links: Vec::new(),
         }
     }
 
@@ -226,6 +262,7 @@ mod tests {
                 height: 1.0,
                 ch: 'B',
             }],
+            links: Vec::new(),
         };
         let page_zero = PageTextGeometry {
             page_index: PageIndex::zero(),
@@ -236,6 +273,7 @@ mod tests {
                 height: 1.0,
                 ch: 'A',
             }],
+            links: Vec::new(),
         };
         let selection = TextSelection::new(
             TextPosition::new(PageIndex::zero(), 0),
@@ -246,5 +284,40 @@ mod tests {
             SelectionEngine::get_selected_text(&selection, &[page_one, page_zero]),
             "A\nB"
         );
+    }
+
+    #[test]
+    fn hit_test_link_converts_top_left_normalized_to_pdf_bottom_left() {
+        let mut geom = sample_geometry();
+        geom.links.push(PageLink {
+            x: 100.0,
+            y: 600.0,
+            width: 50.0,
+            height: 20.0,
+            target: LinkTarget::Url("https://example.com".into()),
+        });
+        geom.links.push(PageLink {
+            x: 200.0,
+            y: 100.0,
+            width: 40.0,
+            height: 30.0,
+            target: LinkTarget::Page(PageIndex::from_raw(3)),
+        });
+
+        let page_w = 500.0;
+        let page_h = 800.0;
+
+        // (norm_x = 0.25 -> pdf_x = 125.0, norm_y = 0.2375 -> pdf_y = 610.0)
+        assert_eq!(
+            hit_test_link(&geom, page_w, page_h, 0.25, 0.2375),
+            Some(&LinkTarget::Url("https://example.com".into()))
+        );
+        // (norm_x = 0.44 -> pdf_x = 220.0, norm_y = 0.85 -> pdf_y = 120.0)
+        assert_eq!(
+            hit_test_link(&geom, page_w, page_h, 0.44, 0.85),
+            Some(&LinkTarget::Page(PageIndex::from_raw(3)))
+        );
+        // Miss
+        assert_eq!(hit_test_link(&geom, page_w, page_h, 0.9, 0.9), None);
     }
 }

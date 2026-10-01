@@ -167,6 +167,7 @@ fn init_english() -> HashMap<&'static str, &'static str> {
     m.insert("page.thumbnail", "Page");
     add_english_print_strings(&mut m);
     add_english_tool_strings(&mut m);
+    add_english_annotation_strings(&mut m);
     m.insert("context.copy", "Copy");
     m.insert("context.select_all", "Select All");
     m.insert("status.ready", "Ready");
@@ -192,7 +193,7 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("open.file", "PDF Aç");
     m.insert("open.file.tooltip", "PDF Belgesi Aç (Ctrl+O)");
     m.insert("sidebar.toggle", "Kenar Çubuğu");
-    m.insert("sidebar.thumbnails", "Küçük Resimler");
+    m.insert("sidebar.thumbnails", "Sayfalar");
     m.insert("sidebar.outline", "İçindekiler");
     m.insert("tab.new", "Yeni sekme");
     m.insert("view.mode", "Görünüm");
@@ -295,6 +296,7 @@ fn init_turkish() -> HashMap<&'static str, &'static str> {
     m.insert("page.thumbnail", "Sayfa");
     add_turkish_print_strings(&mut m);
     add_turkish_tool_strings(&mut m);
+    add_turkish_annotation_strings(&mut m);
     m.insert("context.copy", "Kopyala");
     m.insert("context.select_all", "Tümünü Seç");
     m.insert("status.ready", "Hazır");
@@ -608,6 +610,62 @@ fn add_turkish_tool_strings(m: &mut HashMap<&'static str, &'static str>) {
     ]);
 }
 
+fn add_english_annotation_strings(m: &mut HashMap<&'static str, &'static str>) {
+    m.extend([
+        ("toolbar.rotate", "Rotate (Ctrl+R)"),
+        ("toolbar.draw", "Draw"),
+        ("toolbar.sign", "Sign"),
+        ("context.find", "Find in Document"),
+        ("context.highlight", "Highlight"),
+        ("context.rotate_cw", "Rotate Clockwise"),
+        ("context.fit_page", "Fit Page"),
+        ("draw.pen", "Pen"),
+        ("draw.eraser", "Eraser"),
+        ("draw.undo", "Undo"),
+        ("draw.clear", "Clear"),
+        ("draw.save", "Save"),
+        ("draw.save_as", "Save As…"),
+        ("draw.discard", "Discard"),
+        ("sign.title", "Add Signature"),
+        ("sign.draw_tab", "Draw Signature"),
+        ("sign.image_tab", "Upload Image"),
+        ("sign.pick_image", "Choose Image (PNG/JPG)…"),
+        ("sign.clear", "Clear"),
+        ("sign.place", "Place on Page"),
+        ("sign.apply", "Apply Signature"),
+        ("sign.cancel", "Cancel"),
+        ("status.saved", "Saved changes to {name}"),
+    ]);
+}
+
+fn add_turkish_annotation_strings(m: &mut HashMap<&'static str, &'static str>) {
+    m.extend([
+        ("toolbar.rotate", "Döndür (Ctrl+R)"),
+        ("toolbar.draw", "Çizim"),
+        ("toolbar.sign", "İmzala"),
+        ("context.find", "Belgede Bul"),
+        ("context.highlight", "Vurgula"),
+        ("context.rotate_cw", "Saat Yönünde Döndür"),
+        ("context.fit_page", "Sayfaya Sığdır"),
+        ("draw.pen", "Kalem"),
+        ("draw.eraser", "Silgi"),
+        ("draw.undo", "Geri Al"),
+        ("draw.clear", "Temizle"),
+        ("draw.save", "Kaydet"),
+        ("draw.save_as", "Farklı Kaydet…"),
+        ("draw.discard", "Vazgeç"),
+        ("sign.title", "İmza Ekle"),
+        ("sign.draw_tab", "İmza Çiz"),
+        ("sign.image_tab", "Görsel Yükle"),
+        ("sign.pick_image", "Görsel Seç (PNG/JPG)…"),
+        ("sign.clear", "Temizle"),
+        ("sign.place", "Sayfaya Yerleştir"),
+        ("sign.apply", "İmzayı Uygula"),
+        ("sign.cancel", "İptal"),
+        ("status.saved", "Değişiklikler kaydedildi: {name}"),
+    ]);
+}
+
 pub fn t(lang: ResolvedLanguage, key: &str) -> &'static str {
     let map = match lang {
         ResolvedLanguage::English => ENGLISH_MAP.get_or_init(init_english),
@@ -669,6 +727,14 @@ mod tests {
     fn test_translation_lookups() {
         assert_eq!(t(ResolvedLanguage::English, "open.file"), "Open PDF");
         assert_eq!(t(ResolvedLanguage::Turkish, "open.file"), "PDF Aç");
+        assert_eq!(
+            t(ResolvedLanguage::English, "sidebar.thumbnails"),
+            "Thumbnails"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "sidebar.thumbnails"),
+            "Sayfalar"
+        );
         assert_eq!(t(ResolvedLanguage::Turkish, "tab.new"), "Yeni sekme");
         assert_eq!(t(ResolvedLanguage::Turkish, "print.action"), "Yazdır");
         assert_eq!(t(ResolvedLanguage::Turkish, "page.thumbnail"), "Sayfa");
@@ -677,6 +743,107 @@ mod tests {
         assert_eq!(t(ResolvedLanguage::English, "tools.merge"), "Merge PDFs");
         assert_eq!(t(ResolvedLanguage::Turkish, "tools.merge"), "PDF Birleştir");
         assert_eq!(t(ResolvedLanguage::Turkish, "nonexistent"), "");
+    }
+
+    #[test]
+    fn annotation_and_context_strings_are_localized() {
+        assert_eq!(
+            t(ResolvedLanguage::English, "toolbar.rotate"),
+            "Rotate (Ctrl+R)"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "toolbar.rotate"),
+            "Döndür (Ctrl+R)"
+        );
+        assert_eq!(t(ResolvedLanguage::English, "toolbar.draw"), "Draw");
+        assert_eq!(t(ResolvedLanguage::Turkish, "toolbar.draw"), "Çizim");
+        assert_eq!(t(ResolvedLanguage::English, "toolbar.sign"), "Sign");
+        assert_eq!(t(ResolvedLanguage::Turkish, "toolbar.sign"), "İmzala");
+        assert_eq!(
+            t(ResolvedLanguage::English, "context.find"),
+            "Find in Document"
+        );
+        assert_eq!(t(ResolvedLanguage::Turkish, "context.find"), "Belgede Bul");
+        assert_eq!(
+            t(ResolvedLanguage::English, "context.highlight"),
+            "Highlight"
+        );
+        assert_eq!(t(ResolvedLanguage::Turkish, "context.highlight"), "Vurgula");
+        assert_eq!(
+            t(ResolvedLanguage::English, "context.rotate_cw"),
+            "Rotate Clockwise"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "context.rotate_cw"),
+            "Saat Yönünde Döndür"
+        );
+        assert_eq!(t(ResolvedLanguage::English, "context.fit_page"), "Fit Page");
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "context.fit_page"),
+            "Sayfaya Sığdır"
+        );
+        assert_eq!(t(ResolvedLanguage::English, "draw.pen"), "Pen");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.pen"), "Kalem");
+        assert_eq!(t(ResolvedLanguage::English, "draw.eraser"), "Eraser");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.eraser"), "Silgi");
+        assert_eq!(t(ResolvedLanguage::English, "draw.undo"), "Undo");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.undo"), "Geri Al");
+        assert_eq!(t(ResolvedLanguage::English, "draw.clear"), "Clear");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.clear"), "Temizle");
+        assert_eq!(t(ResolvedLanguage::English, "draw.save"), "Save");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.save"), "Kaydet");
+        assert_eq!(t(ResolvedLanguage::English, "draw.save_as"), "Save As…");
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "draw.save_as"),
+            "Farklı Kaydet…"
+        );
+        assert_eq!(t(ResolvedLanguage::English, "draw.discard"), "Discard");
+        assert_eq!(t(ResolvedLanguage::Turkish, "draw.discard"), "Vazgeç");
+        assert_eq!(t(ResolvedLanguage::English, "sign.title"), "Add Signature");
+        assert_eq!(t(ResolvedLanguage::Turkish, "sign.title"), "İmza Ekle");
+        assert_eq!(
+            t(ResolvedLanguage::English, "sign.draw_tab"),
+            "Draw Signature"
+        );
+        assert_eq!(t(ResolvedLanguage::Turkish, "sign.draw_tab"), "İmza Çiz");
+        assert_eq!(
+            t(ResolvedLanguage::English, "sign.image_tab"),
+            "Upload Image"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "sign.image_tab"),
+            "Görsel Yükle"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "sign.pick_image"),
+            "Choose Image (PNG/JPG)…"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "sign.pick_image"),
+            "Görsel Seç (PNG/JPG)…"
+        );
+        assert_eq!(t(ResolvedLanguage::English, "sign.clear"), "Clear");
+        assert_eq!(t(ResolvedLanguage::Turkish, "sign.clear"), "Temizle");
+        assert_eq!(t(ResolvedLanguage::English, "sign.place"), "Place on Page");
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "sign.place"),
+            "Sayfaya Yerleştir"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::English, "sign.apply"),
+            "Apply Signature"
+        );
+        assert_eq!(t(ResolvedLanguage::Turkish, "sign.apply"), "İmzayı Uygula");
+        assert_eq!(t(ResolvedLanguage::English, "sign.cancel"), "Cancel");
+        assert_eq!(t(ResolvedLanguage::Turkish, "sign.cancel"), "İptal");
+        assert_eq!(
+            t(ResolvedLanguage::English, "status.saved"),
+            "Saved changes to {name}"
+        );
+        assert_eq!(
+            t(ResolvedLanguage::Turkish, "status.saved"),
+            "Değişiklikler kaydedildi: {name}"
+        );
     }
 
     #[test]

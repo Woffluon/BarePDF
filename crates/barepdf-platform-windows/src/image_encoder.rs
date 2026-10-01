@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 use barepdf_pdf::conversion::{EncodedImageFormat, ImageEncodeError, ImageEncoder};
 use barepdf_pdf::RawBitmap;
 use windows::core::{PCWSTR, PWSTR, VARIANT};
-use windows::Win32::Foundation::{GENERIC_WRITE, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_ContainerFormatJpeg, GUID_ContainerFormatPng,
-    GUID_WICPixelFormat24bppBGR, GUID_WICPixelFormat32bppBGRA, IWICBitmapEncoder,
-    IWICBitmapFrameEncode, IWICImagingFactory, WICBitmapEncoderNoCache,
+    GUID_WICPixelFormat24bppBGR, GUID_WICPixelFormat32bppBGRA, GUID_WICPixelFormat32bppRGBA,
+    IWICBitmapEncoder, IWICBitmapFrameEncode, IWICImagingFactory, IWICPalette,
+    WICBitmapDitherTypeNone, WICBitmapEncoderNoCache, WICBitmapPaletteTypeCustom,
+    WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::{IPropertyBag2, PROPBAG2};
 use windows::Win32::System::Com::{
@@ -343,5 +345,115 @@ impl Drop for ComApartment {
                 CoUninitialize();
             }
         }
+    }
+}
+
+/// Decodes a PNG or JPEG image file into a 32-bit RGBA [`RawBitmap`] using Windows WIC.
+///
+/// # Errors
+///
+/// Returns [`ImageEncodeError`] when COM/WIC initialization, image decoding, pixel format
+/// conversion, or buffer allocation fails.
+pub fn decode_image_rgba(path: &Path) -> Result<RawBitmap, ImageEncodeError> {
+    let _apartment = ComApartment::initialize()?;
+    let factory: IWICImagingFactory = unsafe {
+        // SAFETY: COM is initialized for this thread; CLSID and interface match in-process WIC.
+        CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
+    }
+    .map_err(|error| wic_error("could not create the WIC imaging factory", error))?;
+
+    let wide_path = wide_null(path.as_os_str());
+    let decoder = unsafe {
+        // SAFETY: `wide_path` is a live NUL-terminated UTF-16 buffer for the duration of the call.
+        factory.CreateDecoderFromFilename(
+            PCWSTR(wide_path.as_ptr()),
+            None,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnDemand,
+        )
+    }
+    .map_err(|error| wic_error("could not decode the selected image file", error))?;
+
+    let frame = unsafe {
+        // SAFETY: `decoder` is a live WIC decoder on this thread.
+        decoder.GetFrame(0)
+    }
+    .map_err(|error| wic_error("could not read the first image frame", error))?;
+
+    let converter = unsafe {
+        // SAFETY: `factory` is a live WIC factory on this thread.
+        factory.CreateFormatConverter()
+    }
+    .map_err(|error| wic_error("could not create the WIC format converter", error))?;
+
+    unsafe {
+        // SAFETY: `frame` and `converter` are live COM interfaces; GUID pointer is static.
+        converter.Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            None::<&IWICPalette>,
+            0.0,
+            WICBitmapPaletteTypeCustom,
+        )
+    }
+    .map_err(|error| wic_error("could not initialize RGBA format conversion", error))?;
+
+    let mut width = 0_u32;
+    let mut height = 0_u32;
+    unsafe {
+        // SAFETY: Out-pointers reference valid stack u32 variables.
+        converter.GetSize(&mut width, &mut height)
+    }
+    .map_err(|error| wic_error("could not read decoded image dimensions", error))?;
+
+    if width == 0 || height == 0 || width > 8192 || height > 8192 {
+        return Err(ImageEncodeError::new(
+            "decoded image dimensions are invalid or exceed 8192x8192",
+        ));
+    }
+
+    let stride = width
+        .checked_mul(4)
+        .ok_or_else(|| ImageEncodeError::new("decoded image row stride overflow"))?;
+    let total_bytes = usize::try_from(stride)
+        .ok()
+        .and_then(|s| usize::try_from(height).ok()?.checked_mul(s))
+        .ok_or_else(|| ImageEncodeError::new("decoded image buffer size overflow"))?;
+
+    let mut rgba_pixels = vec![0_u8; total_bytes];
+    unsafe {
+        // SAFETY: `rgba_pixels` has exact capacity `stride * height` for all rows of the frame.
+        converter.CopyPixels(std::ptr::null(), stride, &mut rgba_pixels)
+    }
+    .map_err(|error| wic_error("could not copy decoded RGBA pixels", error))?;
+
+    RawBitmap::new(width, height, rgba_pixels).map_err(|e| ImageEncodeError::new(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn encode_and_decode_png_roundtrips_rgba_pixels() {
+        let dir = tempdir().unwrap();
+        let png_path = dir.path().join("sig.png");
+        let original = RawBitmap::new(
+            2,
+            2,
+            vec![
+                10, 20, 30, 255, 40, 50, 60, 128, 70, 80, 90, 255, 200, 150, 100, 64,
+            ],
+        )
+        .unwrap();
+
+        WindowsImageEncoder
+            .encode_rgba(&png_path, &original, EncodedImageFormat::Png, 150)
+            .unwrap();
+
+        let decoded = decode_image_rgba(&png_path).unwrap();
+        assert_eq!(decoded, original);
     }
 }

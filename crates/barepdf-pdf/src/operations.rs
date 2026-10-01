@@ -439,6 +439,198 @@ impl PdfOperations {
         new_doc.save_to_file(output).map_err(map_pdfium_error)?;
         Ok(())
     }
+
+    /// Flattens highlights, ink strokes, and signature stamps into the PDF and writes to output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded, or output file cannot be saved.
+    pub fn save_with_annotations(
+        source: &Path,
+        annotations: &barepdf_core::DocumentAnnotations,
+        output: &Path,
+    ) -> Result<(), PdfError> {
+        Self::save_with_annotations_with_password(source, annotations, output, None)
+    }
+
+    /// Flattens highlights, ink strokes, and signature stamps into the PDF using an optional borrowed password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded with the password, or output file cannot be saved.
+    #[allow(clippy::too_many_lines)]
+    pub fn save_with_annotations_with_password(
+        source: &Path,
+        annotations: &barepdf_core::DocumentAnnotations,
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
+        if !source.is_file() {
+            return Err(PdfError::FileNotFound(source.display().to_string()));
+        }
+
+        let pdfium = process_pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
+
+        let total_pages = doc.pages().len();
+        if total_pages <= 0 {
+            return Err(PdfError::InvalidPdfReason(
+                "Source PDF contains no pages".into(),
+            ));
+        }
+
+        for p_idx in 0..total_pages {
+            let Ok(p_u32) = u32::try_from(p_idx) else {
+                continue;
+            };
+            let page_idx = PageIndex::from_raw(p_u32);
+            let has_highlights = annotations.highlights.iter().any(|h| h.page == page_idx);
+            let has_strokes = annotations.strokes.iter().any(|s| s.page == page_idx);
+            let has_signatures = annotations.signatures.iter().any(|s| s.page == page_idx);
+            if !has_highlights && !has_strokes && !has_signatures {
+                continue;
+            }
+
+            let mut page = doc.pages_mut().get(p_idx).map_err(map_pdfium_error)?;
+            let page_w = page.width().value;
+            let page_h = page.height().value;
+
+            for quad in annotations.highlights.iter().filter(|h| h.page == page_idx) {
+                let left = quad.x_norm * page_w;
+                let right = (quad.x_norm + quad.w_norm) * page_w;
+                let top = (1.0 - quad.y_norm) * page_h;
+                let bottom = (1.0 - (quad.y_norm + quad.h_norm)) * page_h;
+                let rect_obj = PdfPagePathObject::new_rect(
+                    &doc,
+                    PdfRect::new_from_values(bottom, left, top, right),
+                    None,
+                    None,
+                    Some(PdfColor::new(250, 204, 21, 95)),
+                )
+                .map_err(map_pdfium_error)?;
+                page.objects_mut()
+                    .add_path_object(rect_obj)
+                    .map_err(map_pdfium_error)?;
+            }
+
+            for stroke in annotations.strokes.iter().filter(|s| s.page == page_idx) {
+                let Some(&(nx0, ny0)) = stroke.points.first() else {
+                    continue;
+                };
+                let x0 = nx0 * page_w;
+                let y0 = (1.0 - ny0) * page_h;
+                let (r, g, b, a) = stroke.color.rgba();
+                let mut path = PdfPagePathObject::new(
+                    &doc,
+                    PdfPoints::new(x0),
+                    PdfPoints::new(y0),
+                    Some(PdfColor::new(r, g, b, a)),
+                    Some(PdfPoints::new(stroke.width_pts.max(0.5))),
+                    None,
+                )
+                .map_err(map_pdfium_error)?;
+                if stroke.points.len() == 1 {
+                    path.line_to(PdfPoints::new(x0 + 0.5), PdfPoints::new(y0 + 0.5))
+                        .map_err(map_pdfium_error)?;
+                } else {
+                    for &(nx, ny) in &stroke.points[1..] {
+                        path.line_to(
+                            PdfPoints::new(nx * page_w),
+                            PdfPoints::new((1.0 - ny) * page_h),
+                        )
+                        .map_err(map_pdfium_error)?;
+                    }
+                }
+                page.objects_mut()
+                    .add_path_object(path)
+                    .map_err(map_pdfium_error)?;
+            }
+
+            for sig in annotations.signatures.iter().filter(|s| s.page == page_idx) {
+                let box_x = sig.x_norm * page_w;
+                let box_y_bottom = (1.0 - (sig.y_norm + sig.h_norm)) * page_h;
+                let box_w = (sig.w_norm * page_w).max(1.0);
+                let box_h = (sig.h_norm * page_h).max(1.0);
+
+                match &sig.payload {
+                    barepdf_core::SignaturePayload::Drawn(polylines) => {
+                        for polyline in polylines {
+                            let Some(&(px0, py0)) = polyline.first() else {
+                                continue;
+                            };
+                            let x0 = box_x + px0 * box_w;
+                            let y0 = box_y_bottom + (1.0 - py0) * box_h;
+                            let mut path = PdfPagePathObject::new(
+                                &doc,
+                                PdfPoints::new(x0),
+                                PdfPoints::new(y0),
+                                Some(PdfColor::new(20, 20, 40, 255)),
+                                Some(PdfPoints::new(2.0)),
+                                None,
+                            )
+                            .map_err(map_pdfium_error)?;
+                            if polyline.len() == 1 {
+                                path.line_to(PdfPoints::new(x0 + 0.5), PdfPoints::new(y0 + 0.5))
+                                    .map_err(map_pdfium_error)?;
+                            } else {
+                                for &(px, py) in &polyline[1..] {
+                                    path.line_to(
+                                        PdfPoints::new(box_x + px * box_w),
+                                        PdfPoints::new(box_y_bottom + (1.0 - py) * box_h),
+                                    )
+                                    .map_err(map_pdfium_error)?;
+                                }
+                            }
+                            page.objects_mut()
+                                .add_path_object(path)
+                                .map_err(map_pdfium_error)?;
+                        }
+                    }
+                    barepdf_core::SignaturePayload::Image {
+                        width,
+                        height,
+                        rgba,
+                    } => {
+                        let w_i32 = i32::try_from(*width).map_err(|_| {
+                            PdfError::InvalidPdfReason("signature image width out of bounds".into())
+                        })?;
+                        let h_i32 = i32::try_from(*height).map_err(|_| {
+                            PdfError::InvalidPdfReason(
+                                "signature image height out of bounds".into(),
+                            )
+                        })?;
+                        let mut bgra = Vec::with_capacity(rgba.len());
+                        for px in rgba.chunks_exact(4) {
+                            bgra.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+                        }
+                        let bitmap =
+                            PdfBitmap::from_bytes(w_i32, h_i32, PdfBitmapFormat::BGRA, &mut bgra)
+                                .map_err(map_pdfium_error)?;
+                        let mut img_obj =
+                            PdfPageImageObject::new(&doc).map_err(map_pdfium_error)?;
+                        img_obj.set_bitmap(&bitmap).map_err(map_pdfium_error)?;
+                        img_obj.scale(box_w, box_h).map_err(map_pdfium_error)?;
+                        img_obj
+                            .translate(PdfPoints::new(box_x), PdfPoints::new(box_y_bottom))
+                            .map_err(map_pdfium_error)?;
+                        page.objects_mut()
+                            .add_image_object(img_obj)
+                            .map_err(map_pdfium_error)?;
+                    }
+                }
+            }
+
+            page.regenerate_content().map_err(map_pdfium_error)?;
+        }
+
+        let bytes = doc.save_to_bytes().map_err(map_pdfium_error)?;
+        std::fs::write(output, bytes).map_err(|error| PdfError::FileAccess {
+            source: Arc::new(error),
+        })?;
+        Ok(())
+    }
 }
 
 fn to_pdfium_page_index(index: PageIndex) -> Result<PdfPageIndex, PdfError> {

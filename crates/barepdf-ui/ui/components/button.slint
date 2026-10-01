@@ -29,14 +29,20 @@ export component TextButton inherits Rectangle {
             return reject;
         }
     }
-    Text {
-        text: root.text;
-        color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
-            : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
-        font-size: 12px;
-        font-weight: active ? 600 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        height: root.height;
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.text;
+            color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
+                : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
+            font-size: 12px;
+            font-weight: active ? 600 : 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
     if focus-scope.has-focus && root.enabled : Rectangle {
         border-width: ThemeTokens.focus-width;

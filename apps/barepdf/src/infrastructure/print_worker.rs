@@ -478,6 +478,7 @@ mod tests {
             Ok(PageTextGeometry {
                 page_index,
                 glyphs: Vec::new(),
+                links: Vec::new(),
             })
         }
 

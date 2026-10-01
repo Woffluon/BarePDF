@@ -42,6 +42,7 @@ fn test_find_in_geometry() {
     let geom = PageTextGeometry {
         page_index: PageIndex::zero(),
         glyphs,
+        links: Vec::new(),
     };
 
     // Case insensitive match
@@ -73,6 +74,7 @@ fn test_find_in_geometry() {
     let geom_empty = PageTextGeometry {
         page_index: PageIndex::zero(),
         glyphs: vec![],
+        links: vec![],
     };
     let q = SearchQuery::new("a".to_string(), false, false).unwrap();
     assert_eq!(q.find_in_geometry(&geom_empty).len(), 0);

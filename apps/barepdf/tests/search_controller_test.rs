@@ -52,6 +52,7 @@ fn execute_search_finds_matches_across_pages() {
                     ch: 'e',
                 },
             ],
+            links: Vec::new(),
         },
     );
 

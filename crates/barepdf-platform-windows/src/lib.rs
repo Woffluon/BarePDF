@@ -12,7 +12,7 @@ pub use clipboard::WindowsClipboard;
 pub use dialogs::{ask_yes_no, show_fatal_error, WindowsFileDialogs};
 pub use drop_target::install_file_drop;
 pub use executable::{executable_file_version, is_installed_build, launch_installer};
-pub use image_encoder::WindowsImageEncoder;
+pub use image_encoder::{decode_image_rgba, WindowsImageEncoder};
 pub use printers::{enumerate_installed_printers, InstalledPrinter};
 pub use printing::{PrintOrientation, WindowsPrinterDialog, WindowsPrinterSink};
 pub use shell::open_url;

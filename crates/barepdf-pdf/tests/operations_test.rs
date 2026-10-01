@@ -729,3 +729,74 @@ fn wrong_job_password_is_distinct_and_leaves_no_partial_tool_outputs() {
     .expect("fixture unlocks with the correct password");
     assert_eq!(inspect_pdf(&unlocked).0, 1);
 }
+
+#[test]
+fn test_save_with_annotations_embeds_highlights_strokes_and_signatures() {
+    use barepdf_core::{
+        DocumentAnnotations, HighlightQuad, InkColor, InkStroke, SignaturePayload, SignatureStamp,
+    };
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("annotated_src.pdf");
+    let output = dir.path().join("annotated_out.pdf");
+    create_test_pdf(&source, 2);
+
+    let annotations = DocumentAnnotations {
+        highlights: vec![HighlightQuad {
+            page: idx(0),
+            x_norm: 0.1,
+            y_norm: 0.2,
+            w_norm: 0.5,
+            h_norm: 0.05,
+        }],
+        strokes: vec![
+            InkStroke {
+                page: idx(0),
+                points: vec![(0.1, 0.1), (0.4, 0.4), (0.6, 0.3)],
+                color: InkColor::Red,
+                width_pts: 4.0,
+            },
+            InkStroke {
+                page: idx(1),
+                points: vec![(0.5, 0.5)],
+                color: InkColor::Blue,
+                width_pts: 2.0,
+            },
+        ],
+        signatures: vec![
+            SignatureStamp {
+                page: idx(0),
+                x_norm: 0.5,
+                y_norm: 0.7,
+                w_norm: 0.3,
+                h_norm: 0.12,
+                payload: SignaturePayload::Drawn(vec![vec![(0.0, 0.5), (0.5, 0.2), (1.0, 0.8)]]),
+            },
+            SignatureStamp {
+                page: idx(1),
+                x_norm: 0.2,
+                y_norm: 0.6,
+                w_norm: 0.25,
+                h_norm: 0.1,
+                payload: SignaturePayload::Image {
+                    width: 2,
+                    height: 2,
+                    rgba: vec![
+                        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+                    ],
+                },
+            },
+        ],
+    };
+
+    PdfOperations::save_with_annotations(&source, &annotations, &output)
+        .expect("save_with_annotations to new file succeeds");
+    let (count, dims, _) = inspect_pdf(&output);
+    assert_eq!(count, 2);
+    assert_eq!(dims[0], (100.0, 200.0));
+
+    // Also verify in-place saving (source == output)
+    PdfOperations::save_with_annotations(&output, &annotations, &output)
+        .expect("in-place save_with_annotations succeeds");
+    assert_eq!(inspect_pdf(&output).0, 2);
+}

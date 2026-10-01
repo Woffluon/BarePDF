@@ -915,14 +915,29 @@ pub(crate) fn ensure_layout(app: &mut AppState) {
         width: app.viewport_width,
         height: app.viewport_height,
         zoom_mode: app.zoom_mode,
+        rotation: app.rotation,
         dimensions_revision: app.dimensions_revision,
     };
     if app.layout_key.as_ref() == Some(&key) {
         return;
     }
+    let rotated = matches!(
+        app.rotation,
+        barepdf_core::Rotation::Degrees90 | barepdf_core::Rotation::Degrees270
+    );
+    let effective_dimensions: Vec<(f32, f32)> = if rotated {
+        app.page_dimensions.iter().map(|&(w, h)| (h, w)).collect()
+    } else {
+        app.page_dimensions.clone()
+    };
+    let effective_viewport_width = if app.viewing_mode == ViewingMode::TwoPageSpread {
+        app.viewport_width.saturating_sub(64).max(2) / 2
+    } else {
+        app.viewport_width.saturating_sub(32).max(1)
+    };
     app.layout = ContinuousLayout::compute(
-        &app.page_dimensions,
-        app.viewport_width.saturating_sub(32).max(1),
+        &effective_dimensions,
+        effective_viewport_width,
         app.viewport_height.saturating_sub(32).max(1),
         app.zoom_mode,
         1.0,
@@ -937,6 +952,13 @@ pub(crate) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u3
     }
     if app.window_mode == WindowMode::Presentation || app.viewing_mode == ViewingMode::SinglePage {
         return vec![app.current_page];
+    }
+    if app.viewing_mode == ViewingMode::TwoPageSpread {
+        let base = app.current_page & !1;
+        if base + 1 < app.page_count() {
+            return vec![base, base + 1];
+        }
+        return vec![base.min(app.page_count().saturating_sub(1))];
     }
     let visible = app.layout.visible_pages(
         (-window.get_current_scroll_y()).max(0.0),
@@ -1039,20 +1061,20 @@ pub(crate) fn render_visible_pages(
         );
     }
 
-    if app.first_page_ready
-        && !app
-            .text_geometries
-            .contains_key(document_id, app.current_page)
-    {
-        send_render_command(
-            app,
-            scheduler,
-            RenderCommand::FetchTextGeometry {
-                document_id,
-                generation: app.generation,
-                page_index: PageIndex::from_raw(app.current_page),
-            },
-        );
+    if app.first_page_ready {
+        for page in pages.iter().copied() {
+            if !app.text_geometries.contains_key(document_id, page) {
+                send_render_command(
+                    app,
+                    scheduler,
+                    RenderCommand::FetchTextGeometry {
+                        document_id,
+                        generation: app.generation,
+                        page_index: PageIndex::from_raw(page),
+                    },
+                );
+            }
+        }
     }
     refresh_page_model(app, window);
 }
@@ -1476,6 +1498,7 @@ pub(crate) fn validated_page_input(input: &str, page_count: u32) -> Option<u32> 
 pub(crate) fn normalize_viewing_mode(mode: ViewingMode) -> ViewingMode {
     match mode {
         ViewingMode::SinglePage => ViewingMode::SinglePage,
+        ViewingMode::TwoPageSpread => ViewingMode::TwoPageSpread,
         _ => ViewingMode::ContinuousVertical,
     }
 }
@@ -1505,16 +1528,20 @@ fn language_index(language: Language) -> i32 {
 }
 
 pub(crate) fn view_mode_index(mode: ViewingMode) -> i32 {
-    i32::from(mode == ViewingMode::SinglePage)
+    match mode {
+        ViewingMode::SinglePage => 1,
+        ViewingMode::TwoPageSpread => 2,
+        _ => 0,
+    }
 }
 
 pub(crate) fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> &'static str {
     barepdf_i18n::t(
         language,
-        if mode == ViewingMode::SinglePage {
-            "view.mode.single"
-        } else {
-            "view.mode.continuous"
+        match mode {
+            ViewingMode::SinglePage => "view.mode.single",
+            ViewingMode::TwoPageSpread => "view.mode.two_page",
+            _ => "view.mode.continuous",
         },
     )
 }
@@ -1535,6 +1562,7 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_sidebar, "sidebar.toggle");
     set_text!(set_text_thumbnails, "sidebar.thumbnails");
     set_text!(set_text_outline, "sidebar.outline");
+    set_text!(set_text_bookmarks, "sidebar.bookmarks");
     set_text!(set_text_new_tab, "tab.new");
     set_text!(set_text_view, "view.mode");
     set_text!(set_text_zoom_in, "zoom.in");
@@ -1563,6 +1591,28 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_print, "print.action");
     set_text!(set_text_cancel_print, "print.cancel");
     set_text!(set_text_toolbar_more, "toolbar.more");
+    set_text!(set_text_toolbar_rotate, "toolbar.rotate");
+    set_text!(set_text_toolbar_draw, "toolbar.draw");
+    set_text!(set_text_toolbar_sign, "toolbar.sign");
+    set_text!(set_text_context_find, "context.find");
+    set_text!(set_text_context_highlight, "context.highlight");
+    set_text!(set_text_context_rotate_cw, "context.rotate_cw");
+    set_text!(set_text_context_fit_page, "context.fit_page");
+    set_text!(set_text_draw_pen, "draw.pen");
+    set_text!(set_text_draw_eraser, "draw.eraser");
+    set_text!(set_text_draw_undo, "draw.undo");
+    set_text!(set_text_draw_clear, "draw.clear");
+    set_text!(set_text_draw_save, "draw.save");
+    set_text!(set_text_draw_save_as, "draw.save_as");
+    set_text!(set_text_draw_discard, "draw.discard");
+    set_text!(set_text_sign_title, "sign.title");
+    set_text!(set_text_sign_draw_tab, "sign.draw_tab");
+    set_text!(set_text_sign_image_tab, "sign.image_tab");
+    set_text!(set_text_sign_pick_image, "sign.pick_image");
+    set_text!(set_text_sign_clear, "sign.clear");
+    set_text!(set_text_sign_place, "sign.place");
+    set_text!(set_text_sign_apply, "sign.apply");
+    set_text!(set_text_sign_cancel, "sign.cancel");
     set_text!(set_text_print_preview_title, "print.preview.title");
     set_text!(
         set_text_print_preview_cancel_tooltip,
@@ -1761,7 +1811,7 @@ mod tests {
         );
         assert_eq!(
             normalize_viewing_mode(ViewingMode::TwoPageSpread),
-            ViewingMode::ContinuousVertical
+            ViewingMode::TwoPageSpread
         );
         assert_eq!(
             normalize_viewing_mode(ViewingMode::SinglePage),

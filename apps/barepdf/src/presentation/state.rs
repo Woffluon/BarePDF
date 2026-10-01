@@ -33,6 +33,7 @@ pub(crate) struct LayoutKey {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) zoom_mode: ZoomMode,
+    pub(crate) rotation: Rotation,
     pub(crate) dimensions_revision: u64,
 }
 
@@ -98,12 +99,19 @@ impl TextGeometryCache {
         geometry: PageTextGeometry,
     ) {
         let key = (document, page_index);
-        let bytes = size_of::<PageTextGeometry>().saturating_add(
-            geometry
-                .glyphs
-                .capacity()
-                .saturating_mul(size_of::<barepdf_core::GlyphRect>()),
-        );
+        let bytes = size_of::<PageTextGeometry>()
+            .saturating_add(
+                geometry
+                    .glyphs
+                    .capacity()
+                    .saturating_mul(size_of::<barepdf_core::GlyphRect>()),
+            )
+            .saturating_add(
+                geometry
+                    .links
+                    .capacity()
+                    .saturating_mul(size_of::<barepdf_core::PageLink>()),
+            );
         if bytes > TEXT_GEOMETRY_BUDGET {
             return;
         }
@@ -310,6 +318,14 @@ pub(crate) struct AppState {
     pub(crate) search_query: Option<barepdf_core::search::SearchQuery>,
     pub(crate) search_matches: Vec<barepdf_core::search::SearchMatch>,
     pub(crate) active_search_match: usize,
+    pub(crate) annotations: HashMap<DocumentId, barepdf_core::DocumentAnnotations>,
+    pub(crate) active_stroke: Option<barepdf_core::InkStroke>,
+    pub(crate) drawing_color: barepdf_core::InkColor,
+    pub(crate) drawing_width_pts: f32,
+    pub(crate) drawing_eraser: bool,
+    pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
+    pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
+    pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
     pump_timer: Option<Rc<Timer>>,
     pump_active_until: Option<Instant>,
 }
@@ -372,6 +388,14 @@ impl AppState {
             search_query: None,
             search_matches: Vec::new(),
             active_search_match: 0,
+            annotations: HashMap::new(),
+            active_stroke: None,
+            drawing_color: barepdf_core::InkColor::Black,
+            drawing_width_pts: 4.0,
+            drawing_eraser: false,
+            sign_pad_strokes: Vec::new(),
+            sign_pad_active_stroke: None,
+            sign_uploaded_image: None,
             pump_timer: None,
             pump_active_until: None,
         }
@@ -582,6 +606,7 @@ mod tests {
             PageTextGeometry {
                 page_index: PageIndex::zero(),
                 glyphs: Vec::new(),
+                links: Vec::new(),
             },
         );
 

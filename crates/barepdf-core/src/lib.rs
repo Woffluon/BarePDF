@@ -24,5 +24,5 @@ pub use page_range::{
 };
 pub use password::SecretPassword;
 pub use preferences::{AppPreferences, BookmarkEntry, DocumentSession, ThemeMode, UserPreferences};
-pub use selection::SelectionEngine;
+pub use selection::{hit_test_link, SelectionEngine};
 pub use types::*;

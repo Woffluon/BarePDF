@@ -22,6 +22,14 @@ slint::slint! {
         height: length,
     }
 
+    export struct OverlayRectData {
+        x_ratio: float,
+        y_ratio: float,
+        width_ratio: float,
+        height_ratio: float,
+        color: color,
+    }
+
     export struct BookmarkItem {
         title: string,
         page_index: int,
@@ -697,6 +705,35 @@ slint::slint! {
         }
     }
 
+    component MenuRow inherits Rectangle {
+        in property <string> text;
+        in property <string> shortcut: "";
+        callback clicked <=> touch.clicked;
+
+        height: 30px;
+        border-radius: 6px;
+        background: touch.has-hover ? ThemeTokens.control-hover : transparent;
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            alignment: space-between;
+            Text {
+                text: root.text;
+                color: ThemeTokens.text;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.shortcut != "" : Text {
+                text: root.shortcut;
+                color: ThemeTokens.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+        touch := TouchArea {}
+    }
+
     export component AppWindow inherits Window {
         title: root.document-title != "" ? root.document-title + " - BarePDF" : "BarePDF";
         icon: @image-url("../../../assets/logo.svg");
@@ -728,7 +765,7 @@ slint::slint! {
         in property <[TabItem]> tab-items: [];
         in-out property <length> current-scroll-y: 0px;
         in-out property <length> thumbnail-scroll-y: 0px;
-        out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 256px : 0px);
+        out property <length> pdf-viewport-width: root.window-mode == 2 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 270px : 0px);
         out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 64px
             - (root.banner-visible ? 40px : 0px)
             - (root.tab-items.length > 0 ? 34px : 0px)
@@ -936,6 +973,62 @@ slint::slint! {
         in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
         in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
         in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc)" : "Exit (Esc)";
+        in-out property <string> text-toolbar-rotate: "Rotate (Ctrl+R)";
+        in-out property <string> text-toolbar-draw: "Draw";
+        in-out property <string> text-toolbar-sign: "Sign";
+        in-out property <string> text-context-find: "Find in Document";
+        in-out property <string> text-context-highlight: "Highlight";
+        in-out property <string> text-context-rotate-cw: "Rotate Clockwise";
+        in-out property <string> text-context-fit-page: "Fit Page";
+        in-out property <string> text-draw-pen: "Pen";
+        in-out property <string> text-draw-eraser: "Eraser";
+        in-out property <string> text-draw-undo: "Undo";
+        in-out property <string> text-draw-clear: "Clear";
+        in-out property <string> text-draw-save: "Save";
+        in-out property <string> text-draw-save-as: "Save As…";
+        in-out property <string> text-draw-discard: "Discard";
+        in-out property <string> text-sign-title: "Add Signature";
+        in-out property <string> text-sign-draw-tab: "Draw Signature";
+        in-out property <string> text-sign-image-tab: "Upload Image";
+        in-out property <string> text-sign-pick-image: "Choose Image (PNG/JPG)…";
+        in-out property <string> text-sign-clear: "Clear";
+        in-out property <string> text-sign-place: "Place on Page";
+        in-out property <string> text-sign-apply: "Apply Signature";
+        in-out property <string> text-sign-cancel: "Cancel";
+
+        in-out property <bool> drawing-mode-active: false;
+        in-out property <bool> drawing-eraser-active: false;
+        in-out property <int> drawing-color-index: 0;
+        in-out property <int> drawing-width-index: 1;
+        in-out property <bool> has-unsaved-annotations: false;
+        in-out property <image> page-annotation-overlay;
+        in-out property <image> current-page-annotation-overlay;
+        in-out property <bool> current-page-has-annotation-overlay: false;
+        in-out property <int> current-annotation-page-index: 0;
+        in-out property <[image]> page-annotation-overlays: [];
+        in-out property <[OverlayRectData]> current-page-overlay-rects: [];
+
+        in-out property <bool> has-second-spread-page: false;
+        in-out property <image> second-page-image;
+        in-out property <length> second-page-width: 600px;
+        in-out property <length> second-page-height: 800px;
+        in-out property <int> second-page-index: 1;
+        in-out property <image> second-page-annotation-overlay;
+        in-out property <bool> second-page-has-annotation-overlay: false;
+
+        in-out property <bool> context-menu-has-selection: false;
+
+        in-out property <bool> sign-modal-open: false;
+        in-out property <int> sign-tab-index: 0;
+        in-out property <image> sign-pad-preview;
+        in-out property <image> signature-preview-image;
+        in-out property <bool> sign-has-preview: false;
+        in-out property <bool> signature-placement-active: false;
+        in-out property <int> signature-placement-page: 0;
+        in-out property <float> signature-box-x: 0.35;
+        in-out property <float> signature-box-y: 0.75;
+        in-out property <float> signature-box-w: 0.25;
+        in-out property <float> signature-box-h: 0.10;
 
         callback request-open-file();
         callback request-next-page();
@@ -1013,6 +1106,39 @@ slint::slint! {
         callback request-command-selected(int);
         callback request-set-paper-tint(int);
         callback request-toggle-invert-colors();
+        callback rotate-view-cw();
+        callback rotate-view-ccw();
+        callback toggle-drawing-mode();
+        callback set-drawing-eraser(bool);
+        callback set-drawing-color(int);
+        callback set-drawing-width(int);
+        callback drawing-undo();
+        callback drawing-clear-page();
+        callback save-annotations();
+        callback save-annotations-as();
+        callback discard-annotations();
+        callback drawing-pointer-down(int, float, float);
+        callback drawing-pointer-move(int, float, float);
+        callback drawing-pointer-up(int, float, float);
+        callback page-right-clicked(int, float, float, length, length);
+        callback context-highlight-selection();
+        callback context-find-selection();
+        callback copy-selection();
+        callback select-all();
+        callback fit-page();
+        callback prev-page();
+        callback next-page();
+        callback open-sign-modal();
+        callback sign-pad-pointer-down(float, float);
+        callback sign-pad-pointer-move(float, float);
+        callback sign-pad-pointer-up();
+        callback sign-pad-clear();
+        callback sign-pick-image();
+        callback sign-start-placement();
+        callback signature-drag-move(float, float);
+        callback signature-resize-move(float, float);
+        callback signature-apply();
+        callback signature-cancel();
 
         changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
         changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
@@ -1036,9 +1162,14 @@ slint::slint! {
                         root.context-menu-open = false;
                         root.settings-open = false;
                         root.preferences-open = false;
+                        root.sign-modal-open = false;
                         root.request-exit-special-mode();
                         return accept;
                     }
+                    if (root.context-menu-open) { root.context-menu-open = false; return accept; }
+                    if (root.sign-modal-open) { root.sign-modal-open = false; return accept; }
+                    if (root.signature-placement-active) { root.signature-placement-active = false; root.signature-cancel(); return accept; }
+                    if (root.drawing-mode-active) { root.drawing-mode-active = false; root.toggle-drawing-mode(); return accept; }
                     if (root.search-open) { root.search-open = false; return accept; }
                     if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                     if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
@@ -1051,7 +1182,6 @@ slint::slint! {
                         return accept;
                     }
                     if (root.toolbar-more-open) { root.toolbar-more-open = false; return accept; }
-                    if (root.context-menu-open) { root.context-menu-open = false; return accept; }
                     if (root.settings-open) { root.settings-open = false; return accept; }
                     if (root.preferences-open) { root.preferences-open = false; return accept; }
                     root.request-exit-special-mode(); return accept;
@@ -1068,6 +1198,32 @@ slint::slint! {
                     root.command-palette-open = !root.command-palette-open;
                     root.request-toggle-command-palette();
                     return accept;
+                }
+                if (event.modifiers.control && (event.text == "r" || event.text == "R")) {
+                    if (event.modifiers.shift) {
+                        root.rotate-view-ccw();
+                    } else {
+                        root.rotate-view-cw();
+                    }
+                    return accept;
+                }
+                if (event.modifiers.control && (event.text == "h" || event.text == "H")) {
+                    root.context-highlight-selection();
+                    return accept;
+                }
+                if (event.modifiers.control && (event.text == "s" || event.text == "S")) {
+                    if (event.modifiers.shift) {
+                        root.save-annotations-as();
+                    } else {
+                        root.save-annotations();
+                    }
+                    return accept;
+                }
+                if (event.modifiers.control && (event.text == "z" || event.text == "Z")) {
+                    if (root.drawing-mode-active || root.has-unsaved-annotations) {
+                        root.drawing-undo();
+                        return accept;
+                    }
                 }
                 if (event.text == "\u{f11}" || event.text == "F11" || event.text == Key.F11) {
                     root.request-toggle-fullscreen();
@@ -1492,10 +1648,11 @@ slint::slint! {
                         clicked => { root.request-zoom-in(); }
                     }
                     IconButton {
-                        icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
+                        icon: root.view-mode == 2 ? @image-url("../../../assets/icons/panel_left_20_regular.svg") : @image-url("../../../assets/icons/slide_text_20_regular.svg");
                         label: root.view-mode-label;
-                        tooltip: root.text-view;
+                        tooltip: root.text-view + " (" + root.view-mode-label + ")";
                         show-label: false;
+                        active: root.view-mode != 0;
                         enabled: root.has-document;
                         visible: root.width >= 760px;
                         clicked => { root.request-toggle-view-mode(); }
@@ -1520,11 +1677,40 @@ slint::slint! {
                         visible: root.width >= 760px;
                         clicked => { root.request-fit-page(); }
                     }
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+                        label: "↻";
+                        tooltip: root.text-toolbar-rotate;
+                        show-label: false;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.rotate-view-cw(); }
+                    }
 
                     // Divider 3
                     if root.width >= 760px : Rectangle { width: 1px; height: 20px; background: ThemeTokens.border; }
 
-                    // Group 4: Print | PDF Tools (Birleştir, Böl vs.)
+                    // Group 4: Draw | Sign | Print | PDF Tools
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
+                        label: root.text-toolbar-draw;
+                        tooltip: root.text-toolbar-draw;
+                        show-label: root.width >= 1040px;
+                        active: root.drawing-mode-active;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.toggle-drawing-mode(); }
+                    }
+                    IconButton {
+                        icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
+                        label: root.text-toolbar-sign;
+                        tooltip: root.text-toolbar-sign;
+                        show-label: root.width >= 1040px;
+                        active: root.sign-modal-open || root.signature-placement-active;
+                        enabled: root.has-document;
+                        visible: root.width >= 760px;
+                        clicked => { root.open-sign-modal(); }
+                    }
                     TextButton {
                         text: root.text-print;
                         visible: root.width >= 760px;
@@ -1535,7 +1721,7 @@ slint::slint! {
                         icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
                         label: root.text-tools;
                         tooltip: root.text-tools-tooltip;
-                        show-label: root.width >= 1080px;
+                        show-label: root.width >= 1140px;
                         active: root.tools-open;
                         visible: root.width >= 760px;
                         clicked => { root.request-toggle-tools(); }
@@ -1662,7 +1848,7 @@ slint::slint! {
                 spacing: 0px;
 
                 if root.sidebar-visible && root.has-document : Rectangle {
-                    width: 256px;
+                    width: 270px;
                     background: ThemeTokens.panel;
                     border-width: 1px;
                     border-color: ThemeTokens.border;
@@ -1865,6 +2051,8 @@ slint::slint! {
 
                                         VerticalLayout {
                                             alignment: center;
+                                            padding-left: 16px;
+                                            padding-right: 16px;
                                             spacing: 6px;
                                             Image {
                                                 source: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
@@ -1875,10 +2063,12 @@ slint::slint! {
                                                 horizontal-alignment: center;
                                             }
                                             Text {
+                                                width: 100%;
                                                 text: root.text-empty-desc;
                                                 color: ThemeTokens.text-muted;
                                                 font-size: 12px;
                                                 horizontal-alignment: center;
+                                                wrap: word-wrap;
                                             }
                                         }
                                     }
@@ -1937,9 +2127,18 @@ slint::slint! {
                         }
                     }
 
-                    if root.has-document && root.view-mode == 1 : ScrollView {
-                        viewport-width: Math.max(self.width, root.page-display-width + 48px);
-                        viewport-height: Math.max(self.height, root.page-display-height + 48px);
+                    if root.has-document && (root.view-mode == 1 || root.view-mode == 2) : spread-scroll := ScrollView {
+                        property <bool> show-second: root.view-mode == 2 && (root.has-second-spread-page || root.visible-pages.length > 1);
+                        property <length> second-w: root.visible-pages.length > 1 ? root.visible-pages[1].width : root.second-page-width;
+                        property <length> second-h: root.visible-pages.length > 1 ? root.visible-pages[1].height : root.second-page-height;
+                        property <int> first-idx: root.visible-pages.length > 0 ? root.visible-pages[0].page-index : root.current-annotation-page-index;
+                        property <int> second-idx: root.visible-pages.length > 1 ? root.visible-pages[1].page-index : root.second-page-index;
+                        property <length> spread-total-w: root.page-display-width + (self.show-second ? (12px + self.second-w) : 0px);
+                        property <length> spread-max-h: self.show-second ? Math.max(root.page-display-height, self.second-h) : root.page-display-height;
+                        property <length> spread-start-x: Math.max(24px, (self.viewport-width - self.spread-total-w) / 2);
+
+                        viewport-width: Math.max(self.width, self.spread-total-w + 48px);
+                        viewport-height: Math.max(self.height, self.spread-max-h + 48px);
                         TouchArea {
                             width: parent.viewport-width;
                             height: parent.viewport-height;
@@ -1954,22 +2153,60 @@ slint::slint! {
                         }
                         Rectangle {
                             width: root.page-display-width; height: root.page-display-height;
-                            x: Math.max(24px, (parent.viewport-width - self.width) / 2);
+                            x: spread-scroll.spread-start-x;
                             y: Math.max(24px, (parent.viewport-height - self.height) / 2);
                             background: white; border-radius: ThemeTokens.page-radius;
                             border-width: 1px;
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
+                            if root.visible-pages.length == 0 && root.page-bitmap.width > 0 : Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > spread-scroll.first-idx && root.page-annotation-overlays[spread-scroll.first-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.first-idx]; width: 100%; height: 100%; image-fit: contain; }
+                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlay.width > 0 && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            for rect in root.current-page-overlay-rects : Rectangle {
+                                x: parent.width * rect.x_ratio;
+                                y: parent.height * rect.y_ratio;
+                                width: parent.width * rect.width_ratio;
+                                height: parent.height * rect.height_ratio;
+                                background: rect.color;
+                            }
                             if root.visible-pages.length > 0 : Rectangle {
                                 for box in root.visible-pages[0].selection-boxes : Rectangle {
                                     x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection;
                                 }
+                                for highlight in root.visible-pages[0].search-highlights : Rectangle {
+                                    x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
+                                }
                             }
-                            if root.visible-pages.length > 0 : TouchArea {
+                            TouchArea {
                                 pointer-event(event) => {
-                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { root.pointer-down(root.visible-pages[0].page-index, self.mouse-x, self.mouse-y, 1); }
-                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) { root.pointer-up(root.visible-pages[0].page-index, self.mouse-x, self.mouse-y); }
-                                    if (event.kind == PointerEventKind.move) { root.pointer-move(root.visible-pages[0].page-index, self.mouse-x, self.mouse-y); }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                        root.page-right-clicked(
+                                            spread-scroll.first-idx,
+                                            self.mouse-x / Math.max(1px, self.width),
+                                            self.mouse-y / Math.max(1px, self.height),
+                                            self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y
+                                        );
+                                    }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        root.pointer-down(spread-scroll.first-idx, self.mouse-x, self.mouse-y, 1);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-down(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                        root.pointer-up(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-up(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.move) {
+                                        root.pointer-move(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active && self.pressed) {
+                                            root.drawing-pointer-move(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
                                 }
                                 scroll-event(event) => {
                                     if (event.modifiers.control) {
@@ -1978,6 +2215,189 @@ slint::slint! {
                                         return accept;
                                     }
                                     return reject;
+                                }
+                            }
+                            if root.signature-placement-active && spread-scroll.first-idx == root.signature-placement-page : Rectangle {
+                                x: parent.width * root.signature-box-x;
+                                y: parent.height * root.signature-box-y;
+                                width: parent.width * root.signature-box-w;
+                                height: parent.height * root.signature-box-h;
+                                background: ThemeTokens.accent.with-alpha(0.08);
+                                border-width: 2px;
+                                border-color: ThemeTokens.accent;
+                                border-radius: 4px;
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width)));
+                                            root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height)));
+                                            root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height));
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: parent.width - 14px;
+                                    y: parent.height - 14px;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 3px;
+                                    background: ThemeTokens.accent;
+                                    TouchArea {
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.move && self.pressed) {
+                                                root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width)));
+                                                root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height)));
+                                                root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height));
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: Math.max(0px, (parent.width - self.width) / 2);
+                                    y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                    width: 220px;
+                                    height: 34px;
+                                    background: ThemeTokens.surface-flyout;
+                                    border-radius: ThemeTokens.control-radius;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.border;
+                                    HorizontalLayout {
+                                        padding: 3px;
+                                        spacing: 6px;
+                                        alignment: center;
+                                        TextButton {
+                                            text: root.text-sign-apply;
+                                            primary: true;
+                                            clicked => { root.signature-apply(); }
+                                        }
+                                        TextButton {
+                                            text: root.text-sign-cancel;
+                                            clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if spread-scroll.show-second : Rectangle {
+                            width: spread-scroll.second-w; height: spread-scroll.second-h;
+                            x: spread-scroll.spread-start-x + root.page-display-width + 12px;
+                            y: Math.max(24px, (parent.viewport-height - self.height) / 2);
+                            background: white; border-radius: ThemeTokens.page-radius;
+                            border-width: 1px;
+                            border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                            if root.visible-pages.length > 1 && root.visible-pages[1].has-bitmap : Image { source: root.visible-pages[1].bitmap; width: 100%; height: 100%; image-fit: contain; }
+                            if (root.visible-pages.length <= 1 || !root.visible-pages[1].has-bitmap) && root.second-page-image.width > 0 : Image { source: root.second-page-image; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > spread-scroll.second-idx && root.page-annotation-overlays[spread-scroll.second-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.second-idx]; width: 100%; height: 100%; image-fit: contain; }
+                            if root.second-page-has-annotation-overlay || root.second-page-annotation-overlay.width > 0 : Image { source: root.second-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.visible-pages.length > 1 : Rectangle {
+                                for box in root.visible-pages[1].selection-boxes : Rectangle {
+                                    x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection;
+                                }
+                                for highlight in root.visible-pages[1].search-highlights : Rectangle {
+                                    x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
+                                }
+                            }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                        root.page-right-clicked(
+                                            spread-scroll.second-idx,
+                                            self.mouse-x / Math.max(1px, self.width),
+                                            self.mouse-y / Math.max(1px, self.height),
+                                            self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y
+                                        );
+                                    }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        root.pointer-down(spread-scroll.second-idx, self.mouse-x, self.mouse-y, 1);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-down(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                        root.pointer-up(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-up(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.move) {
+                                        root.pointer-move(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active && self.pressed) {
+                                            root.drawing-pointer-move(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                }
+                                scroll-event(event) => {
+                                    if (event.modifiers.control) {
+                                        if (event.delta-y > 0) { root.request-zoom-in(); }
+                                        else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+                            if root.signature-placement-active && spread-scroll.second-idx == root.signature-placement-page : Rectangle {
+                                x: parent.width * root.signature-box-x;
+                                y: parent.height * root.signature-box-y;
+                                width: parent.width * root.signature-box-w;
+                                height: parent.height * root.signature-box-h;
+                                background: ThemeTokens.accent.with-alpha(0.08);
+                                border-width: 2px;
+                                border-color: ThemeTokens.accent;
+                                border-radius: 4px;
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width)));
+                                            root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height)));
+                                            root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height));
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: parent.width - 14px;
+                                    y: parent.height - 14px;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 3px;
+                                    background: ThemeTokens.accent;
+                                    TouchArea {
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.move && self.pressed) {
+                                                root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width)));
+                                                root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height)));
+                                                root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height));
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: Math.max(0px, (parent.width - self.width) / 2);
+                                    y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                    width: 220px;
+                                    height: 34px;
+                                    background: ThemeTokens.surface-flyout;
+                                    border-radius: ThemeTokens.control-radius;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.border;
+                                    HorizontalLayout {
+                                        padding: 3px;
+                                        spacing: 6px;
+                                        alignment: center;
+                                        TextButton {
+                                            text: root.text-sign-apply;
+                                            primary: true;
+                                            clicked => { root.signature-apply(); }
+                                        }
+                                        TextButton {
+                                            text: root.text-sign-cancel;
+                                            clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2006,13 +2426,50 @@ slint::slint! {
                             border-width: 1px;
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > page.page-index && root.page-annotation-overlays[page.page-index].width > 0 : Image { source: root.page-annotation-overlays[page.page-index]; width: 100%; height: 100%; image-fit: contain; }
+                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && page.page-index == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlay.width > 0 && page.page-index == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if page.page-index == root.current-annotation-page-index : Rectangle {
+                                width: 100%; height: 100%;
+                                for rect in root.current-page-overlay-rects : Rectangle {
+                                    x: parent.width * rect.x_ratio;
+                                    y: parent.height * rect.y_ratio;
+                                    width: parent.width * rect.width_ratio;
+                                    height: parent.height * rect.height_ratio;
+                                    background: rect.color;
+                                }
+                            }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
                             for highlight in page.search-highlights : Rectangle { x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B; }
                             TouchArea {
                                 pointer-event(event) => {
-                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1); }
-                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) { root.pointer-up(page.page-index, self.mouse-x, self.mouse-y); }
-                                    if (event.kind == PointerEventKind.move) { root.pointer-move(page.page-index, self.mouse-x, self.mouse-y); }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                        root.page-right-clicked(
+                                            page.page-index,
+                                            self.mouse-x / Math.max(1px, self.width),
+                                            self.mouse-y / Math.max(1px, self.height),
+                                            self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y
+                                        );
+                                    }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-down(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                        root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active) {
+                                            root.drawing-pointer-up(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
+                                    if (event.kind == PointerEventKind.move) {
+                                        root.pointer-move(page.page-index, self.mouse-x, self.mouse-y);
+                                        if (root.drawing-mode-active && self.pressed) {
+                                            root.drawing-pointer-move(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        }
+                                    }
                                 }
                                 scroll-event(event) => {
                                     if (event.modifiers.control) {
@@ -2023,7 +2480,177 @@ slint::slint! {
                                     return reject;
                                 }
                             }
+                            if root.signature-placement-active && page.page-index == root.signature-placement-page : Rectangle {
+                                x: parent.width * root.signature-box-x;
+                                y: parent.height * root.signature-box-y;
+                                width: parent.width * root.signature-box-w;
+                                height: parent.height * root.signature-box-h;
+                                background: ThemeTokens.accent.with-alpha(0.08);
+                                border-width: 2px;
+                                border-color: ThemeTokens.accent;
+                                border-radius: 4px;
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, page.width)));
+                                            root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, page.height)));
+                                            root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, page.width), (self.mouse-y - self.pressed-y) / Math.max(1px, page.height));
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: parent.width - 14px;
+                                    y: parent.height - 14px;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 3px;
+                                    background: ThemeTokens.accent;
+                                    TouchArea {
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.move && self.pressed) {
+                                                root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, page.width)));
+                                                root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, page.height)));
+                                                root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, page.width), (self.mouse-y - self.pressed-y) / Math.max(1px, page.height));
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: Math.max(0px, (parent.width - self.width) / 2);
+                                    y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                    width: 220px;
+                                    height: 34px;
+                                    background: ThemeTokens.surface-flyout;
+                                    border-radius: ThemeTokens.control-radius;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.border;
+                                    HorizontalLayout {
+                                        padding: 3px;
+                                        spacing: 6px;
+                                        alignment: center;
+                                        TextButton {
+                                            text: root.text-sign-apply;
+                                            primary: true;
+                                            clicked => { root.signature-apply(); }
+                                        }
+                                        TextButton {
+                                            text: root.text-sign-cancel;
+                                            clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                        }
+                                    }
+                                }
+                            }
                             if !page.has-bitmap : Text { text: root.text-loading + " " + page.page-number; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+
+                    // Floating Drawing & Annotations Toolbar
+                    if root.has-document && (root.drawing-mode-active || root.has-unsaved-annotations) : Rectangle {
+                        x: Math.max(8px, (parent.width - self.width) / 2);
+                        y: 12px;
+                        height: 44px;
+                        background: ThemeTokens.surface-flyout;
+                        border-radius: ThemeTokens.flyout-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        drop-shadow-blur: ThemeTokens.effects-active ? 16px : 10px;
+                        drop-shadow-offset-y: 3px;
+                        drop-shadow-color: ThemeTokens.warm-shadow;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
+                            spacing: 6px;
+                            alignment: center;
+
+                            if root.drawing-mode-active : HorizontalLayout {
+                                spacing: 4px;
+                                TextButton {
+                                    text: root.text-draw-pen;
+                                    active: !root.drawing-eraser-active;
+                                    clicked => { root.drawing-eraser-active = false; root.set-drawing-eraser(false); }
+                                }
+                                TextButton {
+                                    text: root.text-draw-eraser;
+                                    active: root.drawing-eraser-active;
+                                    clicked => { root.drawing-eraser-active = true; root.set-drawing-eraser(true); }
+                                }
+
+                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                                // 4 Color Swatches: Black (0), Red (1), Blue (2), Yellow (3)
+                                for swatch-color[cidx] in [#181a1f, #e03131, #1971c2, #f59f00] : Rectangle {
+                                    width: 24px;
+                                    height: 24px;
+                                    border-radius: 6px;
+                                    background: swatch-color;
+                                    border-width: root.drawing-color-index == cidx ? 2px : 1px;
+                                    border-color: root.drawing-color-index == cidx ? ThemeTokens.accent : ThemeTokens.border;
+                                    TouchArea {
+                                        clicked => {
+                                            root.drawing-color-index = cidx;
+                                            root.set-drawing-color(cidx);
+                                        }
+                                    }
+                                }
+
+                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                                // 3 Stroke Widths: Thin (0), Medium (1), Thick (2)
+                                for dot-size[widx] in [4px, 7px, 11px] : Rectangle {
+                                    width: 28px;
+                                    height: 28px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: root.drawing-width-index == widx ? ThemeTokens.selection : ThemeTokens.control;
+                                    border-width: 1px;
+                                    border-color: root.drawing-width-index == widx ? ThemeTokens.accent : ThemeTokens.border;
+                                    Rectangle {
+                                        width: dot-size;
+                                        height: dot-size;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: dot-size / 2;
+                                        background: ThemeTokens.text;
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.drawing-width-index = widx;
+                                            root.set-drawing-width(widx);
+                                        }
+                                    }
+                                }
+
+                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+                            }
+
+                            TextButton {
+                                text: root.text-draw-undo;
+                                clicked => { root.drawing-undo(); }
+                            }
+                            TextButton {
+                                text: root.text-draw-clear;
+                                clicked => { root.drawing-clear-page(); }
+                            }
+
+                            Rectangle { width: 1px; height: 22px; background: ThemeTokens.border; }
+
+                            TextButton {
+                                text: root.text-draw-save;
+                                primary: true;
+                                clicked => { root.save-annotations(); }
+                            }
+                            TextButton {
+                                text: root.text-draw-save-as;
+                                clicked => { root.save-annotations-as(); }
+                            }
+                            TextButton {
+                                text: root.text-draw-discard;
+                                clicked => { root.discard-annotations(); }
+                            }
                         }
                     }
 
@@ -2038,7 +2665,7 @@ slint::slint! {
                     }
 
                     if root.toolbar-more-open : Rectangle {
-                        x: Math.max(8px, parent.width - 248px); y: root.toolbar-more-open ? 8px : 14px; width: 240px; height: 302px;
+                        x: Math.max(8px, parent.width - 248px); y: root.toolbar-more-open ? 8px : 14px; width: 240px; height: 418px;
                         background: ThemeTokens.surface-flyout;
                         border-radius: ThemeTokens.flyout-radius;
                         border-width: 1px;
@@ -2061,6 +2688,9 @@ slint::slint! {
                                 TextButton { text: root.text-view; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-toggle-view-mode(); } }
                                 TextButton { text: root.text-fit-width; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-fit-width(); } }
                                 TextButton { text: root.text-fit-page; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-fit-page(); } }
+                                TextButton { text: root.text-toolbar-rotate; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.rotate-view-cw(); } }
+                                TextButton { text: root.text-toolbar-draw; enabled: root.has-document; active: root.drawing-mode-active; clicked => { root.toolbar-more-open = false; root.toggle-drawing-mode(); } }
+                                TextButton { text: root.text-toolbar-sign; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.open-sign-modal(); } }
                                 TextButton { text: root.text-print; enabled: root.has-document && !root.print-active; clicked => { root.toolbar-more-open = false; root.request-print(); } }
                                 TextButton { text: root.text-tools; clicked => { root.toolbar-more-open = false; root.request-toggle-tools(); } }
                                 TextButton { text: root.text-fullscreen; enabled: root.has-document; clicked => { root.toolbar-more-open = false; root.request-toggle-fullscreen(); } }
@@ -2432,6 +3062,225 @@ slint::slint! {
             is-active: root.scrubber-active;
             preview-label: root.scrubber-page-label;
             y-position: root.scrubber-y;
+        }
+
+        // Smart Right-Click Context Menu
+        if root.context-menu-open : Rectangle {
+            width: 100%; height: 100%;
+            background: #00000000;
+            TouchArea {
+                clicked => { root.context-menu-open = false; }
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                        root.context-menu-open = false;
+                    }
+                }
+            }
+            Rectangle {
+                x: Math.clamp(root.context-menu-x, 8px, root.width - self.width - 8px);
+                y: Math.clamp(root.context-menu-y, 8px, root.height - self.height - 8px);
+                width: 210px;
+                height: ctx-layout.preferred-height;
+                border-radius: 10px;
+                background: ThemeTokens.surface-flyout;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+                drop-shadow-blur: ThemeTokens.effects-active ? 18px : 12px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
+                TouchArea {}
+                ctx-layout := VerticalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+
+                    if root.context-menu-has-selection : MenuRow {
+                        text: root.text-copy;
+                        shortcut: "Ctrl+C";
+                        clicked => { root.context-menu-open = false; root.request-copy(); root.copy-selection(); }
+                    }
+                    if root.context-menu-has-selection : MenuRow {
+                        text: root.text-context-find;
+                        shortcut: "Ctrl+F";
+                        clicked => { root.context-menu-open = false; root.context-find-selection(); }
+                    }
+                    if root.context-menu-has-selection : MenuRow {
+                        text: root.text-context-highlight;
+                        shortcut: "Ctrl+H";
+                        clicked => { root.context-menu-open = false; root.context-highlight-selection(); }
+                    }
+                    if root.context-menu-has-selection : Rectangle {
+                        height: 1px; background: ThemeTokens.border;
+                    }
+
+                    MenuRow {
+                        text: root.text-select-all;
+                        shortcut: "Ctrl+A";
+                        clicked => { root.context-menu-open = false; root.request-select-all(); root.select-all(); }
+                    }
+                    MenuRow {
+                        text: root.text-context-rotate-cw;
+                        shortcut: "Ctrl+R";
+                        clicked => { root.context-menu-open = false; root.rotate-view-cw(); }
+                    }
+                    MenuRow {
+                        text: root.text-context-fit-page;
+                        shortcut: "Ctrl+2";
+                        clicked => { root.context-menu-open = false; root.request-fit-page(); root.fit-page(); }
+                    }
+                    Rectangle { height: 1px; background: ThemeTokens.border; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        TextButton {
+                            horizontal-stretch: 1;
+                            text: "← " + root.text-prev-page;
+                            clicked => { root.context-menu-open = false; root.request-prev-page(); root.prev-page(); }
+                        }
+                        TextButton {
+                            horizontal-stretch: 1;
+                            text: root.text-next-page + " →";
+                            clicked => { root.context-menu-open = false; root.request-next-page(); root.next-page(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Signature Creation Modal
+        if root.sign-modal-open : Rectangle {
+            width: 100%; height: 100%;
+            background: #00000066;
+            TouchArea {
+                clicked => { root.sign-modal-open = false; }
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 480px;
+                height: 360px;
+                border-radius: 14px;
+                background: ThemeTokens.surface-flyout;
+                border-width: 1px;
+                border-color: ThemeTokens.border;
+                drop-shadow-blur: ThemeTokens.effects-active ? 18px : 12px;
+                drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+                drop-shadow-color: ThemeTokens.warm-shadow;
+                TouchArea {}
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: root.text-sign-title;
+                            color: ThemeTokens.text;
+                            font-size: 16px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        IconButton {
+                            icon: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                            tooltip: root.text-sign-cancel;
+                            clicked => { root.sign-modal-open = false; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextButton {
+                            horizontal-stretch: 1;
+                            text: root.text-sign-draw-tab;
+                            active: root.sign-tab-index == 0;
+                            clicked => { root.sign-tab-index = 0; }
+                        }
+                        TextButton {
+                            horizontal-stretch: 1;
+                            text: root.text-sign-image-tab;
+                            active: root.sign-tab-index == 1;
+                            clicked => { root.sign-tab-index = 1; }
+                        }
+                    }
+
+                    if root.sign-tab-index == 0 : Rectangle {
+                        vertical-stretch: 1;
+                        background: #FFFFFF;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        clip: true;
+                        Image {
+                            width: 100%; height: 100%;
+                            source: root.sign-pad-preview;
+                            image-fit: fill;
+                        }
+                        TouchArea {
+                            width: 100%; height: 100%;
+                            mouse-cursor: crosshair;
+                            pointer-event(ev) => {
+                                if (ev.button == PointerEventButton.left) {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        root.sign-pad-pointer-down(self.mouse-x / self.width, self.mouse-y / self.height);
+                                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                        root.sign-pad-pointer-up();
+                                    }
+                                }
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    root.sign-pad-pointer-move(
+                                        Math.clamp(self.mouse-x / self.width, 0.0, 1.0),
+                                        Math.clamp(self.mouse-y / self.height, 0.0, 1.0)
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    if root.sign-tab-index == 1 : Rectangle {
+                        vertical-stretch: 1;
+                        background: ThemeTokens.control;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            padding: 16px;
+                            if root.sign-has-preview : Image {
+                                height: 110px;
+                                source: root.sign-pad-preview;
+                                image-fit: contain;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                TextButton {
+                                    text: root.text-sign-pick-image;
+                                    clicked => { root.sign-pick-image(); }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        TextButton {
+                            text: root.text-sign-clear;
+                            clicked => { root.sign-pad-clear(); }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            TextButton {
+                                text: root.text-sign-cancel;
+                                clicked => { root.sign-modal-open = false; }
+                            }
+                            TextButton {
+                                text: root.text-sign-place;
+                                primary: true;
+                                enabled: root.sign-has-preview;
+                                clicked => { root.sign-start-placement(); }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

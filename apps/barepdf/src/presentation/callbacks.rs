@@ -45,8 +45,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::models::{
-    refresh_bookmark_model, refresh_page_model, refresh_tab_model, refresh_thumbnail_model,
-    refresh_tool_thumbnails,
+    refresh_annotation_overlays, refresh_bookmark_model, refresh_page_model, refresh_tab_model,
+    refresh_thumbnail_model, refresh_tool_thumbnails, render_signature_pad_preview,
 };
 use super::state::AppState;
 use super::ui::{
@@ -89,8 +89,9 @@ pub(super) fn wire_callbacks(
     connect_selection_callbacks(window, state, scheduler, clipboard);
     connect_tab_callbacks(window, state, scheduler);
     connect_print_callbacks(window, state, scheduler, print_controller);
-    connect_tools_callbacks(window, state, scheduler, dialogs);
+    connect_tools_callbacks(window, state, scheduler, dialogs.clone());
     connect_niche_feature_callbacks(window, state, scheduler, preferences_path);
+    connect_annotation_and_signature_callbacks(window, state, scheduler, dialogs);
 
     let weak = window.as_weak();
     let state_password = state.clone();
@@ -1172,10 +1173,15 @@ fn connect_navigation_callbacks(
                 if let Some(window) = weak.upgrade() {
                     let page = {
                         let app = state.borrow();
+                        let step = if app.viewing_mode == ViewingMode::TwoPageSpread {
+                            2
+                        } else {
+                            1
+                        };
                         match target {
-                            NavigationTarget::Previous => app.current_page.saturating_sub(1),
+                            NavigationTarget::Previous => app.current_page.saturating_sub(step),
                             NavigationTarget::Next => {
-                                (app.current_page + 1).min(app.page_count().saturating_sub(1))
+                                (app.current_page + step).min(app.page_count().saturating_sub(1))
                             }
                             NavigationTarget::First => 0,
                             NavigationTarget::Last => app.page_count().saturating_sub(1),
@@ -1353,15 +1359,39 @@ fn connect_view_callbacks(
             let mut app = state_view.borrow_mut();
             app.viewing_mode = match app.viewing_mode {
                 ViewingMode::ContinuousVertical => ViewingMode::SinglePage,
+                ViewingMode::SinglePage => ViewingMode::TwoPageSpread,
                 _ => ViewingMode::ContinuousVertical,
             };
             app.preferences.viewing_mode = app.viewing_mode;
+            app.layout_key = None;
             window.set_view_mode(view_mode_index(app.viewing_mode));
             window.set_view_mode_label(SharedString::from(view_mode_label(
                 app.viewing_mode,
                 app.preferences.language.resolve(),
             )));
             navigate_to_page_inner(app.current_page, &mut app, &scheduler_view, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_rot_cw = state.clone();
+    let scheduler_rot_cw = scheduler.clone();
+    window.on_rotate_view_cw(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_rot_cw.borrow_mut();
+            app.rotation = app.rotation.rotate_cw();
+            invalidate_layout_and_render(&mut app, &scheduler_rot_cw, &window, true);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_rot_ccw = state.clone();
+    let scheduler_rot_ccw = scheduler.clone();
+    window.on_rotate_view_ccw(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_rot_ccw.borrow_mut();
+            app.rotation = app.rotation.rotate_ccw();
+            invalidate_layout_and_render(&mut app, &scheduler_rot_ccw, &window, true);
         }
     });
 
@@ -1744,6 +1774,9 @@ fn connect_selection_callbacks(
         if page < 0 {
             return;
         }
+        if weak.upgrade().is_some_and(|w| w.get_drawing_mode_active()) {
+            return;
+        }
         let mut app = state_down.borrow_mut();
         let page = page as u32;
         let Some(page_index) = DocumentController::page_index(&app.application, page) else {
@@ -1801,6 +1834,9 @@ fn connect_selection_callbacks(
         if page < 0 {
             return;
         }
+        if weak.upgrade().is_some_and(|w| w.get_drawing_mode_active()) {
+            return;
+        }
         let mut app = state_move.borrow_mut();
         if !app.is_selecting {
             return;
@@ -1829,13 +1865,63 @@ fn connect_selection_callbacks(
 
     let weak = window.as_weak();
     let state_up = state.clone();
-    window.on_pointer_up(move |_, _, _| {
+    let scheduler_up = scheduler.clone();
+    window.on_pointer_up(move |page, x, y| {
+        if weak.upgrade().is_some_and(|w| w.get_drawing_mode_active()) {
+            return;
+        }
         let mut app = state_up.borrow_mut();
         app.is_selecting = false;
+        let has_non_empty_selection = app.selection.is_some_and(|selection| !selection.is_empty());
         if let Some(window) = weak.upgrade() {
-            window.set_has_selection(app.selection.is_some_and(|selection| !selection.is_empty()));
+            window.set_has_selection(has_non_empty_selection);
+        }
+
+        if !has_non_empty_selection && page >= 0 && app.click_count <= 1 {
+            let page_u32 = page as u32;
+            let (page_width, page_height) = app
+                .page_dimensions
+                .get(page_u32 as usize)
+                .copied()
+                .unwrap_or(app.first_page_dimensions);
+            let (display_width, display_height) = app
+                .layout
+                .pages
+                .get(page_u32 as usize)
+                .map(|p| (p.width as f32, p.height as f32))
+                .unwrap_or((page_width, page_height));
+            let norm_x = (x / display_width.max(1.0)).clamp(0.0, 1.0);
+            let norm_y = (y / display_height.max(1.0)).clamp(0.0, 1.0);
+            let link_target = app
+                .active_document()
+                .and_then(|doc| app.text_geometries.get(doc, page_u32))
+                .and_then(|geom| {
+                    barepdf_core::hit_test_link(geom, page_width, page_height, norm_x, norm_y)
+                        .cloned()
+                });
+            if let Some(target) = link_target {
+                match target {
+                    barepdf_core::LinkTarget::Page(dest) => {
+                        let dest_page = dest.get();
+                        drop(app);
+                        if let Some(window) = weak.upgrade() {
+                            navigate_to_page(dest_page, &state_up, &scheduler_up, &window);
+                        }
+                    }
+                    barepdf_core::LinkTarget::Url(url) => {
+                        if is_safe_external_link_url(&url) {
+                            let _ = open_url(&url);
+                        }
+                    }
+                }
+            }
         }
     });
+}
+
+fn is_safe_external_link_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")
 }
 
 pub(super) fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
@@ -2808,14 +2894,636 @@ fn connect_niche_feature_callbacks(
     });
 }
 
+fn connect_annotation_and_signature_callbacks(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    dialogs: Arc<WindowsFileDialogs>,
+) {
+    let weak = window.as_weak();
+    let state_ctx = state.clone();
+    window.on_page_right_clicked(move |page_idx, _norm_x, _norm_y, win_x, win_y| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_ctx.borrow_mut();
+        if page_idx >= 0 && app.page_count() > 0 {
+            app.current_page = (page_idx as u32).min(app.page_count().saturating_sub(1));
+        }
+        let has_sel = app.selection.is_some_and(|s| !s.is_empty());
+        window.set_context_menu_has_selection(has_sel);
+        window.set_context_menu_x(win_x);
+        window.set_context_menu_y(win_y);
+        window.set_context_menu_open(true);
+    });
+
+    let weak = window.as_weak();
+    let state_find_sel = state.clone();
+    window.on_context_find_selection(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let selected_text = {
+            let app = state_find_sel.borrow();
+            if let (Some(selection), Some(document)) = (app.selection, app.active_document()) {
+                let geometries = app.text_geometries.in_page_order(document);
+                SelectionEngine::get_selected_text_in_page_order(&selection, &geometries)
+            } else {
+                String::new()
+            }
+        };
+        let query = selected_text.trim().to_string();
+        if !query.is_empty() {
+            window.set_search_open(true);
+            window.set_search_query(SharedString::from(query.as_str()));
+            window.invoke_request_search_query(SharedString::from(query));
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_hl = state.clone();
+    window.on_context_highlight_selection(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_hl.borrow_mut();
+        let Some(selection) = app.selection else {
+            return;
+        };
+        if selection.is_empty() {
+            return;
+        }
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        let (first_page, last_page) = selection.start_and_end();
+        let mut new_quads = Vec::new();
+        for p in first_page.page.get()..=last_page.page.get() {
+            let page_index = PageIndex::from_raw(p);
+            let Some((start, end)) = selection.range_for_page(page_index) else {
+                continue;
+            };
+            let (pw, ph) = app
+                .page_dimensions
+                .get(p as usize)
+                .copied()
+                .unwrap_or(app.first_page_dimensions);
+            if let Some(geom) = app.text_geometries.get(doc_id, p) {
+                new_quads.extend(selection_to_highlight_quads(
+                    geom, page_index, start, end, pw, ph,
+                ));
+            }
+        }
+        if !new_quads.is_empty() {
+            app.annotations
+                .entry(doc_id)
+                .or_default()
+                .highlights
+                .extend(new_quads);
+            app.selection = None;
+            window.set_has_selection(false);
+            refresh_page_model(&mut app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_toggle_drawing_mode(move || {
+        if let Some(window) = weak.upgrade() {
+            let next = !window.get_drawing_mode_active();
+            window.set_drawing_mode_active(next);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_eraser = state.clone();
+    window.on_set_drawing_eraser(move |active| {
+        state_eraser.borrow_mut().drawing_eraser = active;
+        if let Some(window) = weak.upgrade() {
+            window.set_drawing_eraser_active(active);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_color = state.clone();
+    window.on_set_drawing_color(move |idx| {
+        let mut app = state_color.borrow_mut();
+        app.drawing_color = match idx {
+            1 => barepdf_core::InkColor::Red,
+            2 => barepdf_core::InkColor::Blue,
+            3 => barepdf_core::InkColor::Yellow,
+            _ => barepdf_core::InkColor::Black,
+        };
+        app.drawing_eraser = false;
+        if let Some(window) = weak.upgrade() {
+            window.set_drawing_color_index(idx.clamp(0, 3));
+            window.set_drawing_eraser_active(false);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_width = state.clone();
+    window.on_set_drawing_width(move |idx| {
+        let mut app = state_width.borrow_mut();
+        app.drawing_width_pts = match idx {
+            0 => 2.0,
+            1 => 4.0,
+            _ => 8.0,
+        };
+        if let Some(window) = weak.upgrade() {
+            window.set_drawing_width_index(idx.clamp(0, 2));
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_draw_down = state.clone();
+    window.on_drawing_pointer_down(move |page, nx, ny| {
+        if page < 0 {
+            return;
+        }
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_draw_down.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        let page_idx = PageIndex::from_raw(page as u32);
+        let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+        if app.drawing_eraser {
+            if let Some(ann) = app.annotations.get_mut(&doc_id) {
+                erase_strokes_near(&mut ann.strokes, page_idx, pt.0, pt.1, 0.035);
+            }
+        } else {
+            app.active_stroke = Some(barepdf_core::InkStroke {
+                page: page_idx,
+                points: vec![pt],
+                color: app.drawing_color,
+                width_pts: app.drawing_width_pts,
+            });
+        }
+        refresh_annotation_overlays(&app, &window);
+    });
+
+    let weak = window.as_weak();
+    let state_draw_move = state.clone();
+    window.on_drawing_pointer_move(move |page, nx, ny| {
+        if page < 0 {
+            return;
+        }
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_draw_move.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        let page_idx = PageIndex::from_raw(page as u32);
+        let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+        if app.drawing_eraser {
+            if let Some(ann) = app.annotations.get_mut(&doc_id) {
+                if erase_strokes_near(&mut ann.strokes, page_idx, pt.0, pt.1, 0.035) {
+                    refresh_annotation_overlays(&app, &window);
+                }
+            }
+        } else if let Some(stroke) = app.active_stroke.as_mut() {
+            if stroke.page == page_idx && stroke.points.len() < 4096 {
+                stroke.points.push(pt);
+                refresh_annotation_overlays(&app, &window);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_draw_up = state.clone();
+    window.on_drawing_pointer_up(move |_page, nx, ny| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_draw_up.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        if let Some(mut stroke) = app.active_stroke.take() {
+            if stroke.points.is_empty() {
+                stroke.points.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
+            }
+            app.annotations
+                .entry(doc_id)
+                .or_default()
+                .strokes
+                .push(stroke);
+            refresh_annotation_overlays(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_undo = state.clone();
+    window.on_drawing_undo(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_undo.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        if let Some(ann) = app.annotations.get_mut(&doc_id) {
+            if ann.strokes.pop().is_none() && ann.signatures.pop().is_none() {
+                let _ = ann.highlights.pop();
+            }
+            refresh_annotation_overlays(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_clear_page = state.clone();
+    window.on_drawing_clear_page(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_clear_page.borrow_mut();
+        let current_page = app.current_page;
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        if let Some(ann) = app.annotations.get_mut(&doc_id) {
+            ann.strokes.retain(|s| s.page.get() != current_page);
+            ann.highlights.retain(|h| h.page.get() != current_page);
+            ann.signatures.retain(|s| s.page.get() != current_page);
+            refresh_annotation_overlays(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_discard = state.clone();
+    window.on_discard_annotations(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_discard.borrow_mut();
+        if let Some(doc_id) = app.active_document() {
+            app.annotations.remove(&doc_id);
+        }
+        app.active_stroke = None;
+        window.set_drawing_mode_active(false);
+        refresh_annotation_overlays(&app, &window);
+    });
+
+    let weak = window.as_weak();
+    let state_save = state.clone();
+    let scheduler_save = scheduler.clone();
+    window.on_save_annotations(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        save_active_annotations(&state_save, &scheduler_save, &window, None);
+    });
+
+    let weak = window.as_weak();
+    let state_save_as = state.clone();
+    let scheduler_save_as = scheduler.clone();
+    let dialogs_save_as = dialogs.clone();
+    window.on_save_annotations_as(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let default_name = {
+            let app = state_save_as.borrow();
+            let Some(doc) = app.application.ready_document() else {
+                return;
+            };
+            format!(
+                "{}_annotated.pdf",
+                doc.path()
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("document")
+            )
+        };
+        let Some(output_path) = dialogs_save_as.save_file(&default_name) else {
+            return;
+        };
+        save_active_annotations(
+            &state_save_as,
+            &scheduler_save_as,
+            &window,
+            Some(output_path),
+        );
+    });
+
+    // Signature creation & placement callbacks
+    let weak = window.as_weak();
+    let state_open_sign = state.clone();
+    window.on_open_sign_modal(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_open_sign.borrow_mut();
+        app.sign_pad_strokes.clear();
+        app.sign_pad_active_stroke = None;
+        app.sign_uploaded_image = None;
+        window.set_sign_pad_preview(Image::default());
+        window.set_sign_has_preview(false);
+        window.set_sign_tab_index(0);
+        window.set_sign_modal_open(true);
+    });
+
+    let weak = window.as_weak();
+    let state_sign_down = state.clone();
+    window.on_sign_pad_pointer_down(move |nx, ny| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_down.borrow_mut();
+        app.sign_uploaded_image = None;
+        app.sign_pad_active_stroke = Some(vec![(nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0))]);
+        let preview = render_signature_pad_preview(
+            &app.sign_pad_strokes,
+            app.sign_pad_active_stroke.as_ref(),
+            None,
+        );
+        window.set_sign_pad_preview(preview);
+        window.set_sign_has_preview(true);
+    });
+
+    let weak = window.as_weak();
+    let state_sign_move = state.clone();
+    window.on_sign_pad_pointer_move(move |nx, ny| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_move.borrow_mut();
+        if let Some(stroke) = app.sign_pad_active_stroke.as_mut() {
+            if stroke.len() < 2048 {
+                stroke.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
+                let preview = render_signature_pad_preview(
+                    &app.sign_pad_strokes,
+                    app.sign_pad_active_stroke.as_ref(),
+                    None,
+                );
+                window.set_sign_pad_preview(preview);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_sign_up = state.clone();
+    window.on_sign_pad_pointer_up(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_up.borrow_mut();
+        if let Some(stroke) = app.sign_pad_active_stroke.take() {
+            if !stroke.is_empty() {
+                app.sign_pad_strokes.push(stroke);
+            }
+            let preview = render_signature_pad_preview(&app.sign_pad_strokes, None, None);
+            window.set_sign_pad_preview(preview);
+            window.set_sign_has_preview(!app.sign_pad_strokes.is_empty());
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_sign_clear = state.clone();
+    window.on_sign_pad_clear(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_clear.borrow_mut();
+        app.sign_pad_strokes.clear();
+        app.sign_pad_active_stroke = None;
+        app.sign_uploaded_image = None;
+        window.set_sign_pad_preview(Image::default());
+        window.set_sign_has_preview(false);
+    });
+
+    let weak = window.as_weak();
+    let state_sign_img = state.clone();
+    let dialogs_sign_img = dialogs;
+    window.on_sign_pick_image(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let Some(path) = dialogs_sign_img.pick_image_file() else {
+            return;
+        };
+        match barepdf_platform_windows::decode_image_rgba(&path) {
+            Ok(bmp) => {
+                let (w, h, pixels) = bmp.into_parts();
+                let mut app = state_sign_img.borrow_mut();
+                app.sign_uploaded_image = Some((w, h, pixels));
+                let preview =
+                    render_signature_pad_preview(&[], None, app.sign_uploaded_image.as_ref());
+                window.set_sign_pad_preview(preview);
+                window.set_sign_has_preview(true);
+            }
+            Err(err) => {
+                show_banner(
+                    &window,
+                    format!("Could not load signature image: {err}"),
+                    false,
+                );
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_sign_place = state.clone();
+    window.on_sign_start_placement(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let current_page = state_sign_place.borrow().current_page;
+        window.set_sign_modal_open(false);
+        window.set_signature_placement_page(current_page as i32);
+        window.set_signature_box_x(0.35);
+        window.set_signature_box_y(0.72);
+        window.set_signature_box_w(0.28);
+        window.set_signature_box_h(0.10);
+        window.set_signature_placement_active(true);
+    });
+
+    let weak = window.as_weak();
+    let state_sign_apply = state.clone();
+    window.on_signature_apply(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_apply.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        let payload = if let Some((width, height, rgba)) = app.sign_uploaded_image.clone() {
+            barepdf_core::SignaturePayload::Image {
+                width,
+                height,
+                rgba,
+            }
+        } else if !app.sign_pad_strokes.is_empty() {
+            barepdf_core::SignaturePayload::Drawn(app.sign_pad_strokes.clone())
+        } else {
+            window.set_signature_placement_active(false);
+            return;
+        };
+        let page = window.get_signature_placement_page().max(0) as u32;
+        let stamp = barepdf_core::SignatureStamp {
+            page: PageIndex::from_raw(page),
+            x_norm: window.get_signature_box_x().clamp(0.0, 0.95),
+            y_norm: window.get_signature_box_y().clamp(0.0, 0.95),
+            w_norm: window.get_signature_box_w().clamp(0.05, 1.0),
+            h_norm: window.get_signature_box_h().clamp(0.03, 1.0),
+            payload,
+        };
+        app.annotations
+            .entry(doc_id)
+            .or_default()
+            .signatures
+            .push(stamp);
+        window.set_signature_placement_active(false);
+        refresh_annotation_overlays(&app, &window);
+    });
+
+    let weak = window.as_weak();
+    window.on_signature_cancel(move || {
+        if let Some(window) = weak.upgrade() {
+            window.set_signature_placement_active(false);
+        }
+    });
+}
+
+fn save_active_annotations(
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    window: &AppWindow,
+    save_as_path: Option<PathBuf>,
+) {
+    let (doc_id, source_path, annotations, lang) = {
+        let app = state.borrow();
+        let Some(doc) = app.application.ready_document() else {
+            return;
+        };
+        let doc_id = doc.id();
+        let Some(annotations) = app.annotations.get(&doc_id).cloned() else {
+            return;
+        };
+        if annotations.is_empty() {
+            return;
+        }
+        (
+            doc_id,
+            doc.path().to_path_buf(),
+            annotations,
+            app.preferences.language.resolve(),
+        )
+    };
+    let output_path = save_as_path.unwrap_or_else(|| source_path.clone());
+    match barepdf_pdf::PdfOperations::save_with_annotations(
+        &source_path,
+        &annotations,
+        &output_path,
+    ) {
+        Ok(()) => {
+            {
+                let mut app = state.borrow_mut();
+                app.annotations.remove(&doc_id);
+                app.active_stroke = None;
+                app.page_images.remove_document(doc_id);
+                app.thumbnail_images.remove_document(doc_id);
+                app.text_geometries.remove_document(doc_id);
+                refresh_annotation_overlays(&app, window);
+            }
+            window.set_drawing_mode_active(false);
+            let name = output_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("document.pdf");
+            let msg = barepdf_i18n::t(lang, "status.saved").replace("{name}", name);
+            window.set_status_text(SharedString::from(msg.as_str()));
+            show_banner(window, msg, false);
+            begin_open(output_path, None, state, scheduler, window);
+        }
+        Err(err) => {
+            show_banner(window, format!("Failed to save annotations: {err}"), false);
+        }
+    }
+}
+
+fn selection_to_highlight_quads(
+    geometry: &barepdf_core::PageTextGeometry,
+    page_index: PageIndex,
+    start: u32,
+    end: u32,
+    page_width: f32,
+    page_height: f32,
+) -> Vec<barepdf_core::HighlightQuad> {
+    let pw = page_width.max(1.0);
+    let ph = page_height.max(1.0);
+    let start = (start as usize).min(geometry.glyphs.len());
+    let end = (end as usize).min(geometry.glyphs.len());
+    let mut quads: Vec<barepdf_core::HighlightQuad> = Vec::new();
+
+    for glyph in &geometry.glyphs[start..end] {
+        if glyph.width <= 0.0 || glyph.height <= 0.0 {
+            continue;
+        }
+        let x_norm = (glyph.x / pw).clamp(0.0, 1.0);
+        let y_norm = ((ph - glyph.y - glyph.height) / ph).clamp(0.0, 1.0);
+        let w_norm = (glyph.width / pw).clamp(0.001, 1.0 - x_norm);
+        let h_norm = (glyph.height / ph).clamp(0.001, 1.0 - y_norm);
+
+        if let Some(last) = quads.last_mut() {
+            if (last.y_norm - y_norm).abs() < 0.015
+                && (last.h_norm - h_norm).abs() < 0.015
+                && (x_norm - (last.x_norm + last.w_norm)).abs() < 0.025
+            {
+                let new_right = (x_norm + w_norm).max(last.x_norm + last.w_norm);
+                last.w_norm = (new_right - last.x_norm).clamp(0.001, 1.0 - last.x_norm);
+                continue;
+            }
+        }
+        quads.push(barepdf_core::HighlightQuad {
+            page: page_index,
+            x_norm,
+            y_norm,
+            w_norm,
+            h_norm,
+        });
+    }
+    quads
+}
+
+fn erase_strokes_near(
+    strokes: &mut Vec<barepdf_core::InkStroke>,
+    page: PageIndex,
+    nx: f32,
+    ny: f32,
+    radius: f32,
+) -> bool {
+    let r2 = radius * radius;
+    let before = strokes.len();
+    strokes.retain(|stroke| {
+        if stroke.page != page {
+            return true;
+        }
+        !stroke
+            .points
+            .iter()
+            .any(|&(px, py)| (px - nx) * (px - nx) + (py - ny) * (py - ny) <= r2)
+    });
+    strokes.len() != before
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_print_preview_range, parse_zoom_percent, print_preview_dimensions,
-        selected_tool_pages, toggle_tool_page_selection, tool_drop_paths, PrintPreviewState,
-        PRINT_PREVIEW_REQUEST_MASK,
+        erase_strokes_near, is_safe_external_link_url, parse_print_preview_range,
+        parse_zoom_percent, print_preview_dimensions, selected_tool_pages,
+        selection_to_highlight_quads, toggle_tool_page_selection, tool_drop_paths,
+        PrintPreviewState, PRINT_PREVIEW_REQUEST_MASK,
     };
-    use barepdf_core::{DocumentId, PageCount, PageIndex, RequestId, Rotation};
+    use barepdf_core::{
+        DocumentId, GlyphRect, InkColor, InkStroke, PageCount, PageIndex, PageTextGeometry,
+        RequestId, Rotation,
+    };
     use std::path::PathBuf;
 
     fn page_count(value: u32) -> PageCount {
@@ -2941,5 +3649,71 @@ mod tests {
         assert_eq!(toggle_tool_page_selection("5", 2, 5, true), "2-5");
         assert_eq!(toggle_tool_page_selection("2-4", 6, 10, true), "2-6");
         assert_eq!(toggle_tool_page_selection("", 3, 5, true), "3-3");
+    }
+
+    #[test]
+    fn external_link_url_scheme_validation_rejects_unsafe_schemes() {
+        assert!(is_safe_external_link_url("https://example.com/doc"));
+        assert!(is_safe_external_link_url("http://example.com"));
+        assert!(is_safe_external_link_url("mailto:user@example.com"));
+        assert!(!is_safe_external_link_url(
+            "file:///C:/Windows/System32/cmd.exe"
+        ));
+        assert!(!is_safe_external_link_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn selection_to_highlight_quads_merges_adjacent_glyphs_on_same_line() {
+        let geom = PageTextGeometry {
+            page_index: PageIndex::zero(),
+            glyphs: vec![
+                GlyphRect {
+                    ch: 'A',
+                    x: 10.0,
+                    y: 100.0,
+                    width: 8.0,
+                    height: 12.0,
+                },
+                GlyphRect {
+                    ch: 'B',
+                    x: 18.0,
+                    y: 100.0,
+                    width: 8.0,
+                    height: 12.0,
+                },
+            ],
+            links: Vec::new(),
+        };
+        let quads = selection_to_highlight_quads(&geom, PageIndex::zero(), 0, 2, 200.0, 200.0);
+        assert_eq!(quads.len(), 1);
+        assert!((quads[0].x_norm - 0.05).abs() < 1e-4);
+        assert!((quads[0].w_norm - 0.08).abs() < 1e-4);
+    }
+
+    #[test]
+    fn erase_strokes_near_removes_only_matching_page_stroke_within_radius() {
+        let mut strokes = vec![
+            InkStroke {
+                page: PageIndex::zero(),
+                points: vec![(0.2, 0.2), (0.3, 0.3)],
+                color: InkColor::Black,
+                width_pts: 4.0,
+            },
+            InkStroke {
+                page: PageIndex::from_raw(1),
+                points: vec![(0.2, 0.2)],
+                color: InkColor::Red,
+                width_pts: 4.0,
+            },
+        ];
+        assert!(erase_strokes_near(
+            &mut strokes,
+            PageIndex::zero(),
+            0.21,
+            0.21,
+            0.035
+        ));
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].page, PageIndex::from_raw(1));
     }
 }

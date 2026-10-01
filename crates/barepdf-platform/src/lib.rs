@@ -19,6 +19,9 @@ pub trait FileDialogs: Send + Sync {
     fn pick_directory(&self) -> Option<PathBuf> {
         None
     }
+    fn pick_image_file(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 pub trait ClipboardAccess: Send + Sync {

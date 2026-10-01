@@ -48,4 +48,10 @@ impl FileDialogs for WindowsFileDialogs {
     fn pick_directory(&self) -> Option<PathBuf> {
         FileDialog::new().pick_folder()
     }
+
+    fn pick_image_file(&self) -> Option<PathBuf> {
+        FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+    }
 }

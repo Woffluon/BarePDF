@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
+const MAX_LINKS_PER_PAGE: usize = 2_000;
 
 pub struct PdfiumEngine {
     pdfium: &'static Pdfium,
@@ -239,7 +240,60 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             }
         }
 
-        Ok(barepdf_core::PageTextGeometry { page_index, glyphs })
+        let mut links = Vec::new();
+        for link in page.links().iter().take(MAX_LINKS_PER_PAGE) {
+            let Ok(rect) = link.rect() else {
+                continue;
+            };
+            let x1 = rect.left().value.min(rect.right().value);
+            let x2 = rect.left().value.max(rect.right().value);
+            let y1 = rect.bottom().value.min(rect.top().value);
+            let y2 = rect.bottom().value.max(rect.top().value);
+
+            let mut target = None;
+            if let Some(action) = link.action() {
+                if let Some(uri_action) = action.as_uri_action() {
+                    if let Ok(uri) = uri_action.uri() {
+                        target = Some(barepdf_core::LinkTarget::Url(uri));
+                    }
+                } else if let Some(local) = action.as_local_destination_action() {
+                    if let Ok(dest) = local.destination() {
+                        if let Ok(idx) = dest.page_index() {
+                            if let Ok(idx_u32) = u32::try_from(idx) {
+                                target = Some(barepdf_core::LinkTarget::Page(PageIndex::from_raw(
+                                    idx_u32,
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            if target.is_none() {
+                if let Some(dest) = link.destination() {
+                    if let Ok(idx) = dest.page_index() {
+                        if let Ok(idx_u32) = u32::try_from(idx) {
+                            target =
+                                Some(barepdf_core::LinkTarget::Page(PageIndex::from_raw(idx_u32)));
+                        }
+                    }
+                }
+            }
+            if let Some(target) = target {
+                links.push(barepdf_core::PageLink {
+                    x: x1,
+                    y: y1,
+                    width: (x2 - x1).max(0.0),
+                    height: (y2 - y1).max(0.0),
+                    target,
+                });
+            }
+        }
+
+        Ok(barepdf_core::PageTextGeometry {
+            page_index,
+            glyphs,
+            links,
+        })
     }
 
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
