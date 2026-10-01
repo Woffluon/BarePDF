@@ -45,6 +45,7 @@ export component PrintPreviewDialog inherits Rectangle {
     callback next();
     callback range-changed(string);
     callback orientation-changed(int);
+    callback duplex-changed(int);
     callback confirm();
     callback cancel();
 
@@ -366,17 +367,17 @@ export component PrintPreviewDialog inherits Rectangle {
                                 TextButton {
                                     text: root.text-duplex-off;
                                     active: root.duplex == 0;
-                                    clicked => { root.duplex = 0; }
+                                    clicked => { root.duplex = 0; root.duplex-changed(0); }
                                 }
                                 TextButton {
                                     text: root.text-duplex-long;
                                     active: root.duplex == 1;
-                                    clicked => { root.duplex = 1; }
+                                    clicked => { root.duplex = 1; root.duplex-changed(1); }
                                 }
                                 TextButton {
                                     text: root.text-duplex-short;
                                     active: root.duplex == 2;
-                                    clicked => { root.duplex = 2; }
+                                    clicked => { root.duplex = 2; root.duplex-changed(2); }
                                 }
                             }
                         }

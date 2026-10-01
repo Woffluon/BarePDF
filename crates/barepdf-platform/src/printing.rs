@@ -54,6 +54,25 @@ impl PrintOrientation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrintDuplex {
+    #[default]
+    OneSided,
+    TwoSidedLongEdge,
+    TwoSidedShortEdge,
+}
+
+impl PrintDuplex {
+    #[must_use]
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::TwoSidedLongEdge,
+            2 => Self::TwoSidedShortEdge,
+            _ => Self::OneSided,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrintRange {
     first: PageIndex,
@@ -320,6 +339,17 @@ mod tests {
         assert_eq!(PrintOrientation::from_index(0), PrintOrientation::Auto);
         assert_eq!(PrintOrientation::from_index(99), PrintOrientation::Auto);
         assert_eq!(PrintOrientation::default(), PrintOrientation::Auto);
+    }
+
+    #[test]
+    fn print_duplex_from_index_maps_correctly() {
+        use super::PrintDuplex;
+        assert_eq!(PrintDuplex::from_index(0), PrintDuplex::OneSided);
+        assert_eq!(PrintDuplex::from_index(1), PrintDuplex::TwoSidedLongEdge);
+        assert_eq!(PrintDuplex::from_index(2), PrintDuplex::TwoSidedShortEdge);
+        assert_eq!(PrintDuplex::from_index(-1), PrintDuplex::OneSided);
+        assert_eq!(PrintDuplex::from_index(99), PrintDuplex::OneSided);
+        assert_eq!(PrintDuplex::default(), PrintDuplex::OneSided);
     }
 
     #[test]

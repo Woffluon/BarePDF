@@ -28,7 +28,7 @@ use barepdf_core::{
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::conversion::{ConversionDpi, ConversionFormat};
-use barepdf_platform::printing::{Copies, PrintOrientation, PrintRange};
+use barepdf_platform::printing::{Copies, PrintDuplex, PrintOrientation, PrintRange};
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
     enumerate_installed_printers, is_installed_build, open_url, WindowsClipboard,
@@ -335,6 +335,7 @@ struct PrintPreviewState {
     page_count: PageCount,
     page_index: PageIndex,
     orientation: i32,
+    duplex: i32,
     range: String,
     pending: Option<PendingPreviewRender>,
 }
@@ -353,6 +354,7 @@ impl PrintPreviewState {
             page_count,
             page_index: PageIndex::from_raw(page_index.get().min(page_count.get() - 1)),
             orientation: 0,
+            duplex: 0,
             range: default_print_preview_range(page_count),
             pending: None,
         }
@@ -622,6 +624,7 @@ fn connect_print_callbacks(
         window.set_print_preview_page(i32::try_from(preview.page_index.get()).unwrap_or(i32::MAX));
         window.set_print_preview_range(SharedString::from(preview.range.clone()));
         window.set_print_preview_orientation(preview.orientation);
+        window.set_print_preview_duplex(preview.duplex);
         window.set_print_preview_has_image(false);
         window.set_print_preview_image(Image::default());
         window.set_print_preview_open(true);
@@ -683,6 +686,16 @@ fn connect_print_callbacks(
             if let Some(preview) = preview.borrow_mut().as_mut() {
                 if preview.open {
                     preview.orientation = orientation.clamp(0, 2);
+                }
+            }
+        });
+    });
+
+    window.on_request_print_preview_duplex(move |duplex| {
+        PRINT_PREVIEW.with(|preview| {
+            if let Some(preview) = preview.borrow_mut().as_mut() {
+                if preview.open {
+                    preview.duplex = duplex.clamp(0, 2);
                 }
             }
         });
@@ -792,6 +805,7 @@ fn connect_print_callbacks(
         let copies_num = (window.get_print_preview_copies() as u16).clamp(1, 99);
         let copies = Copies::new(copies_num).unwrap_or_default();
         let orientation = PrintOrientation::from_index(window.get_print_preview_orientation());
+        let duplex = PrintDuplex::from_index(window.get_print_preview_duplex());
 
         let job_id = match controller.borrow_mut().reserve_job() {
             Ok(job_id) => job_id,
@@ -809,23 +823,29 @@ fn connect_print_callbacks(
             }
         };
 
-        let sink =
-            match WindowsPrinterSink::direct(job_id, 300, &printer_name, orientation, copies_num) {
-                Ok(sink) => sink,
-                Err(e) => {
-                    controller.borrow_mut().release_reservation(job_id);
-                    show_banner(
-                        &window,
-                        format!(
-                            "{}: {:?}",
-                            barepdf_i18n::t(language, "print.dialog_failed"),
-                            e
-                        ),
-                        false,
-                    );
-                    return;
-                }
-            };
+        let sink = match WindowsPrinterSink::direct(
+            job_id,
+            300,
+            &printer_name,
+            orientation,
+            duplex,
+            copies_num,
+        ) {
+            Ok(sink) => sink,
+            Err(e) => {
+                controller.borrow_mut().release_reservation(job_id);
+                show_banner(
+                    &window,
+                    format!(
+                        "{}: {:?}",
+                        barepdf_i18n::t(language, "print.dialog_failed"),
+                        e
+                    ),
+                    false,
+                );
+                return;
+            }
+        };
         close_print_preview(&window);
         match controller
             .borrow_mut()
@@ -3528,6 +3548,13 @@ mod tests {
 
     fn page_count(value: u32) -> PageCount {
         PageCount::new(value).expect("test page count")
+    }
+
+    #[test]
+    fn print_preview_initializes_duplex_to_single_sided() {
+        let document = DocumentId::new(7);
+        let preview = PrintPreviewState::open(document, 11, page_count(4), PageIndex::zero());
+        assert_eq!(preview.duplex, 0);
     }
 
     #[test]

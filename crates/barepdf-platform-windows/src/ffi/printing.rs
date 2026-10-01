@@ -1,5 +1,5 @@
 use crate::printing::{PrintDialogOptions, PrintOrientation};
-use barepdf_platform::printing::{PrintError, PrintPage};
+use barepdf_platform::printing::{PrintDuplex, PrintError, PrintPage};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND};
@@ -17,6 +17,10 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 };
 
 const DM_COPIES: u32 = 0x0000_0100;
+const DM_DUPLEX: u32 = 0x0000_1000;
+const DMDUP_SIMPLEX: i16 = 1;
+const DMDUP_VERTICAL: i16 = 2;
+const DMDUP_HORIZONTAL: i16 = 3;
 const DM_IN_BUFFER: u32 = 8;
 const DM_OUT_BUFFER: u32 = 2;
 
@@ -34,6 +38,7 @@ struct DialogInitialValues {
     to_page: u16,
     page_numbers: bool,
     orientation: Option<PrintOrientation>,
+    duplex: Option<PrintDuplex>,
 }
 
 fn dialog_initial_values(page_count: u32, options: PrintDialogOptions) -> DialogInitialValues {
@@ -48,11 +53,16 @@ fn dialog_initial_values(page_count: u32, options: PrintDialogOptions) -> Dialog
         PrintOrientation::Auto => None,
         orientation => Some(orientation),
     };
+    let duplex = match options.duplex() {
+        PrintDuplex::OneSided => None,
+        duplex => Some(duplex),
+    };
     DialogInitialValues {
         from_page,
         to_page,
         page_numbers: from_page != 1 || to_page != maximum,
         orientation,
+        duplex,
     }
 }
 
@@ -102,7 +112,7 @@ pub(crate) fn show_print_dialog(
     dialog.nToPage = initial.to_page;
     dialog.nCopies = 1;
 
-    if let Some(orientation) = initial.orientation {
+    if initial.orientation.is_some() || initial.duplex.is_some() {
         let mut defaults = dialog;
         defaults.Flags = PD_RETURNDEFAULT;
         defaults.hwndOwner = std::ptr::null_mut();
@@ -111,7 +121,12 @@ pub(crate) fn show_print_dialog(
         if unsafe { PrintDlgW(&raw mut defaults) } != 0 {
             dialog.hDevMode = defaults.hDevMode;
             dialog.hDevNames = defaults.hDevNames;
-            apply_orientation(dialog.hDevMode, orientation);
+            if let Some(orientation) = initial.orientation {
+                apply_orientation(dialog.hDevMode, orientation);
+            }
+            if let Some(duplex) = initial.duplex {
+                apply_duplex(dialog.hDevMode, duplex);
+            }
         } else {
             // A missing default printer is not treated as cancellation here; the visible dialog may
             // still let the user choose a printer. A real common-dialog error still fails closed.
@@ -145,15 +160,19 @@ pub(crate) fn show_print_dialog(
             code: 0,
         });
     }
-    let result = DialogPrinter {
+    let result = dialog_printer_from_dialog(&dialog);
+    drop(allocations);
+    Ok(Some(result))
+}
+
+fn dialog_printer_from_dialog(dialog: &PRINTDLGW) -> DialogPrinter {
+    DialogPrinter {
         device: PrinterDevice(dialog.hDC),
         from_page: dialog.nFromPage,
         to_page: dialog.nToPage,
         copies: dialog.nCopies,
         page_numbers: dialog.Flags & PD_PAGENUMS != 0,
-    };
-    drop(allocations);
-    Ok(Some(result))
+    }
 }
 
 fn apply_orientation(dev_mode: HGLOBAL, orientation: PrintOrientation) {
@@ -178,9 +197,32 @@ fn apply_orientation(dev_mode: HGLOBAL, orientation: PrintOrientation) {
     }
 }
 
+fn apply_duplex(dev_mode: HGLOBAL, duplex: PrintDuplex) {
+    if dev_mode.is_null() {
+        return;
+    }
+    let duplex_val = match duplex {
+        PrintDuplex::OneSided => DMDUP_SIMPLEX,
+        PrintDuplex::TwoSidedLongEdge => DMDUP_VERTICAL,
+        PrintDuplex::TwoSidedShortEdge => DMDUP_HORIZONTAL,
+    };
+    // SAFETY: PrintDlgW returned a movable global-memory handle containing DEVMODEW. The pointer is
+    // used only while locked and no other thread can access this private dialog setup structure.
+    let pointer = unsafe { GlobalLock(dev_mode) }.cast::<DEVMODEW>();
+    if pointer.is_null() {
+        return;
+    }
+    unsafe {
+        (*pointer).dmFields |= DM_DUPLEX;
+        (*pointer).dmDuplex = duplex_val;
+        let _ = GlobalUnlock(dev_mode);
+    }
+}
+
 pub(crate) fn create_direct_printer_device(
     printer_name: &str,
     orientation: PrintOrientation,
+    duplex: PrintDuplex,
     copies: u16,
 ) -> Result<PrinterDevice, PrintError> {
     if printer_name.trim().is_empty() {
@@ -270,6 +312,16 @@ pub(crate) fn create_direct_printer_device(
                         }
                     }
                     PrintOrientation::Auto => {}
+                }
+                let duplex_val = match duplex {
+                    PrintDuplex::OneSided => DMDUP_SIMPLEX,
+                    PrintDuplex::TwoSidedLongEdge => DMDUP_VERTICAL,
+                    PrintDuplex::TwoSidedShortEdge => DMDUP_HORIZONTAL,
+                };
+                // SAFETY: Pointer is within allocated devmode buffer.
+                unsafe {
+                    (*devmode).dmFields |= DM_DUPLEX;
+                    (*devmode).dmDuplex = duplex_val;
                 }
 
                 // Merge and validate with driver (without displaying any dialog)
@@ -537,7 +589,7 @@ fn wide_null(value: &OsStr) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::{dialog_initial_values, fit_dimensions};
-    use crate::printing::{PrintDialogOptions, PrintOrientation};
+    use crate::printing::{PrintDialogOptions, PrintDuplex, PrintOrientation};
     use barepdf_core::{PageCount, PageIndex};
     use barepdf_platform::printing::PrintRange;
 
@@ -554,12 +606,17 @@ mod tests {
             .expect("test range");
         let values = dialog_initial_values(
             page_count.get(),
-            PrintDialogOptions::new(range, PrintOrientation::Landscape),
+            PrintDialogOptions::new(
+                range,
+                PrintOrientation::Landscape,
+                PrintDuplex::TwoSidedLongEdge,
+            ),
         );
 
         assert_eq!((values.from_page, values.to_page), (2, 7));
         assert!(values.page_numbers);
         assert_eq!(values.orientation, Some(PrintOrientation::Landscape));
+        assert_eq!(values.duplex, Some(PrintDuplex::TwoSidedLongEdge));
     }
 
     #[test]
@@ -567,11 +624,32 @@ mod tests {
         let page_count = PageCount::new(10).expect("test page count");
         let values = dialog_initial_values(
             page_count.get(),
-            PrintDialogOptions::new(PrintRange::all(page_count), PrintOrientation::Auto),
+            PrintDialogOptions::new(
+                PrintRange::all(page_count),
+                PrintOrientation::Auto,
+                PrintDuplex::OneSided,
+            ),
         );
 
         assert_eq!((values.from_page, values.to_page), (1, 10));
         assert!(!values.page_numbers);
         assert_eq!(values.orientation, None);
+        assert_eq!(values.duplex, None);
+    }
+
+    #[test]
+    fn dialog_initial_values_select_short_edge_duplex() {
+        let page_count = PageCount::new(5).expect("test page count");
+        let values = dialog_initial_values(
+            page_count.get(),
+            PrintDialogOptions::new(
+                PrintRange::all(page_count),
+                PrintOrientation::Portrait,
+                PrintDuplex::TwoSidedShortEdge,
+            ),
+        );
+
+        assert_eq!(values.orientation, Some(PrintOrientation::Portrait));
+        assert_eq!(values.duplex, Some(PrintDuplex::TwoSidedShortEdge));
     }
 }

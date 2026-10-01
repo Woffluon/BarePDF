@@ -1076,6 +1076,7 @@ slint::slint! {
         callback request-print-preview-page(int);
         callback request-print-preview-range(string);
         callback request-print-preview-orientation(int);
+        callback request-print-preview-duplex(int);
         callback request-confirm-print();
         callback request-close-print-preview();
         callback request-cancel-print();
@@ -2936,6 +2937,7 @@ slint::slint! {
                         next => { root.request-print-preview-page(root.print-preview-page + 1); }
                         range-changed(value) => { root.request-print-preview-range(value); }
                         orientation-changed(value) => { root.request-print-preview-orientation(value); }
+                        duplex-changed(value) => { root.request-print-preview-duplex(value); }
                         confirm => { root.request-confirm-print(); }
                         cancel => { root.request-close-print-preview(); }
                     }

@@ -11,17 +11,26 @@ pub struct WindowsPrinterDialog {
     target_dpi: u16,
 }
 
-pub use barepdf_platform::printing::PrintOrientation;
+pub use barepdf_platform::printing::{PrintDuplex, PrintOrientation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PrintDialogOptions {
     range: PrintRange,
     orientation: PrintOrientation,
+    duplex: PrintDuplex,
 }
 
 impl PrintDialogOptions {
-    pub(crate) const fn new(range: PrintRange, orientation: PrintOrientation) -> Self {
-        Self { range, orientation }
+    pub(crate) const fn new(
+        range: PrintRange,
+        orientation: PrintOrientation,
+        duplex: PrintDuplex,
+    ) -> Self {
+        Self {
+            range,
+            orientation,
+            duplex,
+        }
     }
 
     pub(crate) const fn range(self) -> PrintRange {
@@ -30,6 +39,10 @@ impl PrintDialogOptions {
 
     pub(crate) const fn orientation(self) -> PrintOrientation {
         self.orientation
+    }
+
+    pub(crate) const fn duplex(self) -> PrintDuplex {
+        self.duplex
     }
 }
 
@@ -72,8 +85,11 @@ impl WindowsPrinterDialog {
         range: PrintRange,
         orientation_index: i32,
     ) -> Result<Option<PrintSelection<WindowsPrinterSink>>, PrintError> {
-        let options =
-            PrintDialogOptions::new(range, PrintOrientation::from_index(orientation_index));
+        let options = PrintDialogOptions::new(
+            range,
+            PrintOrientation::from_index(orientation_index),
+            PrintDuplex::OneSided,
+        );
         let Some(selection) = ffi::show_print_dialog(self.owner, page_count.get(), options)? else {
             return Ok(None);
         };
@@ -144,9 +160,10 @@ impl WindowsPrinterSink {
         target_dpi: u16,
         printer_name: &str,
         orientation: PrintOrientation,
+        duplex: PrintDuplex,
         copies: u16,
     ) -> Result<Self, PrintError> {
-        let device = ffi::create_direct_printer_device(printer_name, orientation, copies)?;
+        let device = ffi::create_direct_printer_device(printer_name, orientation, duplex, copies)?;
         Ok(Self {
             job_id,
             target_dpi,
@@ -188,7 +205,7 @@ impl PrinterSink for WindowsPrinterSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{PrintDialogOptions, PrintOrientation, WindowsPrinterDialog};
+    use super::{PrintDialogOptions, PrintDuplex, PrintOrientation, WindowsPrinterDialog};
     use barepdf_core::{PageCount, PageIndex};
     use barepdf_platform::printing::{PrintError, PrintRange};
 
@@ -215,10 +232,15 @@ mod tests {
         let range = PrintRange::new(PageIndex::from_raw(1), PageIndex::from_raw(5), page_count)
             .expect("test range");
 
-        let options = PrintDialogOptions::new(range, PrintOrientation::Landscape);
+        let options = PrintDialogOptions::new(
+            range,
+            PrintOrientation::Landscape,
+            PrintDuplex::TwoSidedLongEdge,
+        );
 
         assert_eq!(options.range(), range);
         assert_eq!(options.orientation(), PrintOrientation::Landscape);
+        assert_eq!(options.duplex(), PrintDuplex::TwoSidedLongEdge);
     }
 
     #[test]
@@ -226,7 +248,14 @@ mod tests {
         use super::WindowsPrinterSink;
         use barepdf_platform::printing::PrintJobId;
         let job_id = PrintJobId::new(1).unwrap();
-        let result = WindowsPrinterSink::direct(job_id, 300, "", PrintOrientation::Portrait, 1);
+        let result = WindowsPrinterSink::direct(
+            job_id,
+            300,
+            "",
+            PrintOrientation::Portrait,
+            PrintDuplex::OneSided,
+            1,
+        );
         assert!(result.is_err());
     }
 
@@ -235,12 +264,24 @@ mod tests {
         use super::WindowsPrinterSink;
         use barepdf_platform::printing::PrintJobId;
         let job_id = PrintJobId::new(1).unwrap();
-        assert!(
-            WindowsPrinterSink::direct(job_id, 300, "", PrintOrientation::Portrait, 1).is_err()
-        );
-        assert!(
-            WindowsPrinterSink::direct(job_id, 300, "   ", PrintOrientation::Portrait, 1).is_err()
-        );
+        assert!(WindowsPrinterSink::direct(
+            job_id,
+            300,
+            "",
+            PrintOrientation::Portrait,
+            PrintDuplex::OneSided,
+            1
+        )
+        .is_err());
+        assert!(WindowsPrinterSink::direct(
+            job_id,
+            300,
+            "   ",
+            PrintOrientation::Portrait,
+            PrintDuplex::OneSided,
+            1
+        )
+        .is_err());
     }
 
     #[test]
@@ -253,6 +294,7 @@ mod tests {
             300,
             "__BarePDF_NonExistent_Printer_12345__",
             PrintOrientation::Portrait,
+            PrintDuplex::OneSided,
             1,
         );
         assert!(result.is_err());
@@ -271,6 +313,7 @@ mod tests {
                 300,
                 &printer.name,
                 PrintOrientation::Landscape,
+                PrintDuplex::TwoSidedLongEdge,
                 1,
             );
             assert!(sink.is_ok());
