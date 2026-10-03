@@ -1,0 +1,248 @@
+import { ThemeTokens } from "../tokens.slint";
+import { DocumentTab, TabItem } from "./tab_bar.slint";
+
+export component TitleBar inherits Rectangle {
+    in property <[TabItem]> tabs: [];
+    in property <bool> maximized: false;
+    in property <string> text-new-tab: "New tab";
+    in property <string> text-minimize: "Minimize";
+    in property <string> text-maximize: "Maximize";
+    in property <string> text-restore: "Restore";
+    in property <string> text-close: "Close";
+    callback activate-tab(int);
+    callback close-tab(int);
+    callback new-tab();
+    callback begin-drag();
+    callback toggle-maximize();
+    callback minimize();
+    callback close-window();
+
+    height: ThemeTokens.bar-height;
+    background: ThemeTokens.window;
+
+    caption-touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        double-clicked => {
+            root.toggle-maximize();
+        }
+        moved => {
+            if (self.pressed) {
+                root.begin-drag();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 0px;
+
+        // Left brand mark
+        Rectangle {
+            width: 36px;
+            height: parent.height;
+            background: #00000000;
+
+            Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 18px;
+                height: 18px;
+                source: @image-url("../../../../assets/logo.svg");
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+
+        // Scrollable tab strip + new-tab button
+        Flickable {
+            width: min(tabs-layout.preferred-width, max(0px, root.width - 256px));
+            height: parent.height;
+            viewport-width: tabs-layout.preferred-width;
+            viewport-height: parent.height;
+            interactive: false;
+
+            tabs-layout := HorizontalLayout {
+                height: parent.height;
+                padding-top: 4px;
+                padding-bottom: 0px;
+                spacing: 2px;
+
+                for tab in root.tabs : DocumentTab {
+                    y: (parent.height - self.height) / 2;
+                    item: tab;
+                    close-label: root.text-close;
+                    activate => { root.activate-tab(tab.id); }
+                    close => { root.close-tab(tab.id); }
+                }
+            }
+        }
+
+        // New-tab (+) button
+        Rectangle {
+            width: 34px;
+            height: parent.height;
+            background: #00000000;
+
+            new-tab-btn := Rectangle {
+                x: 3px;
+                y: (parent.height - self.height) / 2;
+                width: 28px;
+                height: 28px;
+                border-radius: ThemeTokens.control-radius;
+                background: new-tab-touch.pressed ? ThemeTokens.control-pressed
+                    : (new-tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                accessible-role: button;
+                accessible-label: root.text-new-tab;
+
+                animate background { duration: ThemeTokens.motion-fast; }
+
+                new-tab-touch := TouchArea {
+                    clicked => { root.new-tab(); }
+                }
+
+                // Crisp + icon
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 10px;
+                    height: 1.25px;
+                    background: ThemeTokens.text;
+                }
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 1.25px;
+                    height: 10px;
+                    background: ThemeTokens.text;
+                }
+            }
+        }
+
+        // Middle/Right drag spacer
+        Rectangle {
+            horizontal-stretch: 1;
+            height: parent.height;
+            background: #00000000;
+        }
+
+        // Windows 11 Caption Buttons (46px x 40px each, flush right)
+        // 1. Minimize
+        min-btn := Rectangle {
+            width: 46px;
+            height: 40px;
+            background: min-touch.pressed ? ThemeTokens.control-pressed
+                : (min-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+            accessible-role: button;
+            accessible-label: root.text-minimize;
+
+            animate background { duration: ThemeTokens.motion-fast; }
+
+            min-touch := TouchArea {
+                clicked => { root.minimize(); }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 10px;
+                height: 1px;
+                background: ThemeTokens.text;
+            }
+        }
+
+        // 2. Maximize / Restore
+        max-btn := Rectangle {
+            width: 46px;
+            height: 40px;
+            background: max-touch.pressed ? ThemeTokens.control-pressed
+                : (max-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+            accessible-role: button;
+            accessible-label: root.maximized ? root.text-restore : root.text-maximize;
+
+            animate background { duration: ThemeTokens.motion-fast; }
+
+            max-touch := TouchArea {
+                clicked => { root.toggle-maximize(); }
+            }
+
+            if !root.maximized : Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 10px;
+                height: 10px;
+                border-width: 1px;
+                border-color: ThemeTokens.text;
+                background: #00000000;
+            }
+
+            if root.maximized : Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 10px;
+                height: 10px;
+                background: #00000000;
+
+                // Back window frame (offset top-right)
+                Rectangle {
+                    x: 2px;
+                    y: 0px;
+                    width: 8px;
+                    height: 8px;
+                    border-width: 1px;
+                    border-color: ThemeTokens.text;
+                    background: #00000000;
+                }
+
+                // Front window frame (offset bottom-left, occluding interior of back frame)
+                Rectangle {
+                    x: 0px;
+                    y: 2px;
+                    width: 8px;
+                    height: 8px;
+                    border-width: 1px;
+                    border-color: ThemeTokens.text;
+                    background: max-touch.pressed ? ThemeTokens.control-pressed
+                        : (max-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.window);
+                }
+            }
+        }
+
+        // 3. Close
+        close-btn := Rectangle {
+            width: 46px;
+            height: 40px;
+            background: close-touch.pressed ? #b22518
+                : (close-touch.has-hover ? ThemeTokens.caption-close-hover : #00000000);
+            accessible-role: button;
+            accessible-label: root.text-close;
+
+            animate background { duration: ThemeTokens.motion-fast; }
+
+            close-touch := TouchArea {
+                clicked => { root.close-window(); }
+            }
+
+            Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 14px;
+                height: 14px;
+                source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                colorize: (close-touch.has-hover || close-touch.pressed) ? #ffffff : ThemeTokens.text;
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+    }
+
+    // Bottom 1px divider line
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: ThemeTokens.divider;
+    }
+}

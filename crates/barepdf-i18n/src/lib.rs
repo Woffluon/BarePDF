@@ -82,18 +82,18 @@ const ENGLISH_GENERAL: &[(&str, &str)] = &[
     ("settings.theme.light", "Light"),
     ("settings.theme.dark", "Dark"),
     ("settings.appearance", "Appearance"),
-    ("settings.effects", "Effects"),
-    ("settings.efficient", "Efficient"),
-    ("settings.enhanced", "Enhanced"),
-    (
-        "settings.effects.help",
-        "Enhanced effects use more system resources.",
-    ),
     ("settings.developer", "Developer"),
     ("settings.project_website", "Website"),
     ("settings.manifesto", "Manifesto"),
     ("settings.manifesto.button", "Read the Manifesto ↗"),
     ("settings.about", "About"),
+    ("window.minimize", "Minimize"),
+    ("window.maximize", "Maximize"),
+    ("window.restore", "Restore"),
+    ("window.close", "Close"),
+    ("toolbar.fit", "Fit"),
+    ("toolbar.search", "Find (Ctrl+F)"),
+    ("toolbar.command_palette", "Command Palette (Ctrl+K)"),
     ("language.english", "English"),
     ("language.turkish", "Türkçe"),
     ("settings.view_mode", "Default View Mode"),
@@ -206,18 +206,18 @@ const TURKISH_GENERAL: &[(&str, &str)] = &[
     ("settings.theme.light", "Açık"),
     ("settings.theme.dark", "Koyu"),
     ("settings.appearance", "Görünüm"),
-    ("settings.effects", "Efektler"),
-    ("settings.efficient", "Verimli"),
-    ("settings.enhanced", "Gelişmiş"),
-    (
-        "settings.effects.help",
-        "Gelişmiş efektler daha fazla sistem kaynağı kullanır.",
-    ),
     ("settings.developer", "Geliştirici"),
     ("settings.project_website", "Web Sitesi"),
     ("settings.manifesto", "Bildiri"),
     ("settings.manifesto.button", "Manifestoyu oku ↗"),
     ("settings.about", "Hakkında"),
+    ("window.minimize", "Simge durumuna küçült"),
+    ("window.maximize", "Ekranı kapla"),
+    ("window.restore", "Aşağı geri getir"),
+    ("window.close", "Kapat"),
+    ("toolbar.fit", "Sığdır"),
+    ("toolbar.search", "Bul (Ctrl+F)"),
+    ("toolbar.command_palette", "Komut Paleti (Ctrl+K)"),
     ("language.english", "İngilizce"),
     ("language.turkish", "Türkçe"),
     ("settings.view_mode", "Varsayılan Görünüm Mode"),
@@ -931,6 +931,38 @@ mod tests {
         for (key, en, tr) in spot_checks {
             assert_eq!(t(ResolvedLanguage::English, key), en);
             assert_eq!(t(ResolvedLanguage::Turkish, key), tr);
+        }
+    }
+
+    #[test]
+    fn window_and_toolbar_strings_are_localized() {
+        let pairs = [
+            ("window.minimize", "Minimize", "Simge durumuna küçült"),
+            ("window.maximize", "Maximize", "Ekranı kapla"),
+            ("window.restore", "Restore", "Aşağı geri getir"),
+            ("window.close", "Close", "Kapat"),
+            ("toolbar.fit", "Fit", "Sığdır"),
+            ("toolbar.search", "Find (Ctrl+F)", "Bul (Ctrl+F)"),
+            (
+                "toolbar.command_palette",
+                "Command Palette (Ctrl+K)",
+                "Komut Paleti (Ctrl+K)",
+            ),
+        ];
+
+        for (key, en, tr) in pairs {
+            assert_eq!(t(ResolvedLanguage::English, key), en);
+            assert_eq!(t(ResolvedLanguage::Turkish, key), tr);
+        }
+
+        for removed_key in [
+            "settings.effects",
+            "settings.efficient",
+            "settings.enhanced",
+            "settings.effects.help",
+        ] {
+            assert_eq!(t(ResolvedLanguage::English, removed_key), "");
+            assert_eq!(t(ResolvedLanguage::Turkish, removed_key), "");
         }
     }
 }

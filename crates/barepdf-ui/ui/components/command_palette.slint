@@ -10,6 +10,10 @@ export component CommandPalette inherits Rectangle {
     callback execute-command(string);
     callback command-selected(int);
 
+    public function focus-input() {
+        input.focus();
+    }
+
     visible: root.is-open;
     z: 1000;
 
@@ -17,7 +21,7 @@ export component CommandPalette inherits Rectangle {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #00000066;
+        background: ThemeTokens.dark ? #00000088 : #00000055;
 
         TouchArea {
             clicked => { root.close(); }
@@ -30,12 +34,15 @@ export component CommandPalette inherits Rectangle {
         height: Math.min(parent.height - 64px, 360px);
         x: (parent.width - self.width) / 2;
         y: Math.max(48px, (parent.height - self.height) / 3);
-        border-radius: ThemeTokens.flyout-radius;
-        background: ThemeTokens.surface-modal;
+        border-radius: ThemeTokens.overlay-radius;
+        background: ThemeTokens.layer-elevated;
         border-width: 1px;
-        border-color: ThemeTokens.border;
-        drop-shadow-blur: 24px;
-        drop-shadow-color: #00000055;
+        border-color: ThemeTokens.stroke;
+        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+        drop-shadow-color: ThemeTokens.overlay-shadow;
+
+        TouchArea {}
 
         VerticalLayout {
             padding: ThemeTokens.space-3;
@@ -62,14 +69,16 @@ export component CommandPalette inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: ThemeTokens.border;
+                background: ThemeTokens.divider;
             }
 
             // Command suggestions list
             for title[idx] in root.command-titles : Rectangle {
-                height: 36px;
+                height: 32px;
                 border-radius: ThemeTokens.control-radius;
-                background: item-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                background: item-touch.pressed ? ThemeTokens.control-pressed
+                    : (item-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                animate background { duration: ThemeTokens.motion-fast; }
 
                 HorizontalLayout {
                     padding-left: ThemeTokens.space-2;
@@ -78,8 +87,8 @@ export component CommandPalette inherits Rectangle {
 
                     Text {
                         text: title;
-                        color: item-touch.has-hover ? ThemeTokens.accent : ThemeTokens.text;
-                        font-size: 13px;
+                        color: ThemeTokens.text;
+                        font-size: 12px;
                         vertical-alignment: center;
                     }
 

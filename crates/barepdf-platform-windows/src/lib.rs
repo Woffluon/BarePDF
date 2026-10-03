@@ -10,6 +10,7 @@ mod image_encoder;
 mod printers;
 mod printing;
 mod shell;
+mod window_chrome;
 
 pub use clipboard::WindowsClipboard;
 pub use dialogs::{ask_yes_no, show_fatal_error, WindowsFileDialogs};
@@ -19,6 +20,10 @@ pub use image_encoder::{decode_image_rgba, WindowsImageEncoder};
 pub use printers::{enumerate_installed_printers, InstalledPrinter};
 pub use printing::{PrintOrientation, WindowsPrinterDialog, WindowsPrinterSink};
 pub use shell::open_url;
+pub use window_chrome::{
+    apply_frameless_style, begin_native_drag, from_resize_edge, hit_test_code, is_window_maximized,
+    send_window_command, WindowCommand, WindowHit,
+};
 
 #[must_use]
 pub fn reduce_visual_effects() -> bool {

@@ -47,7 +47,6 @@ pub struct UserPreferences {
     pub last_window_width: u32,
     pub last_window_height: u32,
     pub sidebar_visible: bool,
-    pub enhanced_ui: bool,
     pub update_checks_enabled: Option<bool>,
     pub last_update_check_unix: Option<u64>,
     pub active_tab_index: usize,
@@ -73,7 +72,6 @@ impl Default for UserPreferences {
             last_window_width: 1100,
             last_window_height: 800,
             sidebar_visible: true,
-            enhanced_ui: false,
             update_checks_enabled: None,
             last_update_check_unix: None,
             active_tab_index: 0,
@@ -188,11 +186,17 @@ mod tests {
         let preferences = UserPreferences::default();
         let legacy_preferences: UserPreferences = serde_json::from_str("{}").unwrap();
 
-        assert!(!preferences.enhanced_ui);
         assert_eq!(preferences.paper_tint, 0);
         assert!(preferences.open_tabs.is_empty());
         assert!(!preferences.welcome_manifesto_seen);
         assert!(!legacy_preferences.welcome_manifesto_seen);
+    }
+
+    #[test]
+    fn legacy_enhanced_ui_key_is_ignored() {
+        let json = r#"{"enhanced_ui": true, "sidebar_visible": false}"#;
+        let preferences: UserPreferences = serde_json::from_str(json).expect("legacy prefs load");
+        assert!(!preferences.sidebar_visible);
     }
 
     #[test]

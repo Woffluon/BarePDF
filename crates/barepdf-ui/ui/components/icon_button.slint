@@ -11,18 +11,18 @@ export component IconButton inherits Rectangle {
     callback clicked();
 
     height: ThemeTokens.control-height;
-    min-width: show-label ? 42px : ThemeTokens.control-height;
+    min-width: root.show-label ? 42px : ThemeTokens.control-height;
     border-radius: ThemeTokens.control-radius;
-    background: !enabled ? #00000000
-        : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
-        : active ? ThemeTokens.selection
+    background: !root.enabled ? #00000000
+        : root.primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent))
+        : root.active ? (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.selection))
         : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
-    border-width: enabled && (primary || active || touch.has-hover) ? 1px : 0px;
-    border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
+    border-width: root.enabled && (root.primary || root.active) ? 1px : 0px;
+    border-color: root.primary ? #d87912 : (root.active ? ThemeTokens.stroke : #00000000);
     accessible-role: button;
-    accessible-label: tooltip;
+    accessible-label: root.tooltip;
     accessible-enabled: root.enabled;
-    animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
+    animate background { duration: ThemeTokens.motion-fast; }
 
     touch := TouchArea {
         enabled: root.enabled;
@@ -63,12 +63,22 @@ export component IconButton inherits Rectangle {
         if root.show-label : Text {
             height: parent.height;
             text: root.label;
-            color: root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
+            color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.45)
+                : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
             overflow: elide;
         }
+    }
+
+    if root.active && !root.primary : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - 2px;
+        width: 16px;
+        height: 2px;
+        border-radius: 1px;
+        background: ThemeTokens.accent;
     }
 
     if focus-scope.has-focus && root.enabled : Rectangle {

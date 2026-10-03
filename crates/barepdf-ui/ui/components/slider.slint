@@ -15,7 +15,7 @@ export component ZoomSlider inherits Rectangle {
         border-radius: 2px;
         background: ThemeTokens.control;
         border-width: 1px;
-        border-color: ThemeTokens.border;
+        border-color: ThemeTokens.stroke;
 
         fill := Rectangle {
             x: 0px;
@@ -34,9 +34,8 @@ export component ZoomSlider inherits Rectangle {
         border-radius: 7px;
         background: touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent;
         border-width: 1px;
-        border-color: #ffffff;
-        drop-shadow-blur: 4px;
-        drop-shadow-color: #00000033;
+        border-color: ThemeTokens.stroke;
+        animate background { duration: ThemeTokens.motion-fast; }
     }
 
     touch := TouchArea {

@@ -1,0 +1,45 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component Flyout inherits Rectangle {
+    in-out property <bool> open: false;
+    in property <length> anchor-x: 0px;
+    in property <length> anchor-y: 0px;
+    in property <length> flyout-width: 220px;
+    in property <length> flyout-height: 200px;
+    callback dismissed();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+    z: 850;
+    background: #00000000;
+
+    TouchArea {
+        clicked => {
+            root.open = false;
+            root.dismissed();
+        }
+    }
+
+    Rectangle {
+        x: root.anchor-x;
+        y: root.anchor-y;
+        width: root.flyout-width;
+        height: root.flyout-height;
+        background: ThemeTokens.layer-elevated;
+        border-radius: ThemeTokens.overlay-radius;
+        border-width: 1px;
+        border-color: ThemeTokens.stroke;
+        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+        drop-shadow-color: ThemeTokens.overlay-shadow;
+
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
+            @children
+        }
+    }
+}

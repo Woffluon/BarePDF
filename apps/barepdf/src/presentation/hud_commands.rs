@@ -3,6 +3,7 @@ use crate::presentation::state::AppState;
 use crate::presentation::ui::{invalidate_layout_and_render, zoom_mode_index};
 use barepdf_render::RenderScheduler;
 use barepdf_ui::AppWindow;
+use slint::ComponentHandle;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HudCommandItem {
@@ -14,7 +15,7 @@ pub struct HudCommandItem {
 pub const ALL_HUD_COMMANDS: &[HudCommandItem] = &[
     HudCommandItem {
         id: "zen",
-        title: "Toggle Zen Reading Mode (F11)",
+        title: "Toggle Full Screen (F11)",
         subtitle: "Focus view without distractions",
     },
     HudCommandItem {
@@ -134,10 +135,12 @@ pub fn handle_hud_query(
     let lower = trimmed.to_lowercase();
     window.set_command_palette_open(false);
 
-    if lower.contains("zen") || lower == "f11" {
-        let is_zen = !window.get_zen_mode();
-        window.set_zen_mode(is_zen);
-        window.set_sidebar_visible(!is_zen && app.preferences.sidebar_visible);
+    if lower.contains("zen") || lower.contains("fullscreen") || lower == "f11" {
+        let new_mode = app.request_toggle_fullscreen();
+        let enabled = new_mode == barepdf_core::WindowMode::FullScreen;
+        window.set_window_mode(if enabled { 1 } else { 0 });
+        window.window().set_fullscreen(enabled);
+        super::window_chrome::sync_window_maximized(window);
     } else if lower.contains("invert") || lower.contains("ters") {
         app.preferences.invert_colors = !app.preferences.invert_colors;
         window.set_invert_page_colors(app.preferences.invert_colors);

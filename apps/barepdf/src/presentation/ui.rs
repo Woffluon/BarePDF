@@ -250,7 +250,6 @@ pub(crate) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize)
 
 fn initialize_window(window: &AppWindow, state: &AppState) {
     window.set_paper_tint(state.preferences.paper_tint as i32);
-    window.set_zen_mode(false); // Default starting state, or read from somewhere? Zen mode wasn't persisted.
     window.set_sidebar_visible(state.preferences.sidebar_visible);
     window.set_invert_page_colors(state.preferences.invert_colors);
 
@@ -280,7 +279,6 @@ fn initialize_window(window: &AppWindow, state: &AppState) {
     )));
     window.set_current_version(SharedString::from(CURRENT_VERSION));
     window.set_update_checks_enabled(state.preferences.update_checks_enabled == Some(true));
-    window.set_enhanced_ui(state.preferences.enhanced_ui);
     window.set_system_reduce_effects(reduce_visual_effects());
     window.set_zoom_mode(zoom_mode_index(state.zoom_mode));
     window.set_zoom_str(SharedString::from(zoom_percentage(state.zoom_factor)));
@@ -326,6 +324,7 @@ pub(crate) fn process_view_changes(
         app.viewport_height = height;
         app.scale_factor = scale;
         app.resize_changed_at = Some(now);
+        super::window_chrome::sync_window_maximized(window);
     }
 
     if app
@@ -552,7 +551,6 @@ pub(crate) fn handle_render_event(
                     if !app.status.first_page_ready {
                         app.status.first_page_ready = true;
                         record_first_page_profile(&mut app);
-                        window.set_visual_effects_ready(true);
                         start_deferred_document_work(&mut app, scheduler, window);
                         render_visible_pages(&mut app, scheduler, window);
                     }
@@ -660,7 +658,6 @@ pub(crate) fn handle_render_event(
             error,
             ..
         } => {
-            window.set_visual_effects_ready(true);
             let mut app = state.borrow_mut();
             if DocumentController::is_pending(&app.application, document_id) {
                 match error {
@@ -771,8 +768,6 @@ pub(crate) fn begin_open(
     ) {
         DocumentController::cancel_open(&mut app.application, document_id);
         show_banner(window, "PDF work queue is unavailable. Try again.", true);
-    } else {
-        window.set_visual_effects_ready(false);
     }
     refresh_tab_model(&app, window);
 }
@@ -1716,10 +1711,12 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_settings_light, "settings.theme.light");
     set_text!(set_text_settings_dark, "settings.theme.dark");
     set_text!(set_text_settings_appearance, "settings.appearance");
-    set_text!(set_text_settings_effects, "settings.effects");
-    set_text!(set_text_settings_efficient, "settings.efficient");
-    set_text!(set_text_settings_enhanced, "settings.enhanced");
-    set_text!(set_text_settings_effects_help, "settings.effects.help");
+    set_text!(set_text_minimize, "window.minimize");
+    set_text!(set_text_maximize, "window.maximize");
+    set_text!(set_text_restore, "window.restore");
+    set_text!(set_text_fit, "toolbar.fit");
+    set_text!(set_text_search, "toolbar.search");
+    set_text!(set_text_command_palette, "toolbar.command_palette");
     set_text!(set_text_settings_developer, "settings.developer");
     set_text!(set_text_settings_website, "settings.project_website");
     set_text!(set_text_settings_manifesto, "settings.manifesto");

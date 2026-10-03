@@ -5,21 +5,28 @@ export component TextButton inherits Rectangle {
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <bool> primary: false;
+    in property <bool> compact: false;
     callback clicked();
-    height: ThemeTokens.control-height;
-    min-width: 52px;
+
+    height: root.compact ? 28px : ThemeTokens.control-height;
+    min-width: root.compact ? 44px : 52px;
     border-radius: ThemeTokens.control-radius;
-    background: !enabled ? #00000000
-        : primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? #ffa13a : ThemeTokens.accent))
-        : active ? ThemeTokens.selection
+    background: !root.enabled ? #00000000
+        : root.primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent))
+        : root.active ? ThemeTokens.selection
         : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control));
-    border-width: enabled ? 1px : 0px;
-    border-color: primary ? #d87912 : (active ? ThemeTokens.accent : ThemeTokens.border);
+    border-width: root.enabled ? 1px : 0px;
+    border-color: root.primary ? #d87912 : (root.active ? ThemeTokens.accent : ThemeTokens.stroke);
     accessible-role: button;
-    accessible-label: text;
+    accessible-label: root.text;
     accessible-enabled: root.enabled;
-    animate background { duration: ThemeTokens.motion-active ? 90ms : 0ms; }
-    touch := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.clicked(); } }
+    animate background { duration: ThemeTokens.motion-fast; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus-scope.focus(); root.clicked(); }
+    }
+
     focus-scope := FocusScope {
         x: 0px;
         width: 0px;
@@ -29,21 +36,23 @@ export component TextButton inherits Rectangle {
             return reject;
         }
     }
+
     HorizontalLayout {
         height: root.height;
-        padding-left: 6px;
-        padding-right: 6px;
+        padding-left: 8px;
+        padding-right: 8px;
         Text {
             text: root.text;
             color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.55)
                 : root.primary ? ThemeTokens.accent-content : ThemeTokens.text;
             font-size: 12px;
-            font-weight: active ? 600 : 500;
+            font-weight: (root.active || root.primary) ? 600 : 500;
             horizontal-alignment: center;
             vertical-alignment: center;
             overflow: elide;
         }
     }
+
     if focus-scope.has-focus && root.enabled : Rectangle {
         border-width: ThemeTokens.focus-width;
         border-color: ThemeTokens.focus;

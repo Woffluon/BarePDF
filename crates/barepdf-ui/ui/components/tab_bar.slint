@@ -14,28 +14,29 @@ export component DocumentTab inherits Rectangle {
     callback close();
 
     width: 164px;
-    height: 28px;
+    height: 34px;
     border-radius: 6px;
-    background: item.is_active ? ThemeTokens.panel-elevated
-        : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-    border-width: item.is_active ? 1px : (tab-touch.has-hover ? 1px : 0px);
-    border-color: item.is_active ? ThemeTokens.border : (tab-touch.has-hover ? ThemeTokens.border.with-alpha(0.4) : #00000000);
-    drop-shadow-blur: item.is_active ? (ThemeTokens.effects-active ? 6px : 3px) : 0px;
-    drop-shadow-offset-y: item.is_active ? 1px : 0px;
-    drop-shadow-color: ThemeTokens.warm-shadow;
+    background: root.item.is_active ? ThemeTokens.layer
+        : (tab-touch.pressed ? ThemeTokens.control-pressed : (tab-touch.has-hover ? ThemeTokens.control-hover : #00000000));
+    border-width: root.item.is_active ? 1px : 0px;
+    border-color: root.item.is_active ? ThemeTokens.stroke : #00000000;
     accessible-role: tab;
-    accessible-label: item.title;
+    accessible-label: root.item.title;
+    animate background { duration: ThemeTokens.motion-fast; }
 
-    tab-touch := TouchArea { clicked => { tab-focus.focus(); root.activate(); } }
-    animate background { duration: ThemeTokens.motion-active ? 80ms : 0ms; }
+    tab-touch := TouchArea {
+        clicked => { tab-focus.focus(); root.activate(); }
+    }
+
     if root.item.is_active : Rectangle {
         x: 10px;
-        y: parent.height - 2.5px;
+        y: parent.height - 2px;
         width: parent.width - 20px;
-        height: 2.5px;
-        border-radius: 1.5px;
+        height: 2px;
+        border-radius: 1px;
         background: ThemeTokens.accent;
     }
+
     tab-focus := FocusScope {
         x: 0px;
         width: 0px;
@@ -46,46 +47,54 @@ export component DocumentTab inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 9px;
-        padding-right: 5px;
+        padding-left: 10px;
+        padding-right: 6px;
         spacing: 6px;
 
         if root.item.is_loading : Rectangle {
-            width: 7px;
-            height: 7px;
-            border-radius: 4px;
+            width: 6px;
+            height: 6px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 3px;
             background: ThemeTokens.accent;
         }
         Text {
             text: root.item.title;
             color: root.item.is_active ? ThemeTokens.text : ThemeTokens.text-muted;
             font-size: 12px;
-            font-weight: root.item.is_active ? 650 : 500;
+            font-weight: root.item.is_active ? 600 : 500;
             vertical-alignment: center;
             overflow: elide;
             horizontal-stretch: 1;
         }
         close-button := Rectangle {
-            width: 20px;
-            height: 20px;
-            border-radius: 4px;
-            background: close-touch.has-hover ? (ThemeTokens.dark ? #ffffff1c : #00000014) : #00000000;
+            width: 22px;
+            height: 22px;
+            y: (parent.height - self.height) / 2;
+            border-radius: ThemeTokens.control-radius;
+            background: close-touch.pressed ? ThemeTokens.control-pressed
+                : (close-touch.has-hover ? ThemeTokens.control-hover : #00000000);
             accessible-role: button;
             accessible-label: root.close-label + " " + root.item.title;
-            close-touch := TouchArea { clicked => { root.close(); } }
-            animate background { duration: ThemeTokens.motion-active ? 60ms : 0ms; }
+            animate background { duration: ThemeTokens.motion-fast; }
+
+            close-touch := TouchArea {
+                clicked => { root.close(); }
+            }
+
             Image {
-                x: 3px;
-                y: 3px;
+                x: 4px;
+                y: 4px;
                 width: 14px;
                 height: 14px;
                 source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
-                colorize: close-touch.has-hover ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.7);
+                colorize: close-touch.has-hover ? ThemeTokens.text : ThemeTokens.text-muted;
                 image-fit: contain;
                 accessible-role: none;
             }
         }
     }
+
     if tab-focus.has-focus : Rectangle {
         border-width: ThemeTokens.focus-width;
         border-color: ThemeTokens.focus;

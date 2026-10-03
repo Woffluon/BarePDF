@@ -9,9 +9,9 @@ export component SearchBar inherits Rectangle {
     in property <bool> case_sensitive: false;
     in property <bool> whole_word: false;
     in property <bool> has_matches: false;
-    
+
     in property <string> placeholder: "Find in document...";
-    
+
     callback query_changed(string);
     callback next_clicked();
     callback prev_clicked();
@@ -19,19 +19,23 @@ export component SearchBar inherits Rectangle {
     callback toggle_case();
     callback toggle_whole_word();
 
+    public function focus-input() {
+        input.focus();
+    }
+
     height: 44px;
     width: 480px;
-    border-radius: ThemeTokens.flyout-radius;
-    background: ThemeTokens.surface-flyout;
+    border-radius: ThemeTokens.overlay-radius;
+    background: ThemeTokens.layer-elevated;
     border-width: 1px;
-    border-color: ThemeTokens.border;
-    drop-shadow-blur: ThemeTokens.effects-active ? 16px : 8px;
-    drop-shadow-offset-y: ThemeTokens.effects-active ? 4px : 2px;
-    drop-shadow-color: ThemeTokens.warm-shadow;
+    border-color: ThemeTokens.stroke;
+    drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+    drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+    drop-shadow-color: ThemeTokens.overlay-shadow;
 
     HorizontalLayout {
-        padding: ThemeTokens.space-2;
-        spacing: ThemeTokens.space-2;
+        padding: 6px;
+        spacing: 6px;
         alignment: space-between;
 
         input := LineEdit {
@@ -53,31 +57,35 @@ export component SearchBar inherits Rectangle {
             spacing: 4px;
             TextButton {
                 text: "↑";
+                compact: true;
                 clicked => { root.prev_clicked(); }
             }
             TextButton {
                 text: "↓";
+                compact: true;
                 clicked => { root.next_clicked(); }
             }
         }
 
-        Rectangle { width: 1px; background: ThemeTokens.border; }
+        Rectangle { width: 1px; background: ThemeTokens.divider; }
 
         HorizontalLayout {
             spacing: 4px;
             TextButton {
                 text: "Aa";
+                compact: true;
                 active: root.case_sensitive;
                 clicked => { root.toggle_case(); }
             }
             TextButton {
                 text: "W";
+                compact: true;
                 active: root.whole_word;
                 clicked => { root.toggle_whole_word(); }
             }
         }
 
-        Rectangle { width: 1px; background: ThemeTokens.border; }
+        Rectangle { width: 1px; background: ThemeTokens.divider; }
 
         IconButton {
             icon: @image-url("../../../../assets/icons/dismiss_20_regular.svg");

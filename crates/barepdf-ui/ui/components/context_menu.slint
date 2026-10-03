@@ -1,34 +1,6 @@
 import { ThemeTokens } from "../tokens.slint";
 import { TextButton } from "./button.slint";
-
-component MenuRow inherits Rectangle {
-    in property <string> text;
-    in property <string> shortcut: "";
-    callback clicked <=> touch.clicked;
-
-    height: 30px;
-    border-radius: 6px;
-    background: touch.has-hover ? ThemeTokens.control-hover : transparent;
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        alignment: space-between;
-        Text {
-            text: root.text;
-            color: ThemeTokens.text;
-            font-size: 12px;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        if root.shortcut != "" : Text {
-            text: root.shortcut;
-            color: ThemeTokens.text-muted;
-            font-size: 11px;
-            vertical-alignment: center;
-        }
-    }
-    touch := TouchArea {}
-}
+import { MenuItem } from "./menu_item.slint";
 
 export component ContextMenu inherits Rectangle {
     in-out property <bool> is-open: false;
@@ -72,63 +44,65 @@ export component ContextMenu inherits Rectangle {
         y: Math.clamp(root.menu-y, 8px, root.height - self.height - 8px);
         width: 210px;
         height: ctx-layout.preferred-height;
-        border-radius: 10px;
-        background: ThemeTokens.surface-flyout;
+        border-radius: ThemeTokens.overlay-radius;
+        background: ThemeTokens.layer-elevated;
         border-width: 1px;
-        border-color: ThemeTokens.border;
-        drop-shadow-blur: ThemeTokens.effects-active ? 18px : 12px;
-        drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
-        drop-shadow-color: ThemeTokens.warm-shadow;
+        border-color: ThemeTokens.stroke;
+        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+        drop-shadow-color: ThemeTokens.overlay-shadow;
         TouchArea {}
         ctx-layout := VerticalLayout {
             padding: 6px;
             spacing: 2px;
 
-            if root.has-selection : MenuRow {
+            if root.has-selection : MenuItem {
                 text: root.text-copy;
                 shortcut: "Ctrl+C";
-                clicked => { root.is-open = false; root.request-copy(); }
+                activated => { root.is-open = false; root.request-copy(); }
             }
-            if root.has-selection : MenuRow {
+            if root.has-selection : MenuItem {
                 text: root.text-context-find;
                 shortcut: "Ctrl+F";
-                clicked => { root.is-open = false; root.context-find-selection(); }
+                activated => { root.is-open = false; root.context-find-selection(); }
             }
-            if root.has-selection : MenuRow {
+            if root.has-selection : MenuItem {
                 text: root.text-context-highlight;
                 shortcut: "Ctrl+H";
-                clicked => { root.is-open = false; root.context-highlight-selection(); }
+                activated => { root.is-open = false; root.context-highlight-selection(); }
             }
             if root.has-selection : Rectangle {
-                height: 1px; background: ThemeTokens.border;
+                height: 1px; background: ThemeTokens.divider;
             }
 
-            MenuRow {
+            MenuItem {
                 text: root.text-select-all;
                 shortcut: "Ctrl+A";
-                clicked => { root.is-open = false; root.request-select-all(); }
+                activated => { root.is-open = false; root.request-select-all(); }
             }
-            MenuRow {
+            MenuItem {
                 text: root.text-context-rotate-cw;
                 shortcut: "Ctrl+R";
-                clicked => { root.is-open = false; root.rotate-view-cw(); }
+                activated => { root.is-open = false; root.rotate-view-cw(); }
             }
-            MenuRow {
+            MenuItem {
                 text: root.text-context-fit-page;
                 shortcut: "Ctrl+2";
-                clicked => { root.is-open = false; root.request-fit-page(); }
+                activated => { root.is-open = false; root.request-fit-page(); }
             }
-            Rectangle { height: 1px; background: ThemeTokens.border; }
+            Rectangle { height: 1px; background: ThemeTokens.divider; }
             HorizontalLayout {
                 spacing: 4px;
                 TextButton {
                     horizontal-stretch: 1;
-                    text: "← " + root.text-prev-page;
+                    compact: true;
+                    text: root.text-prev-page;
                     clicked => { root.is-open = false; root.request-prev-page(); }
                 }
                 TextButton {
                     horizontal-stretch: 1;
-                    text: root.text-next-page + " →";
+                    compact: true;
+                    text: root.text-next-page;
                     clicked => { root.is-open = false; root.request-next-page(); }
                 }
             }

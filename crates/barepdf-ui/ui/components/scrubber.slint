@@ -14,12 +14,13 @@ export component Scrubber inherits Rectangle {
         y: root.y-position - self.height / 2;
         width: 90px;
         height: 32px;
-        border-radius: ThemeTokens.control-radius;
-        background: ThemeTokens.surface-modal;
+        border-radius: ThemeTokens.overlay-radius;
+        background: ThemeTokens.layer-elevated;
         border-width: 1px;
-        border-color: ThemeTokens.border;
-        drop-shadow-blur: 8px;
-        drop-shadow-color: #00000044;
+        border-color: ThemeTokens.stroke;
+        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+        drop-shadow-color: ThemeTokens.overlay-shadow;
 
         HorizontalLayout {
             alignment: center;
@@ -27,9 +28,9 @@ export component Scrubber inherits Rectangle {
 
             Text {
                 text: root.preview-label;
-                color: ThemeTokens.accent;
+                color: ThemeTokens.text;
                 font-size: 11px;
-                font-weight: 700;
+                font-weight: 600;
                 vertical-alignment: center;
             }
         }

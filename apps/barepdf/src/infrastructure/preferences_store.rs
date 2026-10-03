@@ -106,7 +106,6 @@ mod tests {
         let mut preferences = UserPreferences {
             theme: ThemeMode::Dark,
             language: Language::Turkish,
-            enhanced_ui: true,
             ..UserPreferences::default()
         };
         preferences.add_recent_file("C:\\Documents\\book.pdf".into());
@@ -115,7 +114,6 @@ mod tests {
         let loaded = try_load_from_file(&path).expect("load preferences");
         assert_eq!(loaded.theme, ThemeMode::Dark);
         assert_eq!(loaded.language, Language::Turkish);
-        assert!(loaded.enhanced_ui);
         assert_eq!(loaded.recent_files, vec!["C:\\Documents\\book.pdf"]);
 
         preferences.theme = ThemeMode::Light;
@@ -204,14 +202,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_preferences_without_enhanced_ui_use_efficient_ui() {
+    fn legacy_preferences_with_enhanced_ui_field_still_deserialize() {
         let directory = tempfile::tempdir().expect("create temp directory");
         let path = directory.path().join("config.json");
-        fs::write(&path, r#"{"theme":"Dark"}"#).expect("write legacy preferences");
+        fs::write(&path, r#"{"theme":"Dark","enhanced_ui":true}"#)
+            .expect("write legacy preferences");
 
         let preferences = try_load_from_file(&path).expect("load legacy preferences");
 
-        assert!(!preferences.enhanced_ui);
+        assert_eq!(preferences.theme, ThemeMode::Dark);
     }
 
     #[test]

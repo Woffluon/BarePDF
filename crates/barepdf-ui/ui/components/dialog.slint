@@ -1,0 +1,103 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component DialogFooter inherits HorizontalLayout {
+    alignment: end;
+    spacing: 8px;
+    height: 36px;
+}
+
+export component Dialog inherits Rectangle {
+    in property <string> title: "";
+    in property <string> close-label: "Close";
+    in property <length> dialog-width: 480px;
+    in property <length> dialog-height: 360px;
+    in property <bool> show-header: true;
+    callback close();
+
+    width: 100%;
+    height: 100%;
+    background: ThemeTokens.dark ? #00000088 : #00000055;
+
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.dialog-width;
+        height: root.dialog-height;
+        background: ThemeTokens.layer;
+        border-radius: ThemeTokens.overlay-radius;
+        border-width: 1px;
+        border-color: ThemeTokens.stroke;
+        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+        drop-shadow-color: ThemeTokens.overlay-shadow;
+        accessible-role: groupbox;
+        accessible-label: root.title;
+
+        TouchArea {}
+
+        VerticalLayout {
+            spacing: 0px;
+
+            if root.show-header : Rectangle {
+                height: 44px;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 10px;
+                    alignment: space-between;
+
+                    Text {
+                        text: root.title;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: ThemeTokens.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    close-btn := Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: ThemeTokens.control-radius;
+                        background: close-touch.pressed ? ThemeTokens.control-pressed
+                            : (close-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                        animate background { duration: ThemeTokens.motion-fast; }
+                        accessible-role: button;
+                        accessible-label: root.close-label;
+
+                        close-touch := TouchArea {
+                            clicked => { root.close(); }
+                        }
+
+                        Image {
+                            source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                            width: 16px;
+                            height: 16px;
+                            colorize: ThemeTokens.text;
+                            image-fit: contain;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    width: 100%;
+                    height: 1px;
+                    background: ThemeTokens.divider;
+                }
+            }
+
+            VerticalLayout {
+                vertical-stretch: 1;
+                padding: 16px;
+                spacing: 12px;
+                @children
+            }
+        }
+    }
+}

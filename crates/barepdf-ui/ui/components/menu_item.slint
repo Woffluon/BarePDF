@@ -1,0 +1,75 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component MenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <string> text: "";
+    in property <string> shortcut: "";
+    in property <bool> enabled: true;
+    in property <bool> checked: false;
+    callback activated();
+
+    height: 32px;
+    border-radius: ThemeTokens.control-radius;
+    background: !root.enabled ? #00000000
+        : (touch.pressed ? ThemeTokens.control-pressed
+        : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
+    animate background { duration: ThemeTokens.motion-fast; }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+
+    if root.checked : Rectangle {
+        x: 2px;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 1.5px;
+        background: ThemeTokens.accent;
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            if root.has-icon : Rectangle {
+                width: 16px;
+                height: parent.height;
+                Image {
+                    source: root.icon;
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
+                    colorize: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if root.shortcut != "" : Text {
+            text: root.shortcut;
+            color: ThemeTokens.text-muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.activated(); }
+    }
+}

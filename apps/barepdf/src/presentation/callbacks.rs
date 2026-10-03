@@ -111,6 +111,7 @@ pub(super) fn wire_callbacks(
     connect_tools_callbacks(window, state, scheduler, dialogs.clone());
     connect_niche_feature_callbacks(window, state, scheduler, preferences_path);
     connect_annotation_and_signature_callbacks(window, state, scheduler, dialogs);
+    super::window_chrome::connect_window_chrome_callbacks(window);
 
     let weak = window.as_weak();
     let state_password = state.clone();
@@ -194,23 +195,6 @@ pub(super) fn wire_callbacks(
         persist_preferences(&app.preferences, &preferences_path_theme, window.as_ref());
         if let Some(window) = window {
             apply_theme(&window, theme);
-        }
-    });
-
-    let weak = window.as_weak();
-    let state_enhanced_ui = state.clone();
-    let preferences_path_enhanced_ui = preferences_path.to_path_buf();
-    window.on_request_change_enhanced_ui(move |enabled| {
-        let mut app = state_enhanced_ui.borrow_mut();
-        app.preferences.enhanced_ui = enabled;
-        let window = weak.upgrade();
-        persist_preferences(
-            &app.preferences,
-            &preferences_path_enhanced_ui,
-            window.as_ref(),
-        );
-        if let Some(window) = window {
-            window.set_enhanced_ui(enabled);
         }
     });
 
@@ -1674,6 +1658,7 @@ fn connect_view_callbacks(
                 window.set_window_mode(if enabled { 1 } else { 0 });
                 window.window().set_fullscreen(enabled);
             }
+            super::window_chrome::sync_window_maximized(&window);
             window.invoke_focus_main();
         }
     });
@@ -1687,6 +1672,7 @@ fn connect_view_callbacks(
             if app.request_presentation_mode() {
                 window.set_window_mode(2);
                 window.window().set_fullscreen(true);
+                super::window_chrome::sync_window_maximized(&window);
                 app.generation = scheduler_presentation.bump_generation();
                 render_visible_pages(&mut app, &scheduler_presentation, &window);
             }
@@ -1702,6 +1688,7 @@ fn connect_view_callbacks(
             if app.request_exit_special_mode() {
                 window.set_window_mode(0);
                 window.window().set_fullscreen(false);
+                super::window_chrome::sync_window_maximized(&window);
             }
             window.invoke_focus_main();
         }
@@ -2863,17 +2850,6 @@ fn connect_niche_feature_callbacks(
     scheduler: &Rc<RenderScheduler>,
     _preferences_path: &Path,
 ) {
-    let weak = window.as_weak();
-    let state_zen = state.clone();
-    window.on_request_toggle_zen_mode(move || {
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        let is_zen = !window.get_zen_mode();
-        window.set_zen_mode(is_zen);
-        window.set_sidebar_visible(!is_zen && state_zen.borrow().preferences.sidebar_visible);
-    });
-
     let weak = window.as_weak();
     window.on_request_toggle_command_palette(move || {
         let Some(window) = weak.upgrade() else {
