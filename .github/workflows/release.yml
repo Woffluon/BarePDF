@@ -123,7 +123,7 @@ jobs:
       matrix:
         release: ${{ fromJson(needs.discover.outputs.releases) }}
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
