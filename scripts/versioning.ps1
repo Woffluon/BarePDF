@@ -20,7 +20,7 @@ function Get-VersionBump {
     $Header = ($Message -split '\r?\n', 2)[0]
     $Match = [regex]::Match(
         $Header,
-        '^(?<type>feat|fix|perf|refactor|build|security|docs|ci|test|chore)(?:\([a-z0-9][a-z0-9._/-]*\))?(?<breaking>!)?: (?<description>\S.*)$'
+        '^(?<type>feat|fix|perf|refactor|build|security|docs|ci|test|chore)(?:\((?<scope>[a-z0-9][a-z0-9._/-]*)\))?(?<breaking>!)?: (?<description>\S.*)$'
     )
     if (-not $Match.Success) {
         throw "Invalid Conventional Commit message: '$Header'"
@@ -30,7 +30,14 @@ function Get-VersionBump {
         return "major"
     }
 
-    switch ($Match.Groups["type"].Value) {
+    $Type = $Match.Groups["type"].Value
+    $Scope = if ($Match.Groups["scope"].Success) { $Match.Groups["scope"].Value } else { "" }
+
+    if ($Scope -in "deps", "deps-dev" -and $Type -in "build", "chore") {
+        return "none"
+    }
+
+    switch ($Type) {
         "feat" { return "minor" }
         { $_ -in "fix", "perf", "refactor", "build", "security" } { return "patch" }
         default { return "none" }

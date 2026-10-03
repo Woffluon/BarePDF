@@ -72,7 +72,7 @@ impl Default for PrintPreviewState {
             open: false,
             document_id: None,
             generation: 0,
-            page_count: PageCount::new(1).expect("valid default count"),
+            page_count: PageCount::ONE,
             page_index: PageIndex::zero(),
             orientation: 0,
             duplex: 0,

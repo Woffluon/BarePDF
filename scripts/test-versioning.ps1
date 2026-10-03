@@ -14,7 +14,12 @@ $Cases = @(
     @{ Message = "perf(render): reduce copies"; Bump = "patch"; Version = "1.2.4" },
     @{ Message = "feat!: replace settings format"; Bump = "major"; Version = "2.0.0" },
     @{ Message = "fix: migrate`n`nBREAKING CHANGE: settings reset"; Bump = "major"; Version = "2.0.0" },
-    @{ Message = "docs: update guide"; Bump = "none"; Version = "1.2.3" }
+    @{ Message = "docs: update guide"; Bump = "none"; Version = "1.2.3" },
+    @{ Message = "build(deps): bump dtolnay/rust-toolchain"; Bump = "none"; Version = "1.2.3" },
+    @{ Message = "build(deps-dev): bump vitest"; Bump = "none"; Version = "1.2.3" },
+    @{ Message = "chore(deps): bump astro"; Bump = "none"; Version = "1.2.3" },
+    @{ Message = "build(installer): update Inno Setup script"; Bump = "patch"; Version = "1.2.4" },
+    @{ Message = "build: update packaging"; Bump = "patch"; Version = "1.2.4" }
 )
 
 foreach ($Case in $Cases) {

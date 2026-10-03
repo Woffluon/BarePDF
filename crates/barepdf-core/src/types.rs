@@ -8,6 +8,13 @@ use crate::limits::MAX_DOCUMENT_PAGES;
 pub struct PageCount(u32);
 
 impl PageCount {
+    pub const ONE: Self = Self(1);
+
+    #[must_use]
+    pub const fn one() -> Self {
+        Self::ONE
+    }
+
     #[must_use]
     pub const fn new(count: u32) -> Option<Self> {
         if count > 0 {
