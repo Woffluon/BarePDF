@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 const MAX_POOLED_BUFFERS_PER_BUCKET: usize = 4;
 
@@ -41,11 +41,10 @@ impl BitmapBufferPool {
         };
 
         if let Some(pool) = pool {
-            if let Ok(mut lock) = pool.lock() {
-                if let Some(mut buf) = lock.pop() {
-                    buf.resize(required_bytes, 0);
-                    return buf;
-                }
+            let mut lock = pool.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(mut buf) = lock.pop() {
+                buf.resize(required_bytes, 0);
+                return buf;
             }
         }
         vec![0; required_bytes]
@@ -64,11 +63,10 @@ impl BitmapBufferPool {
         };
 
         if let Some(pool) = pool {
-            if let Ok(mut lock) = pool.lock() {
-                if lock.len() < MAX_POOLED_BUFFERS_PER_BUCKET {
-                    buffer.clear();
-                    lock.push(buffer);
-                }
+            let mut lock = pool.lock().unwrap_or_else(PoisonError::into_inner);
+            if lock.len() < MAX_POOLED_BUFFERS_PER_BUCKET {
+                buffer.clear();
+                lock.push(buffer);
             }
         }
     }
@@ -89,6 +87,7 @@ impl BitmapBufferPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_buffer_pool_checkout_recycle() {
@@ -99,5 +98,21 @@ mod tests {
         pool.recycle(buf);
         let buf2 = pool.checkout(req);
         assert_eq!(buf2.len(), req);
+    }
+
+    #[test]
+    fn buffer_pool_recovers_from_poisoned_mutex() {
+        let pool = Arc::new(BitmapBufferPool::new());
+        let pool_clone = Arc::clone(&pool);
+        let handle = std::thread::spawn(move || {
+            let _guard = pool_clone.pool_1080p.lock().unwrap();
+            panic!("poison pool_1080p mutex");
+        });
+        assert!(handle.join().is_err());
+
+        pool.recycle(vec![0; 512]);
+        let reused = pool.checkout(256);
+        assert_eq!(reused.len(), 256);
+        assert!(reused.capacity() >= 512);
     }
 }

@@ -26,6 +26,7 @@ pub(crate) use printing::{
 struct DropTarget {
     sender: SyncSender<Vec<PathBuf>>,
     previous_window_proc: isize,
+    processing: bool,
 }
 
 static DROP_TARGETS: OnceLock<Mutex<HashMap<usize, DropTarget>>> = OnceLock::new();
@@ -114,6 +115,7 @@ pub(crate) fn executable_file_version_words(path: &Path) -> Result<(u32, u32), P
 }
 
 pub(crate) fn open_url(url: &str) -> Result<(), PlatformError> {
+    crate::shell::validate_url(url)?;
     let url = wide_null(OsStr::new(url));
     let verb = wide_null(OsStr::new("open"));
     // SAFETY: `verb` and `url` are live NUL-terminated UTF-16 allocations. Remaining optional
@@ -157,34 +159,43 @@ fn non_null_hwnd(hwnd: HWND) -> Option<HWND> {
 }
 
 unsafe fn register_file_drop(hwnd: HWND) -> Option<Receiver<Vec<PathBuf>>> {
+    if hwnd.is_null() {
+        return None;
+    }
+    let hwnd_key = hwnd as usize;
+    let targets = DROP_TARGETS.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Double registration guard: reject if HWND is already registered.
+    // Release the mutex immediately so SetWindowLongPtrW does not self-deadlock if
+    // Windows synchronously dispatches messages to drop_window_proc on this thread.
+    {
+        let guard = targets.lock().ok()?;
+        if guard.contains_key(&hwnd_key) {
+            return None;
+        }
+    }
+
     let (sender, receiver) = mpsc::sync_channel(8);
     // SAFETY: Caller supplies a live owner-thread HWND. Callback uses the system ABI and remains
     // linked for the process lifetime. Stored previous procedure is restored if registration fails
     // and otherwise forwarded until WM_NCDESTROY removes registry state.
     let previous_window_proc =
         unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, drop_window_proc as *const () as isize) };
-    if previous_window_proc == 0 {
+    if previous_window_proc == 0 || previous_window_proc == drop_window_proc as *const () as isize {
         return None;
     }
-    let inserted = DROP_TARGETS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .ok()
-        .map(|mut targets| {
-            targets.insert(
-                hwnd as usize,
-                DropTarget {
-                    sender,
-                    previous_window_proc,
-                },
-            );
-        });
-    if inserted.is_none() {
-        // SAFETY: Same live owner-thread HWND supplied above. `previous_window_proc` is the exact
-        // pointer value replaced by this function and is restored before returning.
-        unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, previous_window_proc) };
-        return None;
-    }
+
+    let mut guard = targets.lock().ok()?;
+    guard.insert(
+        hwnd_key,
+        DropTarget {
+            sender,
+            previous_window_proc,
+            processing: false,
+        },
+    );
+    drop(guard);
+
     // SAFETY: Caller guarantees the HWND remains live and this runs on its owner thread. Passing
     // TRUE only changes shell drop acceptance; no borrowed pointer escapes.
     unsafe { DragAcceptFiles(hwnd, 1) };
@@ -192,6 +203,21 @@ unsafe fn register_file_drop(hwnd: HWND) -> Option<Receiver<Vec<PathBuf>>> {
 }
 
 unsafe extern "system" fn drop_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: Windows invokes `drop_window_proc` on the HWND's dispatch thread with valid
+        // message arguments; `drop_window_proc_impl` upholds the same callback preconditions.
+        unsafe { drop_window_proc_impl(hwnd, message, wparam, lparam) }
+    }));
+
+    result.unwrap_or(0)
+}
+
+unsafe fn drop_window_proc_impl(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -207,15 +233,44 @@ unsafe extern "system" fn drop_window_proc(
     }
 
     if message == WM_DROPFILES {
-        let _ = std::panic::catch_unwind(|| handle_drop_message(hwnd, message, wparam));
+        handle_drop_message_guarded(hwnd, wparam);
         return 0;
     }
-
-    let _ = std::panic::catch_unwind(|| handle_drop_message(hwnd, message, wparam));
 
     // SAFETY: Windows supplied all message arguments to this callback on the HWND's dispatch
     // thread. Registry lookup retains only the previous procedure captured from that HWND.
     unsafe { forward_window_proc(hwnd, message, wparam, lparam) }
+}
+
+fn handle_drop_message_guarded(hwnd: HWND, wparam: WPARAM) {
+    let hwnd_key = hwnd as usize;
+    // Reentrancy guard: prevent concurrent or reentrant drop processing on the same HWND
+    {
+        let Ok(mut targets) = DROP_TARGETS.get_or_init(Default::default).lock() else {
+            return;
+        };
+        let Some(target) = targets.get_mut(&hwnd_key) else {
+            return;
+        };
+        if target.processing {
+            return;
+        }
+        target.processing = true;
+    }
+
+    struct ReentrancyGuard(usize);
+    impl Drop for ReentrancyGuard {
+        fn drop(&mut self) {
+            if let Ok(mut targets) = DROP_TARGETS.get_or_init(Default::default).lock() {
+                if let Some(target) = targets.get_mut(&self.0) {
+                    target.processing = false;
+                }
+            }
+        }
+    }
+    let _guard = ReentrancyGuard(hwnd_key);
+
+    let _ = handle_drop_message(hwnd, WM_DROPFILES, wparam);
 }
 
 fn handle_drop_message(hwnd: HWND, message: u32, wparam: WPARAM) -> Result<(), ()> {
@@ -341,10 +396,45 @@ mod tests {
             DropTarget {
                 sender,
                 previous_window_proc: 123,
+                processing: false,
             },
         );
 
         assert_eq!(take_previous_window_proc(TEST_HWND as _), Some(123));
         assert_eq!(take_previous_window_proc(TEST_HWND as _), None);
+    }
+
+    #[test]
+    fn double_registration_is_prevented() {
+        const TEST_HWND: usize = 0x5555;
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let targets = DROP_TARGETS.get_or_init(Default::default);
+        targets.lock().unwrap().insert(
+            TEST_HWND,
+            DropTarget {
+                sender,
+                previous_window_proc: 123,
+                processing: false,
+            },
+        );
+
+        // Attempting to register the same HWND that is already in DROP_TARGETS must fail (return None)
+        // SAFETY: `TEST_HWND` is already present in `DROP_TARGETS`, so `register_file_drop` returns
+        // `None` before invoking any Win32 API on the synthetic handle.
+        assert!(unsafe { super::register_file_drop(TEST_HWND as _) }.is_none());
+
+        // Clean up
+        take_previous_window_proc(TEST_HWND as _);
+    }
+
+    #[test]
+    fn drop_window_proc_catches_unwind_and_returns_safe_lresult() {
+        // Calling drop_window_proc on a null HWND or invalid message must safely catch any panic and return 0
+        // SAFETY: Testing that `drop_window_proc` handles an unregistered null HWND with `WM_DROPFILES`
+        // without dereferencing invalid pointers or unwinding across the FFI boundary.
+        let res = unsafe {
+            super::drop_window_proc(std::ptr::null_mut(), 0x0233 /* WM_DROPFILES */, 0, 0)
+        };
+        assert_eq!(res, 0);
     }
 }

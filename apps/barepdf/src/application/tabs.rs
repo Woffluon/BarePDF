@@ -3,6 +3,7 @@ use barepdf_core::{PageIndex, Rotation, ZoomFactor, ZoomMode, MAX_OPEN_TABS};
 use barepdf_pdf::OutlineNode;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TabId(NonZeroU64);
@@ -11,6 +12,18 @@ impl TabId {
     #[must_use]
     pub(crate) const fn get(self) -> u64 {
         self.0.get()
+    }
+
+    #[must_use]
+    pub(crate) fn to_slint_id(self) -> i32 {
+        i32::try_from(self.0.get()).unwrap_or(i32::MAX)
+    }
+
+    #[must_use]
+    pub(crate) fn from_slint_id(id: i32) -> Option<Self> {
+        let raw = u64::try_from(id).ok()?;
+        let non_zero = NonZeroU64::new(raw)?;
+        Some(Self(non_zero))
     }
 }
 
@@ -41,21 +54,21 @@ impl Default for ViewState {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TabDocumentLayout {
-    pub(crate) page_dimensions: Vec<(f32, f32)>,
+    pub(crate) page_dimensions: Arc<Vec<(f32, f32)>>,
     pub(crate) first_page_dimensions: (f32, f32),
     pub(crate) dimensions_revision: u64,
     pub(crate) next_dimensions_start: u32,
-    pub(crate) outline: Vec<OutlineNode>,
+    pub(crate) outline: Arc<Vec<OutlineNode>>,
 }
 
 impl Default for TabDocumentLayout {
     fn default() -> Self {
         Self {
-            page_dimensions: Vec::new(),
+            page_dimensions: Arc::new(Vec::new()),
             first_page_dimensions: (612.0, 792.0),
             dimensions_revision: 0,
             next_dimensions_start: 1,
-            outline: Vec::new(),
+            outline: Arc::new(Vec::new()),
         }
     }
 }
@@ -98,6 +111,10 @@ impl TabSet {
     #[must_use]
     pub(crate) fn tabs(&self) -> &[TabState] {
         &self.tabs
+    }
+
+    pub(crate) fn tabs_mut(&mut self) -> &mut [TabState] {
+        &mut self.tabs
     }
 
     #[must_use]
@@ -194,11 +211,9 @@ impl TabSet {
     }
 
     #[must_use]
-    pub(crate) fn find_id(&self, raw: u64) -> Option<TabId> {
-        self.tabs
-            .iter()
-            .find(|tab| tab.id.get() == raw)
-            .map(|tab| tab.id)
+    pub(crate) fn find_slint_id(&self, raw: i32) -> Option<TabId> {
+        let id = TabId::from_slint_id(raw)?;
+        self.tabs.iter().find(|tab| tab.id == id).map(|tab| tab.id)
     }
 
     #[must_use]
@@ -420,15 +435,15 @@ mod tests {
             panic!("failed to open first tab");
         };
         if let Some(tab) = tabs.active_mut() {
-            tab.layout.page_dimensions = vec![(500.0, 700.0); 15];
+            tab.layout.page_dimensions = Arc::new(vec![(500.0, 700.0); 15]);
             tab.layout.first_page_dimensions = (500.0, 700.0);
             tab.layout.dimensions_revision = 3;
             tab.layout.next_dimensions_start = 16;
-            tab.layout.outline = vec![OutlineNode {
+            tab.layout.outline = Arc::new(vec![OutlineNode {
                 title: "Chapter 1".into(),
                 page_index: Some(0),
                 children: Vec::new(),
-            }];
+            }]);
         }
 
         let OpenTab::Created(second) = tabs.open(PathBuf::from("second.pdf"), "second".into())
@@ -436,7 +451,7 @@ mod tests {
             panic!("failed to open second tab");
         };
         if let Some(tab) = tabs.active_mut() {
-            tab.layout.page_dimensions = vec![(612.0, 792.0); 3];
+            tab.layout.page_dimensions = Arc::new(vec![(612.0, 792.0); 3]);
             tab.layout.first_page_dimensions = (612.0, 792.0);
             tab.layout.dimensions_revision = 1;
             tab.layout.next_dimensions_start = 4;

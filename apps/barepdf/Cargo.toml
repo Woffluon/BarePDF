@@ -20,16 +20,20 @@ slint = { workspace = true, features = ["raw-window-handle-06"] }
 lru.workspace = true
 tracing-subscriber.workspace = true
 raw-window-handle.workspace = true
-ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
-semver = "1.0"
+ed25519-dalek.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tempfile = "3.27"
-ureq = { version = "3.3", default-features = false, features = ["platform-verifier", "rustls", "win-system-proxy"] }
+tempfile.workspace = true
+ureq.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+winres.workspace = true
+
+[lints]
+workspace = true
+
 

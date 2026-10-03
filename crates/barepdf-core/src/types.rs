@@ -1,5 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::num::NonZeroU64;
+
+use crate::limits::MAX_DOCUMENT_PAGES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageCount(u32);
@@ -31,8 +34,17 @@ pub struct PageIndex(u32);
 
 impl PageIndex {
     #[must_use]
-    pub fn new(index: u32, page_count: PageCount) -> Option<Self> {
-        if index < page_count.get() {
+    pub const fn new(index: u32, page_count: PageCount) -> Option<Self> {
+        if index < page_count.get() && index < MAX_DOCUMENT_PAGES {
+            Some(Self(index))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn checked_new(index: u32) -> Option<Self> {
+        if index < MAX_DOCUMENT_PAGES {
             Some(Self(index))
         } else {
             None
@@ -44,9 +56,23 @@ impl PageIndex {
         Self(0)
     }
 
+    /// Creates a `PageIndex` directly from a 0-based index, clamping out-of-bounds values to the
+    /// maximum supported page index (`MAX_DOCUMENT_PAGES - 1`).
+    ///
+    /// Prefer [`PageIndex::new`] or [`PageIndex::checked_new`] when validating untrusted input.
     #[must_use]
     pub const fn from_raw(index: u32) -> Self {
-        Self(index)
+        let max_idx = MAX_DOCUMENT_PAGES - 1;
+        if index <= max_idx {
+            Self(index)
+        } else {
+            Self(max_idx)
+        }
+    }
+
+    #[must_use]
+    pub const fn is_within_limit(self) -> bool {
+        self.0 < MAX_DOCUMENT_PAGES
     }
 
     #[must_use]
@@ -57,7 +83,7 @@ impl PageIndex {
     #[must_use]
     pub fn next(self, page_count: u32) -> Option<Self> {
         let next_idx = self.0.checked_add(1)?;
-        if next_idx < page_count {
+        if next_idx < page_count && next_idx < MAX_DOCUMENT_PAGES {
             Some(Self(next_idx))
         } else {
             None
@@ -247,6 +273,49 @@ impl RequestId {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TabId(u64);
+
+impl TabId {
+    #[must_use]
+    pub const fn new(id: u64) -> Option<Self> {
+        if id > 0 {
+            Some(Self(id))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn from_non_zero(id: NonZeroU64) -> Self {
+        Self(id.get())
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Converts this `TabId` into a positive `i32` suitable for Slint UI models,
+    /// returning `None` if the value is zero or exceeds `i32::MAX`.
+    #[must_use]
+    pub fn to_slint_id(self) -> Option<i32> {
+        if self.0 == 0 {
+            return None;
+        }
+        i32::try_from(self.0).ok()
+    }
+
+    /// Reconstructs a `TabId` from a Slint `i32` identifier, rejecting zero or negative values.
+    #[must_use]
+    pub fn from_slint_id(slint_id: i32) -> Option<Self> {
+        if slint_id <= 0 {
+            return None;
+        }
+        u64::try_from(slint_id).ok().and_then(Self::new)
     }
 }
 
@@ -502,6 +571,49 @@ mod tests {
 
         let first = PageIndex::from_raw(0);
         assert_eq!(first.prev(), None);
+    }
+
+    #[test]
+    fn page_index_checked_new_and_from_raw_enforce_document_page_limit() {
+        assert_eq!(PageIndex::checked_new(0).map(PageIndex::get), Some(0));
+        assert_eq!(
+            PageIndex::checked_new(MAX_DOCUMENT_PAGES - 1).map(PageIndex::get),
+            Some(MAX_DOCUMENT_PAGES - 1)
+        );
+        assert!(PageIndex::checked_new(MAX_DOCUMENT_PAGES).is_none());
+        assert!(PageIndex::checked_new(u32::MAX).is_none());
+
+        let clamped = PageIndex::from_raw(MAX_DOCUMENT_PAGES + 50);
+        assert_eq!(clamped.get(), MAX_DOCUMENT_PAGES - 1);
+        assert!(clamped.is_within_limit());
+        assert!(clamped.next(MAX_DOCUMENT_PAGES + 100).is_none());
+
+        let large_count = PageCount::new(MAX_DOCUMENT_PAGES + 10).unwrap();
+        assert!(PageIndex::new(MAX_DOCUMENT_PAGES, large_count).is_none());
+        assert_eq!(
+            PageIndex::new(MAX_DOCUMENT_PAGES - 1, large_count).map(PageIndex::get),
+            Some(MAX_DOCUMENT_PAGES - 1)
+        );
+    }
+
+    #[test]
+    fn tab_id_slint_conversions_prevent_truncation_and_invalid_ids() {
+        assert!(TabId::new(0).is_none());
+        let valid = TabId::new(42).expect("non-zero tab id");
+        assert_eq!(valid.get(), 42);
+        assert_eq!(valid.to_slint_id(), Some(42));
+        assert_eq!(TabId::from_slint_id(42), Some(valid));
+
+        let max_slint = TabId::new(i32::MAX as u64).unwrap();
+        assert_eq!(max_slint.to_slint_id(), Some(i32::MAX));
+        assert_eq!(TabId::from_slint_id(i32::MAX), Some(max_slint));
+
+        let overflow = TabId::new((i32::MAX as u64) + 1).unwrap();
+        assert_eq!(overflow.to_slint_id(), None);
+
+        assert_eq!(TabId::from_slint_id(0), None);
+        assert_eq!(TabId::from_slint_id(-1), None);
+        assert_eq!(TabId::from_slint_id(i32::MIN), None);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use barepdf_pdf::PdfBackend;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -75,6 +75,15 @@ impl RenderScheduler {
         }
     }
 
+    #[must_use]
+    pub fn spawn_adaptive<B: PdfBackend + 'static>(
+        backend: B,
+        profile: &crate::memory_budget::SystemHardwareProfile,
+    ) -> Self {
+        let budget = crate::memory_budget::calculate_adaptive_memory_budget(profile);
+        Self::spawn(backend, budget)
+    }
+
     /// Stops the worker and waits for it to release its active PDF document.
     ///
     /// # Errors
@@ -83,10 +92,7 @@ impl RenderScheduler {
     /// bounded shutdown deadline.
     pub fn shutdown(&self) -> Result<(), RenderError> {
         let _ = self.shutdown_sender.try_send(());
-        let mut worker = self
-            .worker
-            .lock()
-            .map_err(|_| RenderError::WorkerTerminated)?;
+        let mut worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner);
         if worker.is_none() {
             return Ok(());
         }
@@ -104,10 +110,12 @@ impl RenderScheduler {
 
     #[must_use]
     pub fn bump_generation(&self) -> u64 {
+        let mut pending = self
+            .pending_renders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let generation = self.current_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        if let Ok(mut pending) = self.pending_renders.lock() {
-            pending.retain(|key| key.generation == generation);
-        }
+        pending.retain(|key| key.generation == generation);
         generation
     }
 
@@ -120,16 +128,17 @@ impl RenderScheduler {
     /// background queue so the UI can remain responsive under load.
     #[must_use]
     pub fn send_command(&self, cmd: RenderCommand) -> bool {
-        let pending_key = match &cmd {
+        let mut pending_guard = match &cmd {
             RenderCommand::RenderPage(job) => {
                 let key = RenderRequestKey::from(job);
-                let Ok(mut pending) = self.pending_renders.lock() else {
-                    return false;
-                };
-                if !pending.insert(key.clone()) {
+                let pending = self
+                    .pending_renders
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if pending.contains(&key) {
                     return false;
                 }
-                Some(key)
+                Some((pending, key))
             }
             _ => None,
         };
@@ -157,19 +166,20 @@ impl RenderScheduler {
         };
 
         match result {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) => {
-                self.observability.queue_full(queue);
-                if let (Some(key), Ok(mut pending)) = (pending_key, self.pending_renders.lock()) {
-                    pending.remove(&key);
+            Ok(()) => {
+                if let Some((ref mut pending, key)) = pending_guard {
+                    pending.insert(key);
                 }
+                true
+            }
+            Err(TrySendError::Full(_)) => {
+                drop(pending_guard);
+                self.observability.queue_full(queue);
                 false
             }
             Err(TrySendError::Disconnected(_)) => {
+                drop(pending_guard);
                 self.observability.queue_disconnected(queue);
-                if let (Some(key), Ok(mut pending)) = (pending_key, self.pending_renders.lock()) {
-                    pending.remove(&key);
-                }
                 false
             }
         }
@@ -614,5 +624,39 @@ mod tests {
         assert!(rejected > 0);
         assert!(start.elapsed() < Duration::from_millis(100));
         assert!(scheduler.send_command(RenderCommand::CloseDocument(DocumentId::new(7))));
+    }
+
+    #[test]
+    fn bump_generation_and_send_command_recover_from_poison_and_remain_consistent() {
+        let scheduler = Arc::new(scheduler(Duration::ZERO));
+        open_document(&scheduler, DocumentId::new(7));
+
+        let pending_clone = Arc::clone(&scheduler.pending_renders);
+        let poison_handle = thread::spawn(move || {
+            let _guard = pending_clone.lock().unwrap();
+            panic!("poison pending_renders mutex");
+        });
+        assert!(poison_handle.join().is_err());
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let sched = Arc::clone(&scheduler);
+            handles.push(thread::spawn(move || {
+                for _ in 0..16 {
+                    let gen = sched.bump_generation();
+                    let _ =
+                        sched.send_command(RenderCommand::RenderPage(job(gen, RenderKind::Page)));
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("concurrent bump/send thread succeeds");
+        }
+
+        let final_gen = scheduler.bump_generation();
+        assert!(
+            scheduler.send_command(RenderCommand::RenderPage(job(final_gen, RenderKind::Page))),
+            "final generation render must not be blocked by stale pending entries"
+        );
     }
 }

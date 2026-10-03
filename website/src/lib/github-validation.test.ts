@@ -7,6 +7,11 @@ import {
   releaseAssetType,
   trustedGitHubUrl,
 } from './github-validation.ts';
+import {
+  MAX_API_RESPONSE_BYTES,
+  getLatestRelease,
+  readBoundedJson,
+} from './github.ts';
 
 const owner = 'Woffluon';
 const repository = 'BarePDF';
@@ -44,4 +49,119 @@ test('rejects credentials, non-default ports, query strings, and fragments', () 
   assert.equal(trustedGitHubUrl('https://github.com:444/Woffluon/BarePDF'), null);
   assert.equal(trustedGitHubUrl('https://github.com/Woffluon/BarePDF?tab=readme'), null);
   assert.equal(trustedGitHubUrl('https://github.com/Woffluon/BarePDF#readme'), null);
+});
+
+test('accepts only official GitHub release hosts and BarePDF repository paths', () => {
+  assert.equal(
+    trustedGitHubUrl('https://github.com/Woffluon/BarePDF/releases/tag/v1.1.0'),
+    'https://github.com/Woffluon/BarePDF/releases/tag/v1.1.0',
+  );
+  assert.equal(
+    trustedGitHubUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/BarePDF-Setup-x64-v1.1.0.exe'),
+    'https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/BarePDF-Setup-x64-v1.1.0.exe',
+  );
+  assert.equal(
+    trustedGitHubUrl('https://release-assets.githubusercontent.com/github-production-release-asset/123/BarePDF-Setup-x64-v1.1.0.exe'),
+    'https://release-assets.githubusercontent.com/github-production-release-asset/123/BarePDF-Setup-x64-v1.1.0.exe',
+  );
+  assert.equal(
+    trustedGitHubUrl('https://raw.githubusercontent.com/attacker/repo/main/BarePDF-Setup-x64-v1.2.3.exe'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://raw.githubusercontent.com/Woffluon/BarePDF/main/README.md'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://gist.githubusercontent.com/attacker/123/raw/payload.exe'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://camo.githubusercontent.com/123456'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://avatars.githubusercontent.com/u/123456'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://github.com/Woffluon/OtherRepo/releases/tag/v1.1.0'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://github.com/Woffluon/BarePDF-evil/releases/tag/v1.1.0'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://github.com/attacker/BarePDF/releases/tag/v1.1.0'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://release-assets.githubusercontent.com/unapproved/file'),
+    null,
+  );
+  assert.equal(
+    trustedGitHubUrl('https://objects.githubusercontent.com/unapproved/file'),
+    null,
+  );
+});
+
+test('rejects oversized GitHub API responses before buffering or parsing', async () => {
+  assert.equal(MAX_API_RESPONSE_BYTES, 2 * 1024 * 1024);
+
+  const validResponse = new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+  assert.deepEqual(await readBoundedJson(validResponse, 1024), { ok: true });
+
+  let bodyPulled = false;
+  const oversizedHeaderStream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      bodyPulled = true;
+      controller.enqueue(new TextEncoder().encode('{"ok":true}'));
+      controller.close();
+    },
+  });
+  const oversizedHeaderResponse = new Response(oversizedHeaderStream, {
+    status: 200,
+    headers: { 'content-length': String(MAX_API_RESPONSE_BYTES + 1) },
+  });
+
+  await assert.rejects(
+    () => readBoundedJson(oversizedHeaderResponse),
+    /exceeds/i,
+  );
+  assert.equal(bodyPulled, false);
+
+  let chunksRead = 0;
+  const oversizedChunkStream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      chunksRead += 1;
+      controller.enqueue(new Uint8Array(600));
+      if (chunksRead >= 5) {
+        controller.close();
+      }
+    },
+  });
+  const oversizedChunkResponse = new Response(oversizedChunkStream, { status: 200 });
+
+  await assert.rejects(
+    () => readBoundedJson(oversizedChunkResponse, 1024),
+    /exceeds/i,
+  );
+  assert.equal(chunksRead, 2);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ tag_name: 'v1.1.0' }), {
+        status: 200,
+        headers: { 'content-length': String(MAX_API_RESPONSE_BYTES + 100) },
+      });
+    const fallback = await getLatestRelease();
+    assert.equal(fallback.state, 'fallback');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

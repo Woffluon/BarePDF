@@ -50,9 +50,10 @@ pub enum EncodedImageFormat {
     Jpeg { quality: u8 },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImageEncodeError {
     reason: String,
+    source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
 }
 
 impl ImageEncodeError {
@@ -60,12 +61,31 @@ impl ImageEncodeError {
     pub fn new(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
+            source: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_source(
+        reason: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            reason: reason.into(),
+            source: Some(Arc::new(source)),
         }
     }
 
     #[must_use]
     pub fn from_io(source: io::Error) -> Self {
-        Self::new(source.to_string())
+        let reason = source.to_string();
+        Self::with_source(reason, source)
+    }
+}
+
+impl From<io::Error> for ImageEncodeError {
+    fn from(source: io::Error) -> Self {
+        Self::from_io(source)
     }
 }
 
@@ -75,7 +95,13 @@ impl fmt::Display for ImageEncodeError {
     }
 }
 
-impl std::error::Error for ImageEncodeError {}
+impl std::error::Error for ImageEncodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|error| error as &(dyn std::error::Error + 'static))
+    }
+}
 
 pub trait ImageEncoder: Send + Sync {
     /// Encodes one tightly packed RGBA bitmap to a newly staged output file.
@@ -288,6 +314,34 @@ impl From<PdfError> for ConversionError {
     }
 }
 
+impl From<barepdf_core::PageRangeError> for ConversionError {
+    fn from(error: barepdf_core::PageRangeError) -> Self {
+        Self::InvalidPageSelection(error.to_string())
+    }
+}
+
+impl From<ConversionError> for PdfError {
+    fn from(error: ConversionError) -> Self {
+        match error {
+            ConversionError::Pdf(pdf_error) => pdf_error,
+            ConversionError::Io { source, .. } => Self::FileAccess {
+                source: Arc::new(source),
+            },
+            ConversionError::ImageEncoding { page_index, source } => Self::RenderingFailed {
+                page_index: page_index.get(),
+                reason: source.to_string(),
+            },
+            other @ (ConversionError::InvalidPageSelection(_)
+            | ConversionError::DuplicatePage(_)
+            | ConversionError::OcrNotSupported { .. }
+            | ConversionError::ImageEncoderUnavailable
+            | ConversionError::Cancelled) => Self::Backend {
+                source: Arc::new(other),
+            },
+        }
+    }
+}
+
 /// Converts selected pages without publishing partial output.
 ///
 /// This function performs PDF, raster, and file-system work synchronously. Callers must run it on
@@ -323,8 +377,7 @@ pub fn convert_pdf(
     check_cancel(&request.cancellation)?;
 
     let page_count = document.page_count()?;
-    validate_page_selection(&request.pages, page_count)
-        .map_err(|error| ConversionError::InvalidPageSelection(error.to_string()))?;
+    validate_page_selection(&request.pages, page_count)?;
     validate_no_duplicates(&request.pages)?;
 
     let output_stem = safe_output_stem(&request.source);
@@ -655,5 +708,41 @@ mod tests {
         let mut password = JobPassword::new("sensitive".to_owned());
         password.clear();
         assert!(password.bytes_for_test().is_empty());
+    }
+
+    #[test]
+    fn error_conversions_preserve_structural_sources_and_variants() {
+        use super::{ConversionError, ImageEncodeError};
+        use barepdf_core::PageIndex;
+        use std::error::Error as _;
+        use std::io;
+
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "disk read-only");
+        let encode_err = ImageEncodeError::from_io(io_err);
+        assert!(encode_err.source().is_some());
+        assert!(encode_err.to_string().contains("disk read-only"));
+
+        let conv_pdf = ConversionError::from(PdfError::IncorrectPassword);
+        assert!(matches!(
+            PdfError::from(conv_pdf),
+            PdfError::IncorrectPassword
+        ));
+
+        let conv_io = ConversionError::Io {
+            operation: "write file",
+            source: io::Error::new(io::ErrorKind::WriteZero, "disk full"),
+        };
+        let mapped_io = PdfError::from(conv_io);
+        assert!(matches!(mapped_io, PdfError::FileAccess { .. }));
+        assert!(mapped_io.source().is_some());
+
+        let conv_encode = ConversionError::ImageEncoding {
+            page_index: PageIndex::from_raw(3),
+            source: encode_err,
+        };
+        assert!(matches!(
+            PdfError::from(conv_encode),
+            PdfError::RenderingFailed { page_index: 3, .. }
+        ));
     }
 }

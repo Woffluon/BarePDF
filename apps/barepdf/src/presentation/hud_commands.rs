@@ -59,20 +59,59 @@ pub const ALL_HUD_COMMANDS: &[HudCommandItem] = &[
     },
 ];
 
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle_bytes = needle.as_bytes();
+    let n = needle_bytes.len();
+    if haystack.len() < n {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(n)
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
 pub fn filter_hud_commands(query: &str) -> Vec<HudCommandItem> {
-    let q = query.trim().to_lowercase();
+    let q = query.trim();
     if q.is_empty() {
         return ALL_HUD_COMMANDS.to_vec();
     }
     ALL_HUD_COMMANDS
         .iter()
         .filter(|cmd| {
-            cmd.title.to_lowercase().contains(&q)
-                || cmd.subtitle.to_lowercase().contains(&q)
-                || cmd.id.contains(&q)
+            contains_ignore_ascii_case(cmd.title, q)
+                || contains_ignore_ascii_case(cmd.subtitle, q)
+                || contains_ignore_ascii_case(cmd.id, q)
         })
         .cloned()
         .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HudAction {
+    None,
+    RequestPrint,
+}
+
+pub fn parse_hud_action(query: &str) -> HudAction {
+    let lower = query.trim().to_lowercase();
+    if lower.contains("print") || lower.contains("yazd") {
+        HudAction::RequestPrint
+    } else {
+        HudAction::None
+    }
+}
+
+pub fn execute_hud_command(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+    query: &str,
+) -> HudAction {
+    handle_hud_query(app, scheduler, window, query)
 }
 
 pub fn handle_hud_query(
@@ -80,20 +119,15 @@ pub fn handle_hud_query(
     scheduler: &RenderScheduler,
     window: &AppWindow,
     query: &str,
-) {
+) -> HudAction {
     let trimmed = query.trim();
 
     if let Ok(page_num) = trimmed.parse::<u32>() {
         if page_num >= 1 {
             let target_index = page_num - 1;
-            crate::controllers::navigation_controller::navigate(
-                crate::controllers::navigation_controller::NavigationTarget::Page(target_index),
-                app,
-                scheduler,
-                window,
-            );
+            super::ui::navigate_to_page_inner(target_index, app, scheduler, window);
             window.set_command_palette_open(false);
-            return;
+            return HudAction::None;
         }
     }
 
@@ -124,8 +158,8 @@ pub fn handle_hud_query(
         app.preferences.paper_tint = 0;
         window.set_paper_tint(0);
         invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower.contains("print") || lower.contains("yazd") {
-        window.invoke_request_print();
+    } else if let action @ HudAction::RequestPrint = parse_hud_action(&lower) {
+        return action;
     } else if lower.contains("fit width") || lower.contains("geni") {
         app.zoom_mode = barepdf_core::ZoomMode::FitWidth;
         app.preferences.zoom_mode = barepdf_core::ZoomMode::FitWidth;
@@ -138,5 +172,69 @@ pub fn handle_hud_query(
         invalidate_layout_and_render(app, scheduler, window, false);
     } else if !trimmed.is_empty() {
         crate::presentation::ui::show_banner(window, format!("Unknown command: {trimmed}"), false);
+    }
+
+    HudAction::None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn parse_hud_action_identifies_print_queries() {
+        assert_eq!(parse_hud_action("print"), HudAction::RequestPrint);
+        assert_eq!(parse_hud_action("PRINT"), HudAction::RequestPrint);
+        assert_eq!(parse_hud_action("  print  "), HudAction::RequestPrint);
+        assert_eq!(parse_hud_action("yazdır"), HudAction::RequestPrint);
+        assert_eq!(
+            parse_hud_action("Print Document (Ctrl+P)"),
+            HudAction::RequestPrint
+        );
+        assert_eq!(parse_hud_action("zen"), HudAction::None);
+        assert_eq!(parse_hud_action("invert"), HudAction::None);
+        assert_eq!(parse_hud_action(""), HudAction::None);
+    }
+
+    #[test]
+    fn all_hud_commands_contain_valid_print_item() {
+        let print_item = ALL_HUD_COMMANDS.iter().find(|cmd| cmd.id == "print");
+        assert!(print_item.is_some());
+        let print_item = print_item.unwrap();
+        assert_eq!(parse_hud_action(print_item.id), HudAction::RequestPrint);
+        assert_eq!(parse_hud_action(print_item.title), HudAction::RequestPrint);
+    }
+
+    #[test]
+    fn hud_print_action_dispatch_avoids_refcell_borrow_panic() {
+        let state = Rc::new(RefCell::new(AppState::new(
+            barepdf_core::UserPreferences::default(),
+        )));
+        let print_called = Rc::new(AtomicBool::new(false));
+
+        // Simulated print callback which acquires a mutable borrow
+        let state_print = state.clone();
+        let print_called_clone = print_called.clone();
+        let on_request_print = move || {
+            let mut _app = state_print.borrow_mut();
+            print_called_clone.store(true, Ordering::SeqCst);
+        };
+
+        // When executing a command, borrow is dropped before triggering the returned action:
+        let state_cmd = state.clone();
+        let action = {
+            let mut _app = state_cmd.borrow_mut();
+            parse_hud_action("print")
+        };
+        // _app borrow has been dropped!
+        match action {
+            HudAction::RequestPrint => on_request_print(),
+            HudAction::None => {}
+        }
+
+        assert!(print_called.load(Ordering::SeqCst));
     }
 }

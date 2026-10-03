@@ -3,14 +3,66 @@ use crate::backend::{
 };
 use crate::pdfium_lifetime::process_pdfium;
 use barepdf_core::{
-    PageCount, PageIndex, PdfError, Rotation, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+    PageCount, PageIndex, PdfError, Rotation, SecretPassword, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
 };
 use pdfium_render::prelude::*;
+use std::ffi::CString;
 use std::path::Path;
 use std::sync::Arc;
 
-const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
+mod glyph_limit_scope {
+    const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
+
+    pub const fn get() -> usize {
+        #[allow(unused_imports)]
+        use barepdf_core::limits::*;
+        MAX_TEXT_GLYPHS_PER_PAGE
+    }
+}
+
+pub const MAX_TEXT_GLYPHS_PER_PAGE: usize = glyph_limit_scope::get();
 const MAX_LINKS_PER_PAGE: usize = 2_000;
+
+struct ZeroizingFfiPassword {
+    secret: SecretPassword,
+}
+
+impl ZeroizingFfiPassword {
+    fn new(password: Option<&str>) -> Result<Option<Self>, PdfError> {
+        let Some(password) = password else {
+            return Ok(None);
+        };
+        if password.as_bytes().contains(&0) {
+            return Err(PdfError::IncorrectPassword);
+        }
+        let c_string = CString::new(password).map_err(|_| PdfError::IncorrectPassword)?;
+        let owned = c_string
+            .into_string()
+            .map_err(|_| PdfError::IncorrectPassword)?;
+        Ok(Some(Self {
+            secret: SecretPassword::new(owned),
+        }))
+    }
+
+    fn expose(&self) -> &str {
+        self.secret.expose()
+    }
+
+    fn clear(&mut self) {
+        self.secret.clear();
+    }
+
+    #[cfg(test)]
+    fn bytes_for_test(&self) -> &[u8] {
+        self.secret.bytes_for_test()
+    }
+}
+
+impl Drop for ZeroizingFfiPassword {
+    fn drop(&mut self) {
+        self.secret.clear();
+    }
+}
 
 pub struct PdfiumEngine {
     pdfium: &'static Pdfium,
@@ -35,10 +87,16 @@ impl PdfBackend for PdfiumEngine {
         path: &Path,
         password: Option<&str>,
     ) -> Result<Box<dyn CorePdfDocument>, PdfError> {
-        let doc = self
-            .pdfium
-            .load_pdf_from_file(path, password)
-            .map_err(|error| map_load_error(error, password.is_some()))?;
+        let mut ffi_password = ZeroizingFfiPassword::new(password)?;
+        let load_result = self.pdfium.load_pdf_from_file(
+            path,
+            ffi_password.as_ref().map(ZeroizingFfiPassword::expose),
+        );
+        if let Some(ref mut secret) = ffi_password {
+            secret.clear();
+        }
+        let doc = load_result.map_err(|error| map_load_error(error, password.is_some()))?;
+        let _ = validate_loaded_page_count(doc.pages().len())?;
         Ok(Box::new(PdfiumDocumentOwned { doc }))
     }
 
@@ -47,21 +105,23 @@ impl PdfBackend for PdfiumEngine {
         bytes: Vec<u8>,
         password: Option<&str>,
     ) -> Result<Box<dyn CorePdfDocument>, PdfError> {
-        let doc = self
-            .pdfium
-            .load_pdf_from_byte_vec(bytes, password)
-            .map_err(|error| map_load_error(error, password.is_some()))?;
+        let mut ffi_password = ZeroizingFfiPassword::new(password)?;
+        let load_result = self.pdfium.load_pdf_from_byte_vec(
+            bytes,
+            ffi_password.as_ref().map(ZeroizingFfiPassword::expose),
+        );
+        if let Some(ref mut secret) = ffi_password {
+            secret.clear();
+        }
+        let doc = load_result.map_err(|error| map_load_error(error, password.is_some()))?;
+        let _ = validate_loaded_page_count(doc.pages().len())?;
         Ok(Box::new(PdfiumDocumentOwned { doc }))
     }
 }
 
 impl CorePdfDocument for PdfiumDocumentOwned {
     fn page_count(&self) -> Result<PageCount, PdfError> {
-        let count = u32::try_from(self.doc.pages().len()).map_err(|_| {
-            PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
-        })?;
-        PageCount::new(count)
-            .ok_or_else(|| PdfError::InvalidPdfReason("PDF contains no pages".into()))
+        validate_loaded_page_count(self.doc.pages().len())
     }
 
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError> {
@@ -153,6 +213,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             reason: e.to_string(),
         })?;
 
+        validate_glyph_count(page_index, text_page.chars().len())?;
         Ok(text_page.all())
     }
 
@@ -170,23 +231,21 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             reason: e.to_string(),
         })?;
 
-        let mut spans = Vec::new();
-        for char_info in text_page.chars().iter() {
-            if let Ok(rect) = char_info.loose_bounds() {
-                let char_text = char_info
-                    .unicode_char()
-                    .map_or_else(|| " ".to_string(), |character| character.to_string());
-                spans.push(TextSpan {
-                    text: char_text,
-                    x: rect.left().value,
-                    y: rect.bottom().value,
-                    width: rect.width().value,
-                    height: rect.height().value,
-                });
-            }
-        }
+        let chars = text_page.chars();
+        validate_glyph_count(page_index, chars.len())?;
 
-        Ok(spans)
+        let glyphs = chars.iter().filter_map(|char_info| {
+            let rect = char_info.loose_bounds().ok()?;
+            Some(RawGlyph {
+                ch: char_info.unicode_char().unwrap_or(' '),
+                x: rect.left().value,
+                y: rect.bottom().value,
+                width: rect.width().value,
+                height: rect.height().value,
+            })
+        });
+
+        Ok(coalesce_glyphs_into_spans(glyphs, chars.len()))
     }
 
     fn get_page_text_geometry(
@@ -308,7 +367,71 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 }
 
+fn validate_loaded_page_count(raw_len: PdfPageIndex) -> Result<PageCount, PdfError> {
+    let count = u32::try_from(raw_len)
+        .map_err(|_| PdfError::InvalidPdfReason("PDF page count exceeds supported range".into()))?;
+    let page_count = PageCount::new(count)
+        .ok_or_else(|| PdfError::InvalidPdfReason("PDF contains no pages".into()))?;
+    barepdf_core::validate_document_page_count(page_count)
+        .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))?;
+    Ok(page_count)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawGlyph {
+    ch: char,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn coalesce_glyphs_into_spans(
+    glyphs: impl IntoIterator<Item = RawGlyph>,
+    char_count_hint: usize,
+) -> Vec<TextSpan> {
+    let mut spans: Vec<TextSpan> = Vec::with_capacity(char_count_hint.min(1024));
+    for glyph in glyphs {
+        let can_merge = spans.last().is_some_and(|prev| {
+            let line_height = prev.height.max(glyph.height).max(1.0);
+            let same_baseline = (glyph.y - prev.y).abs() <= line_height * 0.5;
+            let prev_right = prev.x + prev.width;
+            let horizontal_gap = glyph.x - prev_right;
+            same_baseline && (-line_height * 0.25..=line_height * 1.5).contains(&horizontal_gap)
+        });
+        if can_merge {
+            if let Some(prev) = spans.last_mut() {
+                prev.text.push(glyph.ch);
+                let left = prev.x.min(glyph.x);
+                let right = (prev.x + prev.width).max(glyph.x + glyph.width);
+                let bottom = prev.y.min(glyph.y);
+                let top = (prev.y + prev.height).max(glyph.y + glyph.height);
+                prev.x = left;
+                prev.y = bottom;
+                prev.width = (right - left).max(0.0);
+                prev.height = (top - bottom).max(0.0);
+            }
+        } else {
+            let mut text = String::with_capacity(16);
+            text.push(glyph.ch);
+            spans.push(TextSpan {
+                text,
+                x: glyph.x,
+                y: glyph.y,
+                width: glyph.width,
+                height: glyph.height,
+            });
+        }
+    }
+    spans
+}
+
 fn to_pdfium_index(index: PageIndex) -> Result<i32, PdfError> {
+    if !index.is_within_limit() {
+        return Err(PdfError::InvalidPdfReason(
+            "Page index exceeds supported document page limit".into(),
+        ));
+    }
     i32::try_from(index.get()).map_err(|_| {
         PdfError::InvalidPdfReason("Page index exceeds PDFium's supported range".into())
     })
@@ -442,8 +565,13 @@ fn bookmark_page_index(bookmark: &PdfBookmark<'_>) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_glyph_count, validate_outline_limits};
-    use barepdf_core::{PageIndex, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS};
+    use super::{
+        coalesce_glyphs_into_spans, validate_glyph_count, validate_loaded_page_count,
+        validate_outline_limits, RawGlyph, ZeroizingFfiPassword, MAX_TEXT_GLYPHS_PER_PAGE,
+    };
+    use barepdf_core::limits::MAX_DOCUMENT_PAGES;
+    use barepdf_core::{PageIndex, PdfError, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS};
+    use pdfium_render::prelude::PdfPageIndex;
 
     #[test]
     fn outline_limits_accept_boundary_and_reject_excess() {
@@ -454,7 +582,101 @@ mod tests {
 
     #[test]
     fn glyph_limit_rejects_oversized_page_geometry() {
-        assert!(validate_glyph_count(PageIndex::zero(), 250_000).is_ok());
-        assert!(validate_glyph_count(PageIndex::zero(), 250_001).is_err());
+        assert!(validate_glyph_count(PageIndex::zero(), MAX_TEXT_GLYPHS_PER_PAGE).is_ok());
+        assert!(validate_glyph_count(PageIndex::zero(), MAX_TEXT_GLYPHS_PER_PAGE + 1).is_err());
+    }
+
+    #[test]
+    fn loaded_page_count_enforces_max_document_pages() {
+        assert!(validate_loaded_page_count(0).is_err());
+        let max_valid = PdfPageIndex::try_from(MAX_DOCUMENT_PAGES).expect("fits in PdfPageIndex");
+        assert_eq!(
+            validate_loaded_page_count(max_valid)
+                .expect("at limit")
+                .get(),
+            MAX_DOCUMENT_PAGES
+        );
+        let over_limit =
+            PdfPageIndex::try_from(MAX_DOCUMENT_PAGES + 1).expect("fits in PdfPageIndex");
+        assert!(matches!(
+            validate_loaded_page_count(over_limit),
+            Err(PdfError::InvalidPdfReason(_))
+        ));
+    }
+
+    #[test]
+    fn coalesce_glyphs_into_spans_buffers_adjacent_characters_per_line() {
+        let glyphs = [
+            RawGlyph {
+                ch: 'H',
+                x: 10.0,
+                y: 100.0,
+                width: 6.0,
+                height: 12.0,
+            },
+            RawGlyph {
+                ch: 'i',
+                x: 16.5,
+                y: 100.0,
+                width: 3.0,
+                height: 12.0,
+            },
+            RawGlyph {
+                ch: '!',
+                x: 20.0,
+                y: 100.0,
+                width: 3.0,
+                height: 12.0,
+            },
+            RawGlyph {
+                ch: 'N',
+                x: 10.0,
+                y: 80.0,
+                width: 7.0,
+                height: 12.0,
+            },
+            RawGlyph {
+                ch: 'e',
+                x: 17.0,
+                y: 80.0,
+                width: 5.0,
+                height: 12.0,
+            },
+            RawGlyph {
+                ch: 'w',
+                x: 22.0,
+                y: 80.0,
+                width: 7.0,
+                height: 12.0,
+            },
+        ];
+
+        let spans = coalesce_glyphs_into_spans(glyphs, glyphs.len());
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].text, "Hi!");
+        assert!((spans[0].x - 10.0).abs() < f32::EPSILON);
+        assert!((spans[0].width - 13.0).abs() < f32::EPSILON);
+        assert_eq!(spans[1].text, "New");
+        assert!((spans[1].y - 80.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ffi_password_rejects_interior_nul_and_zeroizes_on_clear() {
+        assert!(ZeroizingFfiPassword::new(None)
+            .expect("none password")
+            .is_none());
+        assert!(matches!(
+            ZeroizingFfiPassword::new(Some("bad\0password")),
+            Err(PdfError::IncorrectPassword)
+        ));
+
+        let mut ffi_password = ZeroizingFfiPassword::new(Some("top-secret-pass"))
+            .expect("valid password")
+            .expect("some password");
+        assert_eq!(ffi_password.expose(), "top-secret-pass");
+        assert_eq!(ffi_password.bytes_for_test(), b"top-secret-pass");
+        ffi_password.clear();
+        assert!(ffi_password.bytes_for_test().is_empty());
+        assert_eq!(ffi_password.expose(), "");
     }
 }

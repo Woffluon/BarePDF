@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use barepdf_core::{
@@ -55,8 +56,10 @@ impl PdfOperations {
             ));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let mut new_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+        let mut total_merged_pages: u32 = 0;
 
         for input in inputs {
             if !input.path.is_file() {
@@ -66,12 +69,23 @@ impl PdfOperations {
                 .load_pdf_from_file(input.path, input.password)
                 .map_err(|error| map_pdfium_load_error(error, input.password.is_some()))?;
             let page_count = src_doc.pages().len();
-            if page_count == 0 {
-                return Err(PdfError::InvalidPdfReason(format!(
-                    "Input file '{}' contains no pages",
-                    input.path.display()
-                )));
-            }
+            let src_pages = validate_operation_page_count(
+                page_count,
+                &format!("Input file '{}' contains no pages", input.path.display()),
+            )?;
+            total_merged_pages =
+                total_merged_pages
+                    .checked_add(src_pages.get())
+                    .ok_or_else(|| {
+                        PdfError::InvalidPdfReason(
+                            "Merged PDF page count exceeds supported range".into(),
+                        )
+                    })?;
+            let merged_count = PageCount::new(total_merged_pages)
+                .ok_or_else(|| PdfError::InvalidPdfReason("Merged PDF contains no pages".into()))?;
+            barepdf_core::validate_document_page_count(merged_count)
+                .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))?;
+
             for src_idx in 0..page_count {
                 let dest_idx = new_doc.pages().len();
                 new_doc
@@ -120,19 +134,26 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
-        let total_pages_raw = u32::try_from(src_doc.pages().len()).map_err(|_| {
-            PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
-        })?;
-        let total_pages = PageCount::new(total_pages_raw)
-            .ok_or_else(|| PdfError::InvalidPdfReason("Source PDF contains no pages".into()))?;
+        let total_pages =
+            validate_operation_page_count(src_doc.pages().len(), "Source PDF contains no pages")?;
 
         validate_page_selection(pages, total_pages)
             .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))?;
+
+        let extracted_raw = u32::try_from(pages.len()).map_err(|_| {
+            PdfError::InvalidPdfReason("Extracted page count exceeds supported range".into())
+        })?;
+        let extracted_count = PageCount::new(extracted_raw).ok_or_else(|| {
+            PdfError::InvalidPdfReason("No pages specified for extraction".into())
+        })?;
+        barepdf_core::validate_document_page_count(extracted_count)
+            .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))?;
 
         let mut new_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
         for page_idx in pages {
@@ -190,29 +211,38 @@ impl PdfOperations {
             ));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
-        if total_pages == 0 {
-            return Err(PdfError::InvalidPdfReason(
-                "Source PDF contains no pages".into(),
-            ));
-        }
+        let validated_total =
+            validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
 
-        let mut output_paths = Vec::with_capacity(total_pages as usize);
-        for i in 0..total_pages {
-            let file_name = format!("{trimmed_base}_page_{}.pdf", i + 1);
-            let out_path = output_dir.join(file_name);
-            let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
-            page_doc
-                .pages_mut()
-                .copy_page_from_document(&src_doc, i, 0)
-                .map_err(map_pdfium_error)?;
-            page_doc.save_to_file(&out_path).map_err(map_pdfium_error)?;
-            output_paths.push(out_path);
+        let mut output_paths = Vec::with_capacity(validated_total.get() as usize);
+        let split_result = (|| -> Result<(), PdfError> {
+            for i in 0..total_pages {
+                let file_name = format!("{trimmed_base}_page_{}.pdf", i + 1);
+                let out_path = output_dir.join(file_name);
+                let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+                page_doc
+                    .pages_mut()
+                    .copy_page_from_document(&src_doc, i, 0)
+                    .map_err(map_pdfium_error)?;
+                let bytes = page_doc.save_to_bytes().map_err(map_pdfium_error)?;
+                atomic_write_file(&out_path, &bytes)?;
+                output_paths.push(out_path);
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = split_result {
+            for created_path in &output_paths {
+                let _ = std::fs::remove_file(created_path);
+            }
+            return Err(error);
         }
 
         Ok(output_paths)
@@ -249,16 +279,14 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
-        let total_pages_raw = u32::try_from(src_doc.pages().len()).map_err(|_| {
-            PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
-        })?;
-        let total_pages = PageCount::new(total_pages_raw)
-            .ok_or_else(|| PdfError::InvalidPdfReason("Source PDF contains no pages".into()))?;
+        let total_pages =
+            validate_operation_page_count(src_doc.pages().len(), "Source PDF contains no pages")?;
 
         let retained_pages = pages_to_remove_to_retained_pages(total_pages, pages_to_remove)
             .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))?;
@@ -307,20 +335,15 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
-        if total_pages <= 0 {
-            return Err(PdfError::InvalidPdfReason(
-                "Source PDF contains no pages".into(),
-            ));
-        }
-        let total_pages_u32 = u32::try_from(total_pages).map_err(|_| {
-            PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
-        })?;
+        let total_pages_u32 =
+            validate_operation_page_count(total_pages, "Source PDF contains no pages")?.get();
 
         for (page_idx, _) in rotations {
             if page_idx.get() >= total_pages_u32 {
@@ -386,20 +409,15 @@ impl PdfOperations {
             ));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = src_doc.pages().len();
-        if total_pages <= 0 {
-            return Err(PdfError::InvalidPdfReason(
-                "Source PDF contains no pages".into(),
-            ));
-        }
-        let total_pages_u32 = u32::try_from(total_pages).map_err(|_| {
-            PdfError::InvalidPdfReason("PDF page count exceeds supported range".into())
-        })?;
+        let total_pages_u32 =
+            validate_operation_page_count(total_pages, "Source PDF contains no pages")?.get();
 
         if new_order.len() != total_pages as usize {
             return Err(PdfError::InvalidPdfReason(format!(
@@ -469,17 +487,14 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(source, password)
             .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
 
         let total_pages = doc.pages().len();
-        if total_pages <= 0 {
-            return Err(PdfError::InvalidPdfReason(
-                "Source PDF contains no pages".into(),
-            ));
-        }
+        let _ = validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
 
         for p_idx in 0..total_pages {
             let Ok(p_u32) = u32::try_from(p_idx) else {
@@ -535,7 +550,7 @@ impl PdfOperations {
                     path.line_to(PdfPoints::new(x0 + 0.5), PdfPoints::new(y0 + 0.5))
                         .map_err(map_pdfium_error)?;
                 } else {
-                    for &(nx, ny) in &stroke.points[1..] {
+                    for &(nx, ny) in stroke.points.iter().skip(1) {
                         path.line_to(
                             PdfPoints::new(nx * page_w),
                             PdfPoints::new((1.0 - ny) * page_h),
@@ -575,7 +590,7 @@ impl PdfOperations {
                                 path.line_to(PdfPoints::new(x0 + 0.5), PdfPoints::new(y0 + 0.5))
                                     .map_err(map_pdfium_error)?;
                             } else {
-                                for &(px, py) in &polyline[1..] {
+                                for &(px, py) in polyline.iter().skip(1) {
                                     path.line_to(
                                         PdfPoints::new(box_x + px * box_w),
                                         PdfPoints::new(box_y_bottom + (1.0 - py) * box_h),
@@ -593,17 +608,12 @@ impl PdfOperations {
                         height,
                         rgba,
                     } => {
-                        let w_i32 = i32::try_from(*width).map_err(|_| {
-                            PdfError::InvalidPdfReason("signature image width out of bounds".into())
-                        })?;
-                        let h_i32 = i32::try_from(*height).map_err(|_| {
-                            PdfError::InvalidPdfReason(
-                                "signature image height out of bounds".into(),
-                            )
-                        })?;
+                        let (w_i32, h_i32) = validate_signature_image(*width, *height, rgba)?;
                         let mut bgra = Vec::with_capacity(rgba.len());
                         for px in rgba.chunks_exact(4) {
-                            bgra.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+                            if let &[r, g, b, a] = px {
+                                bgra.extend_from_slice(&[b, g, r, a]);
+                            }
                         }
                         let bitmap =
                             PdfBitmap::from_bytes(w_i32, h_i32, PdfBitmapFormat::BGRA, &mut bgra)
@@ -626,17 +636,132 @@ impl PdfOperations {
         }
 
         let bytes = doc.save_to_bytes().map_err(map_pdfium_error)?;
-        std::fs::write(output, bytes).map_err(|error| PdfError::FileAccess {
-            source: Arc::new(error),
-        })?;
+        drop(doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 }
 
-fn to_pdfium_page_index(index: PageIndex) -> Result<PdfPageIndex, PdfError> {
-    PdfPageIndex::try_from(index.get()).map_err(|_| {
+fn validate_operation_page_count(
+    raw_len: PdfPageIndex,
+    empty_reason: &str,
+) -> Result<PageCount, PdfError> {
+    let count = u32::try_from(raw_len)
+        .map_err(|_| PdfError::InvalidPdfReason("PDF page count exceeds supported range".into()))?;
+    let page_count =
+        PageCount::new(count).ok_or_else(|| PdfError::InvalidPdfReason(empty_reason.into()))?;
+    barepdf_core::validate_document_page_count(page_count)
+        .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))?;
+    Ok(page_count)
+}
+
+fn validate_signature_image(width: u32, height: u32, rgba: &[u8]) -> Result<(i32, i32), PdfError> {
+    let max_dim = barepdf_core::limits::MAX_SAFE_RENDER_DIMENSION;
+    if width == 0 || height == 0 || width > max_dim || height > max_dim {
+        return Err(PdfError::InvalidPdfReason(format!(
+            "signature image dimensions {width}x{height} are outside allowed bounds 1..={max_dim}"
+        )));
+    }
+    let expected_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| PdfError::InvalidPdfReason("signature image buffer size overflow".into()))?;
+    if rgba.len() != expected_bytes {
+        return Err(PdfError::InvalidPdfReason(format!(
+            "signature image RGBA buffer length ({}) does not match {width}x{height}x4 ({expected_bytes})",
+            rgba.len()
+        )));
+    }
+    let w_i32 = i32::try_from(width)
+        .map_err(|_| PdfError::InvalidPdfReason("signature image width out of bounds".into()))?;
+    let h_i32 = i32::try_from(height)
+        .map_err(|_| PdfError::InvalidPdfReason("signature image height out of bounds".into()))?;
+    Ok((w_i32, h_i32))
+}
+
+static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn atomic_write_file(output: &Path, bytes: &[u8]) -> Result<(), PdfError> {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = output
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("barepdf_save.pdf");
+
+    let mut last_error = None;
+    for _ in 0..100 {
+        let seq = ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let temp_name = format!(".{file_name}.tmp-{pid}-{seq}");
+        let temp_path = parent.join(temp_name);
+
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_error = Some(err);
+                continue;
+            }
+            Err(err) => {
+                return Err(PdfError::FileAccess {
+                    source: Arc::new(err),
+                })
+            }
+        };
+
+        let result = (|| -> Result<(), std::io::Error> {
+            use std::io::Write;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temp_path, output)?;
+            Ok(())
+        })();
+
+        if let Err(err) = result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(PdfError::FileAccess {
+                source: Arc::new(err),
+            });
+        }
+
+        return Ok(());
+    }
+
+    Err(PdfError::FileAccess {
+        source: Arc::new(last_error.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "unable to allocate unique temporary file for atomic write",
+            )
+        })),
+    })
+}
+
+fn to_pdfium_raw_page_index(raw: u32) -> Result<PdfPageIndex, PdfError> {
+    if raw >= barepdf_core::limits::MAX_DOCUMENT_PAGES {
+        return Err(PdfError::InvalidPdfReason(
+            "Page index exceeds supported document page limit".into(),
+        ));
+    }
+    PdfPageIndex::try_from(raw).map_err(|_| {
         PdfError::InvalidPdfReason("Page index exceeds PDFium's supported range".into())
     })
+}
+
+fn to_pdfium_page_index(index: PageIndex) -> Result<PdfPageIndex, PdfError> {
+    if !index.is_within_limit() {
+        return Err(PdfError::InvalidPdfReason(
+            "Page index exceeds supported document page limit".into(),
+        ));
+    }
+    to_pdfium_raw_page_index(index.get())
 }
 
 fn to_pdfium_rotation(rotation: Rotation) -> PdfPageRenderRotation {
@@ -690,6 +815,7 @@ fn map_pdfium_load_error(error: PdfiumError, password_supplied: bool) -> PdfErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barepdf_core::limits::{MAX_DOCUMENT_PAGES, MAX_SAFE_RENDER_DIMENSION};
     use barepdf_core::{PageIndex, Rotation};
 
     #[test]
@@ -716,9 +842,41 @@ mod tests {
     fn test_to_pdfium_page_index_bounds() {
         assert_eq!(to_pdfium_page_index(PageIndex::zero()).unwrap(), 0);
         assert_eq!(to_pdfium_page_index(PageIndex::from_raw(100)).unwrap(), 100);
-        // If index exceeds i32::MAX (or PdfPageIndex range)
-        let huge_index = PageIndex::from_raw(u32::MAX);
-        assert!(to_pdfium_page_index(huge_index).is_err());
+        // PageIndex::from_raw clamps to MAX_DOCUMENT_PAGES - 1, while raw conversion rejects >= MAX_DOCUMENT_PAGES
+        let clamped_index = PageIndex::from_raw(u32::MAX);
+        assert_eq!(clamped_index.get(), MAX_DOCUMENT_PAGES - 1);
+        assert!(to_pdfium_page_index(clamped_index).is_ok());
+        assert!(to_pdfium_raw_page_index(MAX_DOCUMENT_PAGES).is_err());
+        assert!(to_pdfium_raw_page_index(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn validate_operation_page_count_enforces_max_document_pages() {
+        assert!(validate_operation_page_count(0, "empty").is_err());
+        let max_valid = PdfPageIndex::try_from(MAX_DOCUMENT_PAGES).expect("fits in PdfPageIndex");
+        assert_eq!(
+            validate_operation_page_count(max_valid, "empty")
+                .expect("at limit")
+                .get(),
+            MAX_DOCUMENT_PAGES
+        );
+        let over_limit =
+            PdfPageIndex::try_from(MAX_DOCUMENT_PAGES + 1).expect("fits in PdfPageIndex");
+        assert!(validate_operation_page_count(over_limit, "empty").is_err());
+    }
+
+    #[test]
+    fn validate_signature_image_rejects_zero_oversized_or_mismatched_buffers() {
+        assert!(validate_signature_image(0, 2, &[0; 8]).is_err());
+        assert!(validate_signature_image(2, 0, &[0; 8]).is_err());
+        assert!(validate_signature_image(MAX_SAFE_RENDER_DIMENSION + 1, 1, &[0; 4]).is_err());
+        assert!(validate_signature_image(1, MAX_SAFE_RENDER_DIMENSION + 1, &[0; 4]).is_err());
+        assert!(validate_signature_image(2, 2, &[0; 12]).is_err());
+        assert!(validate_signature_image(2, 2, &[0; 20]).is_err());
+        assert_eq!(
+            validate_signature_image(2, 3, &[0; 24]).expect("valid 2x3 RGBA"),
+            (2, 3)
+        );
     }
 
     #[test]

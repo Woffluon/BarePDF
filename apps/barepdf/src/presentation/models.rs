@@ -127,6 +127,15 @@ pub(crate) fn refresh_annotation_overlays(app: &AppState, window: &AppWindow) {
         window.set_second_page_annotation_overlay(Image::default());
     }
 
+    if let Some(stroke) = &app.active_stroke {
+        let stroke_page = stroke.page.get();
+        window.set_current_annotation_page_index(stroke_page as i32);
+        let overlay = render_page_annotation_overlay(doc_annotations, Some(stroke), stroke_page);
+        window.set_current_page_has_annotation_overlay(overlay.size().width > 0);
+        window.set_current_page_annotation_overlay(overlay);
+        return;
+    }
+
     if app.viewing_mode == ViewingMode::ContinuousVertical
         && (has_unsaved || app.active_stroke.is_some())
     {
@@ -390,11 +399,12 @@ fn blend_pixel(bytes: &mut [u8], width: u32, x: u32, y: u32, color: (u8, u8, u8,
 }
 
 pub(crate) fn refresh_thumbnail_model(app: &mut AppState, window: &AppWindow) {
-    let model = VecModel::default();
+    let count = app.page_count() as usize;
+    let mut items = Vec::with_capacity(count);
     for index in 0..app.page_count() {
-        model.push(thumbnail_item(app, index));
+        items.push(thumbnail_item(app, index));
     }
-    window.set_thumbnail_items(ModelRc::new(model));
+    window.set_thumbnail_items(ModelRc::new(VecModel::from(items)));
 }
 
 pub(crate) fn refresh_tool_thumbnails(
@@ -403,7 +413,8 @@ pub(crate) fn refresh_tool_thumbnails(
     selected_range: &str,
 ) {
     let selected = super::callbacks::selected_tool_pages(selected_range, app.page_count());
-    let model = VecModel::default();
+    let count = app.page_count() as usize;
+    let mut items = Vec::with_capacity(count);
     for index in 0..app.page_count() {
         let (width, height) = app
             .page_dimensions
@@ -416,7 +427,7 @@ pub(crate) fn refresh_tool_thumbnails(
             app.thumbnail_images
                 .get(document, index, RenderKind::Thumbnail)
         });
-        model.push(ThumbnailItem {
+        items.push(ThumbnailItem {
             page_index: index as i32,
             page_number: thumbnail_page_label(app.preferences.language.resolve(), index),
             width: display_width,
@@ -426,7 +437,7 @@ pub(crate) fn refresh_tool_thumbnails(
             is_selected: selected.contains(&(index + 1)),
         });
     }
-    window.set_thumbnail_items(ModelRc::new(model));
+    window.set_thumbnail_items(ModelRc::new(VecModel::from(items)));
 }
 
 pub(crate) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
@@ -437,7 +448,7 @@ pub(crate) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
         .tabs()
         .iter()
         .map(|tab| TabItem {
-            id: i32::try_from(tab.id.get()).unwrap_or(i32::MAX),
+            id: tab.id.to_slint_id(),
             title: SharedString::from(tab.title.as_str()),
             is_active: active == Some(tab.id),
             is_loading: tab.is_loading(),

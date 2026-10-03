@@ -83,6 +83,8 @@ struct UpdateManifest {
     release_url: String,
     #[serde(default)]
     release_notes: String,
+    #[serde(default)]
+    expires_at: Option<u64>,
     installer: InstallerManifest,
 }
 
@@ -97,7 +99,7 @@ pub(super) fn check_for_update(
     agent: &Agent,
     cancelled: &AtomicBool,
 ) -> Result<Option<VerifiedUpdate>, UpdateFailure> {
-    let mut response = get_with_redirects(
+    let (mut response, manifest_url) = get_with_redirects(
         agent,
         METADATA_URL,
         RequestTarget::Metadata,
@@ -117,13 +119,32 @@ pub(super) fn check_for_update(
     )?;
     validate_metadata_size(&manifest)?;
     super::transport::check_cancelled(cancelled)?;
-    let mut signature_response = get_with_redirects(
+
+    let signature_url = if let Some(tag) = extract_release_tag(&manifest_url) {
+        format!("https://github.com/Woffluon/BarePDF/releases/download/{tag}/latest.json.sig")
+    } else {
+        METADATA_SIGNATURE_URL.to_owned()
+    };
+
+    let (mut signature_response, signature_url_final) = get_with_redirects(
         agent,
-        METADATA_SIGNATURE_URL,
+        &signature_url,
         RequestTarget::Metadata,
         METADATA_TIMEOUT,
         cancelled,
     )?;
+
+    if let (Some(tag1), Some(tag2)) = (
+        extract_release_tag(&manifest_url),
+        extract_release_tag(&signature_url_final),
+    ) {
+        if tag1 != tag2 {
+            return Err(UpdateFailure::Rejected(
+                "Update metadata and signature version skew detected",
+            ));
+        }
+    }
+
     let mut reader = signature_response
         .body_mut()
         .with_config()
@@ -136,7 +157,22 @@ pub(super) fn check_for_update(
         "Update signature body could not be read",
     )?;
     super::transport::check_cancelled(cancelled)?;
-    verify_then_parse_manifest(&manifest, &signature, CURRENT_VERSION)
+    let update = verify_then_parse_manifest(&manifest, &signature, CURRENT_VERSION)?;
+    if let (Some(verified), Some(tag)) = (update.as_ref(), extract_release_tag(&manifest_url)) {
+        let expected_tag = format!("v{}", verified.version());
+        if tag != expected_tag {
+            return Err(UpdateFailure::Rejected(
+                "Update metadata release tag does not match manifest version",
+            ));
+        }
+    }
+    Ok(update)
+}
+
+fn extract_release_tag(url: &str) -> Option<&str> {
+    let remainder = url.strip_prefix("https://github.com/Woffluon/BarePDF/releases/download/")?;
+    let (tag, _) = remainder.split_once('/')?;
+    Some(tag)
 }
 
 fn read_capped_body<R: Read>(
@@ -255,6 +291,15 @@ pub(super) fn parse_manifest(
         return Err(UpdateFailure::Rejected(
             "Unsupported update metadata version",
         ));
+    }
+    if let Some(expires_at) = manifest.expires_at {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        if now > expires_at {
+            return Err(UpdateFailure::Rejected("Update manifest has expired"));
+        }
     }
     let current = Version::parse(current_version).map_err(|source| UpdateFailure::Version {
         operation: "Invalid application version",
@@ -496,5 +541,44 @@ mod tests {
             "1.1.0"
         )
         .is_err());
+    }
+
+    #[test]
+    fn expired_manifest_is_rejected() {
+        let hash = "a".repeat(64);
+        let expired_json = format!(
+            r#"{{
+                "schemaVersion": 1,
+                "version": "1.2.0",
+                "releaseUrl": "https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0",
+                "expiresAt": 1000,
+                "installer": {{
+                    "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe",
+                    "sha256": "{hash}",
+                    "size": 1024
+                }}
+            }}"#
+        );
+        let result = parse_manifest(&expired_json, "1.1.0");
+        assert!(matches!(
+            result,
+            Err(UpdateFailure::Rejected("Update manifest has expired"))
+        ));
+
+        let future_json = format!(
+            r#"{{
+                "schemaVersion": 1,
+                "version": "1.2.0",
+                "releaseUrl": "https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0",
+                "expiresAt": 9999999999,
+                "installer": {{
+                    "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe",
+                    "sha256": "{hash}",
+                    "size": 1024
+                }}
+            }}"#
+        );
+        let result = parse_manifest(&future_json, "1.1.0");
+        assert!(result.is_ok());
     }
 }

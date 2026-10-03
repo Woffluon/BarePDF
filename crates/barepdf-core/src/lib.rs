@@ -12,8 +12,8 @@ pub mod types;
 
 pub use error::PdfError;
 pub use layout::{
-    calculate_page_pairings, compute_target_dimensions, ContinuousLayout, PageLayoutBox,
-    PagePairing, ScrollAnchor,
+    calculate_page_pairings, compute_target_dimensions, ContinuousLayout, DocumentLayout,
+    PageLayoutBox, PagePairing, ScrollAnchor,
 };
 pub use limits::{
     validate_document_page_count, validate_tab_count, ResourceLimitError, MAX_DOCUMENT_PAGES,

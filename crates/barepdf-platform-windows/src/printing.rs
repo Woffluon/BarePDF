@@ -51,8 +51,25 @@ impl WindowsPrinterDialog {
     pub const MAX_DPI: u16 = 600;
     const MIN_DPI: u16 = 1;
 
+    /// Creates a new printer dialog anchored to the specified owner window.
+    ///
+    /// If `owner` is non-null and not a valid live window (checked via `IsWindow`),
+    /// it safely defaults to `std::ptr::null_mut()` (parentless dialog) to prevent passing invalid
+    /// window handles into the Win32 common dialog subsystem.
+    #[allow(
+        clippy::not_unsafe_ptr_arg_deref,
+        reason = "HWND handle is validated with IsWindow before use and safely falls back to null"
+    )]
     #[must_use]
-    pub const fn new(owner: HWND) -> Self {
+    pub fn new(owner: HWND) -> Self {
+        // SAFETY: `IsWindow` safely inspects a handle value without dereferencing it in Rust.
+        let is_valid_window = !owner.is_null()
+            && unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(owner) } != 0;
+        let owner = if is_valid_window {
+            owner
+        } else {
+            std::ptr::null_mut()
+        };
         Self {
             owner,
             target_dpi: Self::DEFAULT_DPI,
@@ -224,6 +241,14 @@ mod tests {
             WindowsPrinterDialog::new(std::ptr::null_mut()).with_target_dpi(601),
             Err(PrintError::InvalidDpi(601))
         ));
+    }
+
+    #[test]
+    fn invalid_hwnd_is_sanitized_to_null() {
+        use windows_sys::Win32::Foundation::HWND;
+        let invalid_hwnd = 0xdeadbeef as HWND;
+        let dialog = WindowsPrinterDialog::new(invalid_hwnd);
+        assert_eq!(dialog.owner, std::ptr::null_mut());
     }
 
     #[test]

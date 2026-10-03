@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const COMMAND_CAPACITY: usize = 1;
-const EVENT_CAPACITY: usize = 1;
+const EVENT_CAPACITY: usize = 16;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 const SHUTDOWN_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 const POINTS_PER_INCH: f64 = 72.0;
@@ -21,6 +21,7 @@ const MAX_PRINT_BITMAP_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) struct PrintRequest {
     pub(crate) id: PrintJobId,
     pub(crate) path: PathBuf,
+    pub(crate) password: Option<String>,
     pub(crate) title: String,
     pub(crate) range: PrintRange,
     pub(crate) copies: Copies,
@@ -164,6 +165,8 @@ impl PrintWorker {
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.try_send(PrintCommand::Shutdown);
         }
+        while self.terminal_receiver.try_recv().is_ok() {}
+        while self.progress_receiver.try_recv().is_ok() {}
         let wait_timeout = if self.shutdown_timed_out {
             SHUTDOWN_RETRY_TIMEOUT
         } else {
@@ -177,6 +180,8 @@ impl PrintWorker {
                 .join()
                 .map_err(|_| PrintWorkerError::Panicked),
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                while self.terminal_receiver.try_recv().is_ok() {}
+                while self.progress_receiver.try_recv().is_ok() {}
                 self.shutdown_timed_out = true;
                 Err(PrintWorkerError::ShutdownTimeout)
             }
@@ -201,6 +206,42 @@ impl Drop for PrintWorker {
     }
 }
 
+fn send_terminal_event(
+    terminal: &SyncSender<PrintEvent>,
+    mut event: PrintEvent,
+    shutdown: &AtomicBool,
+) {
+    if shutdown.load(Ordering::Acquire) {
+        let _ = terminal.try_send(event);
+        return;
+    }
+    match terminal.try_send(event) {
+        Ok(()) => {}
+        Err(TrySendError::Disconnected(_)) => {}
+        Err(TrySendError::Full(returned)) => {
+            event = returned;
+            let start = std::time::Instant::now();
+            loop {
+                if shutdown.load(Ordering::Acquire) {
+                    let _ = terminal.try_send(event);
+                    return;
+                }
+                match terminal.try_send(event) {
+                    Ok(()) => return,
+                    Err(TrySendError::Disconnected(_)) => return,
+                    Err(TrySendError::Full(returned)) => {
+                        event = returned;
+                        if start.elapsed() > Duration::from_millis(500) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn worker_loop(
     factory: BackendFactory,
     commands: &Receiver<PrintCommand>,
@@ -216,34 +257,45 @@ fn worker_loop(
         };
         match command {
             PrintCommand::Start(request) => {
-                let event = match backend.as_ref() {
-                    Some(backend) => run_job(backend.as_ref(), request, progress, shutdown),
-                    None => match factory.take() {
-                        Some(factory) => match factory() {
-                            Ok(created_backend) => {
-                                backend = Some(created_backend);
-                                match backend.as_ref() {
-                                    Some(backend) => {
-                                        run_job(backend.as_ref(), request, progress, shutdown)
+                let job_id = request.id;
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        match backend.as_ref() {
+                            Some(backend) => run_job(backend.as_ref(), request, progress, shutdown),
+                            None => match factory.take() {
+                                Some(factory) => match factory() {
+                                    Ok(created_backend) => {
+                                        backend = Some(created_backend);
+                                        match backend.as_ref() {
+                                            Some(backend) => run_job(
+                                                backend.as_ref(),
+                                                request,
+                                                progress,
+                                                shutdown,
+                                            ),
+                                            None => PrintEvent::Failed {
+                                                job_id,
+                                                message: "print backend is unavailable".into(),
+                                            },
+                                        }
                                     }
-                                    None => PrintEvent::Failed {
-                                        job_id: request.id,
-                                        message: "print backend is unavailable".into(),
-                                    },
-                                }
-                            }
-                            Err(message) => PrintEvent::Failed {
-                                job_id: request.id,
-                                message,
+                                    Err(message) => PrintEvent::Failed { job_id, message },
+                                },
+                                None => PrintEvent::Failed {
+                                    job_id,
+                                    message: "print backend is unavailable".into(),
+                                },
                             },
-                        },
-                        None => PrintEvent::Failed {
-                            job_id: request.id,
-                            message: "print backend is unavailable".into(),
-                        },
+                        }
+                    }));
+                let event = match outcome {
+                    Ok(event) => event,
+                    Err(_) => PrintEvent::Failed {
+                        job_id,
+                        message: "print worker panicked during execution".to_string(),
                     },
                 };
-                let _ = terminal.send(event);
+                send_terminal_event(terminal, event, shutdown);
             }
             PrintCommand::Shutdown => break,
         }
@@ -277,7 +329,7 @@ fn execute_job(
 ) -> Result<(), JobFailure> {
     check_cancel(request, shutdown)?;
     let document = backend
-        .open_path(&request.path, None)
+        .open_path(&request.path, request.password.as_deref())
         .map_err(|error| pdf_failure(&error))?;
     let page_count = document.page_count().map_err(|error| pdf_failure(&error))?;
     PrintRange::new(request.range.first(), request.range.last(), page_count)
@@ -375,12 +427,26 @@ fn rgba_to_bgra(pixels: &mut [u8]) {
     }
 }
 
+fn format_error_with_source(error: &(impl std::error::Error + ?Sized)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_str = cause.to_string();
+        if !message.contains(&cause_str) {
+            message.push_str(": ");
+            message.push_str(&cause_str);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 fn pdf_failure(error: &PdfError) -> JobFailure {
-    JobFailure::Failed(error.to_string())
+    JobFailure::Failed(format_error_with_source(error))
 }
 
 fn print_failure(error: &PrintError) -> JobFailure {
-    JobFailure::Failed(error.to_string())
+    JobFailure::Failed(format_error_with_source(error))
 }
 
 #[cfg(test)]
@@ -400,6 +466,7 @@ mod tests {
         spool_pointers: Vec<usize>,
         began: usize,
         finished: usize,
+        opened_password: Option<String>,
     }
 
     struct FakeBackend {
@@ -411,8 +478,12 @@ mod tests {
         fn open_path(
             &self,
             _path: &Path,
-            _password: Option<&str>,
+            password: Option<&str>,
         ) -> Result<Box<dyn PdfDocument>, PdfError> {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .opened_password = password.map(str::to_string);
             Ok(Box::new(FakeDocument {
                 state: self.state.clone(),
                 page_count: self.page_count,
@@ -455,7 +526,10 @@ mod tests {
             })?;
             let pixels = vec![page, 2, 3, 255];
             let pointer = pixels.as_ptr() as usize;
-            let mut state = self.state.lock().expect("fake state lock");
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.rendered.push(page_index.get());
             state.render_pointers.push(pointer);
             drop(state);
@@ -511,12 +585,18 @@ mod tests {
                     code: 5,
                 });
             }
-            self.state.lock().expect("fake state lock").began += 1;
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .began += 1;
             Ok(())
         }
 
         fn write_page(&mut self, page: PrintPage<'_>) -> Result<(), PrintError> {
-            let mut state = self.state.lock().expect("fake state lock");
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.spooled.push(page.bgra()[2]);
             state.spool_pointers.push(page.bgra().as_ptr() as usize);
             drop(state);
@@ -527,7 +607,10 @@ mod tests {
         }
 
         fn finish(self: Box<Self>) -> Result<(), PrintError> {
-            self.state.lock().expect("fake state lock").finished += 1;
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .finished += 1;
             Ok(())
         }
     }
@@ -549,6 +632,7 @@ mod tests {
         PrintRequest {
             id: id(),
             path: PathBuf::from("fake.pdf"),
+            password: None,
             title: "fake".into(),
             range,
             copies,
@@ -587,7 +671,9 @@ mod tests {
             &AtomicBool::new(false)
         )
         .is_ok());
-        let state = state.lock().expect("fake state lock");
+        let state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(state.rendered, vec![1, 2, 1, 2]);
         assert_eq!(state.spooled, vec![1, 2, 1, 2]);
         assert_eq!(state.render_pointers, state.spool_pointers);
@@ -650,7 +736,11 @@ mod tests {
             ),
             Err(JobFailure::Failed(_))
         ));
-        assert!(state.lock().expect("fake state lock").rendered.is_empty());
+        assert!(state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rendered
+            .is_empty());
     }
 
     #[test]
@@ -685,7 +775,9 @@ mod tests {
             ),
             Err(JobFailure::Cancelled)
         ));
-        let state = state.lock().expect("fake state lock");
+        let state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(state.rendered, vec![0]);
         assert_eq!(state.spooled, vec![0]);
         assert_eq!(state.finished, 0);
@@ -738,6 +830,7 @@ mod tests {
         let request = PrintRequest {
             id: id(),
             path: PathBuf::from("fake.pdf"),
+            password: None,
             title: "fake".into(),
             range: PrintRange::all(count(1)),
             copies: Copies::default(),
@@ -774,5 +867,191 @@ mod tests {
         assert_eq!(factory_calls.load(Ordering::Acquire), 0);
         assert!(worker.shutdown().is_ok());
         assert_eq!(factory_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn print_worker_recovers_from_panic_and_accepts_next_job() {
+        use std::sync::atomic::AtomicUsize;
+        let panic_count = Arc::new(AtomicUsize::new(0));
+        let worker_panics = panic_count.clone();
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let backend_state = state.clone();
+
+        let mut worker = PrintWorker::spawn_with_factory(Box::new(move || {
+            let backend_state = backend_state.clone();
+            let panics = worker_panics.clone();
+            struct PanickingBackend {
+                state: Arc<Mutex<FakeState>>,
+                panics: Arc<AtomicUsize>,
+            }
+            impl PdfBackend for PanickingBackend {
+                fn open_path(
+                    &self,
+                    _path: &Path,
+                    _password: Option<&str>,
+                ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                    if self.panics.fetch_add(1, Ordering::SeqCst) == 0 {
+                        panic!("intentional print backend panic");
+                    }
+                    Ok(Box::new(FakeDocument {
+                        state: self.state.clone(),
+                        page_count: count(1),
+                    }))
+                }
+                fn open_bytes(
+                    &self,
+                    _bytes: Vec<u8>,
+                    _password: Option<&str>,
+                ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                    Err(PdfError::InvalidPdfReason("unused".into()))
+                }
+            }
+            Ok(Box::new(PanickingBackend {
+                state: backend_state,
+                panics,
+            }))
+        }))
+        .expect("test worker should start");
+
+        let job1_id = PrintJobId::new(10).unwrap();
+        let request1 = PrintRequest {
+            id: job1_id,
+            path: PathBuf::from("job1.pdf"),
+            password: None,
+            title: "job1".into(),
+            range: PrintRange::all(count(1)),
+            copies: Copies::default(),
+            sink: Some(Box::new(FakeSink {
+                id: job1_id,
+                dpi: 300,
+                state: state.clone(),
+                fail_begin: false,
+                cancel_after_write: None,
+            })),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        worker.submit(request1).expect("first job queues");
+        let event1 = worker
+            .terminal_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("event received");
+        assert!(matches!(
+            event1,
+            PrintEvent::Failed { job_id, ref message }
+                if job_id == job1_id && message.contains("panicked")
+        ));
+
+        // Submit second job to prove worker is not dead/zombie and can process subsequent jobs
+        let job2_id = PrintJobId::new(11).unwrap();
+        let request2 = PrintRequest {
+            id: job2_id,
+            path: PathBuf::from("job2.pdf"),
+            password: None,
+            title: "job2".into(),
+            range: PrintRange::all(count(1)),
+            copies: Copies::default(),
+            sink: Some(Box::new(FakeSink {
+                id: job2_id,
+                dpi: 300,
+                state: state.clone(),
+                fail_begin: false,
+                cancel_after_write: None,
+            })),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        worker.submit(request2).expect("second job queues");
+        let event2 = worker
+            .terminal_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("event received");
+        assert!(matches!(
+            event2,
+            PrintEvent::Finished { job_id } if job_id == job2_id
+        ));
+
+        assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
+    fn print_worker_passes_password_to_backend_open_path() {
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let backend_state = state.clone();
+        let mut worker = PrintWorker::spawn_with_factory(Box::new(move || {
+            Ok(Box::new(FakeBackend {
+                state: backend_state,
+                page_count: count(1),
+            }))
+        }))
+        .expect("test worker starts");
+
+        let job_id = PrintJobId::new(20).unwrap();
+        let request = PrintRequest {
+            id: job_id,
+            path: PathBuf::from("protected.pdf"),
+            password: Some("secret123".to_string()),
+            title: "protected".into(),
+            range: PrintRange::all(count(1)),
+            copies: Copies::default(),
+            sink: Some(Box::new(FakeSink {
+                id: job_id,
+                dpi: 300,
+                state: state.clone(),
+                fail_begin: false,
+                cancel_after_write: None,
+            })),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        worker.submit(request).expect("job queues");
+        let event = worker
+            .terminal_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("terminal event");
+        assert!(matches!(event, PrintEvent::Finished { job_id: id } if id == job_id));
+        assert_eq!(
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .opened_password
+                .as_deref(),
+            Some("secret123")
+        );
+
+        assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
+    fn print_worker_shutdown_does_not_deadlock_when_event_channel_is_full() {
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let backend_state = state.clone();
+        let mut worker = PrintWorker::spawn_with_factory(Box::new(move || {
+            Ok(Box::new(FakeBackend {
+                state: backend_state,
+                page_count: count(1),
+            }))
+        }))
+        .expect("test worker starts");
+
+        let job_id = PrintJobId::new(30).unwrap();
+        let request = PrintRequest {
+            id: job_id,
+            path: PathBuf::from("unconsumed.pdf"),
+            password: None,
+            title: "unconsumed".into(),
+            range: PrintRange::all(count(1)),
+            copies: Copies::default(),
+            sink: Some(Box::new(FakeSink {
+                id: job_id,
+                dpi: 300,
+                state: state.clone(),
+                fail_begin: false,
+                cancel_after_write: None,
+            })),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        worker.submit(request).expect("job queues");
+        // Give time for job to finish and push event into terminal channel
+        std::thread::sleep(Duration::from_millis(50));
+        // Do NOT read terminal_receiver; immediately shut down
+        assert!(worker.shutdown().is_ok());
     }
 }

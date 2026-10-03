@@ -272,7 +272,8 @@ $RequiredStagedFiles = @(
     "BarePDF.Thumbnail.dll",
     "pdfium.dll",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
 )
 $StagedDirectory = Join-Path $RepoRoot "target\release\staged"
 foreach ($Name in $RequiredStagedFiles) {

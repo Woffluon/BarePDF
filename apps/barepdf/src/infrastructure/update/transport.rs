@@ -40,7 +40,7 @@ pub(super) fn get_with_redirects(
     target: RequestTarget<'_>,
     timeout: Duration,
     cancelled: &AtomicBool,
-) -> Result<ureq::http::Response<ureq::Body>, UpdateFailure> {
+) -> Result<(ureq::http::Response<ureq::Body>, String), UpdateFailure> {
     let mut url = initial_url.to_owned();
     let started = Instant::now();
     for redirect_count in 0..=MAX_REDIRECTS {
@@ -66,7 +66,7 @@ pub(super) fn get_with_redirects(
             })?;
         check_cancelled(cancelled)?;
         if !response.status().is_redirection() {
-            return Ok(response);
+            return Ok((response, url));
         }
         let location = response
             .headers()
@@ -164,7 +164,8 @@ fn metadata_path_is_approved(path: &str) -> bool {
         return false;
     };
     matches!(filename, "latest.json" | "latest.json.sig")
-        && Version::parse(version).is_ok_and(|version| version.pre.is_empty())
+        && Version::parse(version)
+            .is_ok_and(|version| version.pre.is_empty() && version.build.is_empty())
 }
 
 #[cfg(test)]
@@ -181,6 +182,11 @@ mod tests {
             RequestTarget::Metadata
         )
         .is_ok());
+        assert!(validate_request_url(
+            "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0+build1/latest.json",
+            RequestTarget::Metadata
+        )
+        .is_err());
         assert!(validate_request_url(
             "https://release-assets.githubusercontent.com/github-production-release-asset/123/abc?token=signed",
             RequestTarget::Metadata

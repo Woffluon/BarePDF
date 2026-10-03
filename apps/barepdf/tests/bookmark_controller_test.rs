@@ -1,9 +1,6 @@
-#[path = "../src/controllers/bookmark_controller.rs"]
-mod bookmark_controller;
-
+use barepdf::controllers::bookmark_controller::BookmarkController;
 use barepdf_core::preferences::BookmarkEntry;
 use barepdf_core::types::PageIndex;
-use bookmark_controller::BookmarkController;
 
 #[test]
 fn toggle_adds_bookmark_when_missing() {
@@ -40,7 +37,7 @@ fn toggle_sorts_bookmarks_by_page() {
         created_unix: 0,
     }];
     let page = PageIndex::from_raw(2);
-    BookmarkController::toggle_bookmark(&mut bookmarks, page, Some("Page 2".to_string()));
+    let _ = BookmarkController::toggle_bookmark(&mut bookmarks, page, Some("Page 2".to_string()));
 
     assert_eq!(bookmarks.len(), 2);
     assert_eq!(bookmarks[0].page_index, 2);

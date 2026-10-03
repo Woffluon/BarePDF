@@ -1,0 +1,137 @@
+import { ThemeTokens } from "../tokens.slint";
+import { TextButton } from "./button.slint";
+
+component MenuRow inherits Rectangle {
+    in property <string> text;
+    in property <string> shortcut: "";
+    callback clicked <=> touch.clicked;
+
+    height: 30px;
+    border-radius: 6px;
+    background: touch.has-hover ? ThemeTokens.control-hover : transparent;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: space-between;
+        Text {
+            text: root.text;
+            color: ThemeTokens.text;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.shortcut != "" : Text {
+            text: root.shortcut;
+            color: ThemeTokens.text-muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {}
+}
+
+export component ContextMenu inherits Rectangle {
+    in-out property <bool> is-open: false;
+    in property <length> menu-x: 0px;
+    in property <length> menu-y: 0px;
+    in property <bool> has-selection: false;
+
+    in property <string> text-copy: "Copy";
+    in property <string> text-context-find: "Search Selection";
+    in property <string> text-context-highlight: "Highlight";
+    in property <string> text-select-all: "Select All";
+    in property <string> text-context-rotate-cw: "Rotate Clockwise";
+    in property <string> text-context-fit-page: "Fit to Page";
+    in property <string> text-prev-page: "Previous";
+    in property <string> text-next-page: "Next";
+
+    callback request-copy();
+    callback context-find-selection();
+    callback context-highlight-selection();
+    callback request-select-all();
+    callback rotate-view-cw();
+    callback request-fit-page();
+    callback request-prev-page();
+    callback request-next-page();
+
+    width: 100%;
+    height: 100%;
+    background: #00000000;
+
+    TouchArea {
+        clicked => { root.is-open = false; }
+        pointer-event(ev) => {
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.is-open = false;
+            }
+        }
+    }
+
+    Rectangle {
+        x: Math.clamp(root.menu-x, 8px, root.width - self.width - 8px);
+        y: Math.clamp(root.menu-y, 8px, root.height - self.height - 8px);
+        width: 210px;
+        height: ctx-layout.preferred-height;
+        border-radius: 10px;
+        background: ThemeTokens.surface-flyout;
+        border-width: 1px;
+        border-color: ThemeTokens.border;
+        drop-shadow-blur: ThemeTokens.effects-active ? 18px : 12px;
+        drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+        drop-shadow-color: ThemeTokens.warm-shadow;
+        TouchArea {}
+        ctx-layout := VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
+
+            if root.has-selection : MenuRow {
+                text: root.text-copy;
+                shortcut: "Ctrl+C";
+                clicked => { root.is-open = false; root.request-copy(); }
+            }
+            if root.has-selection : MenuRow {
+                text: root.text-context-find;
+                shortcut: "Ctrl+F";
+                clicked => { root.is-open = false; root.context-find-selection(); }
+            }
+            if root.has-selection : MenuRow {
+                text: root.text-context-highlight;
+                shortcut: "Ctrl+H";
+                clicked => { root.is-open = false; root.context-highlight-selection(); }
+            }
+            if root.has-selection : Rectangle {
+                height: 1px; background: ThemeTokens.border;
+            }
+
+            MenuRow {
+                text: root.text-select-all;
+                shortcut: "Ctrl+A";
+                clicked => { root.is-open = false; root.request-select-all(); }
+            }
+            MenuRow {
+                text: root.text-context-rotate-cw;
+                shortcut: "Ctrl+R";
+                clicked => { root.is-open = false; root.rotate-view-cw(); }
+            }
+            MenuRow {
+                text: root.text-context-fit-page;
+                shortcut: "Ctrl+2";
+                clicked => { root.is-open = false; root.request-fit-page(); }
+            }
+            Rectangle { height: 1px; background: ThemeTokens.border; }
+            HorizontalLayout {
+                spacing: 4px;
+                TextButton {
+                    horizontal-stretch: 1;
+                    text: "← " + root.text-prev-page;
+                    clicked => { root.is-open = false; root.request-prev-page(); }
+                }
+                TextButton {
+                    horizontal-stretch: 1;
+                    text: root.text-next-page + " →";
+                    clicked => { root.is-open = false; root.request-next-page(); }
+                }
+            }
+        }
+    }
+}

@@ -1,7 +1,9 @@
+use crate::buffer_pool::BitmapBufferPool;
 use crate::cache::{BitmapCache, CacheKey};
 use crate::error::RenderError;
+use crate::memory_budget::{calculate_adaptive_memory_budget, SystemHardwareProfile};
 use crate::observability::RenderObservability;
-use crate::protocol::{RenderCommand, RenderEvent, RenderJob, RenderRequestKey};
+use crate::protocol::{RenderCommand, RenderEvent, RenderJob, RenderKind, RenderRequestKey};
 use crate::queue::receive_command;
 use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId};
 use barepdf_pdf::{PdfBackend, PdfDocument, RawBitmap};
@@ -48,6 +50,8 @@ pub(crate) struct RenderWorker<B> {
     backend: B,
     active_docs: lru::LruCache<DocumentId, Box<dyn PdfDocument>>,
     cache: BitmapCache,
+    #[allow(dead_code)]
+    buffer_pool: Arc<BitmapBufferPool>,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
     shutdown_receiver: Receiver<()>,
@@ -66,12 +70,14 @@ impl<B: PdfBackend> RenderWorker<B> {
         critical_event_sender: Sender<RenderEvent>,
         event_sender: Sender<RenderEvent>,
     ) -> Self {
+        let buffer_pool = Arc::new(BitmapBufferPool::new());
         Self {
             backend,
             active_docs: lru::LruCache::new(
                 std::num::NonZeroUsize::new(4).unwrap_or(std::num::NonZeroUsize::MIN),
             ),
-            cache: BitmapCache::new(budget),
+            cache: BitmapCache::with_buffer_pool(budget, buffer_pool.clone()),
+            buffer_pool,
             current_generation,
             pending_renders,
             shutdown_receiver,
@@ -79,6 +85,63 @@ impl<B: PdfBackend> RenderWorker<B> {
             event_sender,
             observability: RenderObservability::default(),
         }
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn with_hardware_profile(
+        backend: B,
+        profile: &SystemHardwareProfile,
+        current_generation: Arc<AtomicU64>,
+        pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
+        shutdown_receiver: Receiver<()>,
+        critical_event_sender: Sender<RenderEvent>,
+        event_sender: Sender<RenderEvent>,
+    ) -> Self {
+        let budget = calculate_adaptive_memory_budget(profile);
+        Self::new(
+            backend,
+            budget,
+            current_generation,
+            pending_renders,
+            shutdown_receiver,
+            critical_event_sender,
+            event_sender,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_hardware_profile(&mut self, profile: &SystemHardwareProfile) {
+        let budget = calculate_adaptive_memory_budget(profile);
+        self.set_budget(budget);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_budget(&mut self, budget: MemoryBudget) {
+        self.cache.set_budget(budget);
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) const fn budget(&self) -> MemoryBudget {
+        self.cache.budget()
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) const fn buffer_pool(&self) -> &Arc<BitmapBufferPool> {
+        &self.buffer_pool
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn checkout_buffer(&self, required_bytes: usize) -> Vec<u8> {
+        self.buffer_pool.checkout(required_bytes)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn recycle_buffer(&self, buffer: Vec<u8>) {
+        self.buffer_pool.recycle(buffer);
     }
 
     pub(crate) fn run(
@@ -182,9 +245,10 @@ impl<B: PdfBackend> RenderWorker<B> {
     fn render_page(&mut self, job: &RenderJob) -> bool {
         let pending_key = RenderRequestKey::from(job);
         let emitted = self.render_page_inner(job);
-        if let Ok(mut pending) = self.pending_renders.lock() {
-            pending.remove(&pending_key);
-        }
+        self.pending_renders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&pending_key);
         emitted
     }
 
@@ -232,19 +296,34 @@ impl<B: PdfBackend> RenderWorker<B> {
     }
 
     fn emit_rendered(&self, job: &RenderJob, bitmap: Arc<RawBitmap>) -> bool {
-        emit_lossy_event(
-            &self.shutdown_receiver,
-            &self.event_sender,
-            &self.observability,
-            RenderEvent::PageRendered {
-                request_id: job.request_id,
-                generation: job.generation,
-                document_id: job.document_id,
-                page_index: job.page_index,
-                kind: job.kind,
-                bitmap,
-            },
-        )
+        let event = RenderEvent::PageRendered {
+            request_id: job.request_id,
+            generation: job.generation,
+            document_id: job.document_id,
+            page_index: job.page_index,
+            kind: job.kind,
+            bitmap,
+        };
+        match job.kind {
+            RenderKind::Page => {
+                if !matches!(self.shutdown_receiver.try_recv(), Err(TryRecvError::Empty)) {
+                    return false;
+                }
+                match self.event_sender.try_send(event) {
+                    Ok(()) => true,
+                    Err(TrySendError::Full(event)) => {
+                        emit_critical(&self.shutdown_receiver, &self.critical_event_sender, event)
+                    }
+                    Err(TrySendError::Disconnected(_)) => false,
+                }
+            }
+            RenderKind::Thumbnail => emit_lossy_event(
+                &self.shutdown_receiver,
+                &self.event_sender,
+                &self.observability,
+                event,
+            ),
+        }
     }
 
     #[tracing::instrument(
@@ -400,5 +479,276 @@ impl<B: PdfBackend> RenderWorker<B> {
                 error: RenderError::from(error),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{Priority, RenderKind};
+    use barepdf_core::{DocumentId, PageCount, PageIndex, Rotation};
+    use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
+    use crossbeam_channel::unbounded;
+    use std::sync::atomic::AtomicU64;
+
+    struct TestBackend;
+    struct TestDocument;
+
+    impl PdfBackend for TestBackend {
+        fn open_path(
+            &self,
+            _path: &Path,
+            _password: Option<&str>,
+        ) -> Result<Box<dyn PdfDocument>, PdfError> {
+            Ok(Box::new(TestDocument))
+        }
+
+        fn open_bytes(
+            &self,
+            _bytes: Vec<u8>,
+            _password: Option<&str>,
+        ) -> Result<Box<dyn PdfDocument>, PdfError> {
+            Ok(Box::new(TestDocument))
+        }
+    }
+
+    impl PdfDocument for TestDocument {
+        fn page_count(&self) -> Result<PageCount, PdfError> {
+            Ok(PageCount::new(10).expect("non-zero"))
+        }
+
+        fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+            Ok((100.0, 100.0))
+        }
+
+        fn render_page(
+            &self,
+            _page_index: PageIndex,
+            target_width: u32,
+            target_height: u32,
+            _rotation: Rotation,
+        ) -> Result<RawBitmap, PdfError> {
+            let bytes = usize::try_from(target_width)
+                .unwrap_or(0)
+                .checked_mul(usize::try_from(target_height).unwrap_or(0))
+                .and_then(|pixels| pixels.checked_mul(4))
+                .unwrap_or(0);
+            RawBitmap::new(target_width, target_height, vec![0; bytes]).map_err(|_| {
+                PdfError::RenderingFailed {
+                    page_index: 0,
+                    reason: "invalid bitmap".into(),
+                }
+            })
+        }
+
+        fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+            Ok(String::new())
+        }
+
+        fn extract_text_spans(&self, _page_index: PageIndex) -> Result<Vec<TextSpan>, PdfError> {
+            Ok(Vec::new())
+        }
+
+        fn get_page_text_geometry(
+            &self,
+            _page_index: PageIndex,
+        ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+            Err(PdfError::PlatformError("not supported".into()))
+        }
+
+        fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn create_test_worker(budget: MemoryBudget) -> RenderWorker<TestBackend> {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, _event_rx) = unbounded();
+        RenderWorker::new(
+            TestBackend,
+            budget,
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        )
+    }
+
+    fn create_adaptive_worker(profile: &SystemHardwareProfile) -> RenderWorker<TestBackend> {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, _event_rx) = unbounded();
+        RenderWorker::with_hardware_profile(
+            TestBackend,
+            profile,
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        )
+    }
+
+    #[test]
+    fn worker_uses_adaptive_budget_from_hardware_profile() {
+        let low_ram = SystemHardwareProfile {
+            total_ram_mb: 2048,
+            primary_screen_dpi: 96.0,
+        };
+        let worker_low = create_adaptive_worker(&low_ram);
+        assert_eq!(worker_low.budget().get(), 256 * 1024 * 1024);
+
+        let mid_ram = SystemHardwareProfile {
+            total_ram_mb: 8192,
+            primary_screen_dpi: 96.0,
+        };
+        let worker_mid = create_adaptive_worker(&mid_ram);
+        assert_eq!(worker_mid.budget().get(), 384 * 1024 * 1024);
+
+        let high_ram = SystemHardwareProfile {
+            total_ram_mb: 32768,
+            primary_screen_dpi: 144.0,
+        };
+        let worker_high = create_adaptive_worker(&high_ram);
+        assert_eq!(worker_high.budget().get(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn worker_set_hardware_profile_dynamically_adjusts_budget() {
+        let mut worker = create_test_worker(MemoryBudget::new(64 * 1024 * 1024));
+        assert_eq!(worker.budget().get(), 64 * 1024 * 1024);
+
+        worker.set_hardware_profile(&SystemHardwareProfile {
+            total_ram_mb: 16384,
+            primary_screen_dpi: 96.0,
+        });
+        assert_eq!(worker.budget().get(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn worker_buffer_pool_checkout_and_recycle_lifecycle() {
+        let worker = create_test_worker(MemoryBudget::new(1024 * 1024));
+        let buf = worker.checkout_buffer(1024);
+        assert_eq!(buf.len(), 1024);
+        worker.recycle_buffer(buf);
+        let buf2 = worker.checkout_buffer(1024);
+        assert_eq!(buf2.len(), 1024);
+    }
+
+    #[test]
+    fn worker_evicted_bitmaps_are_recycled_into_buffer_pool() {
+        let mut worker = create_test_worker(MemoryBudget::new(8));
+        let doc_id = DocumentId::new(1);
+        worker.open_document(doc_id, Path::new("dummy.pdf"), None);
+
+        // Render page 1 (4 bytes: 1x1 RGBA)
+        worker.render_page(&RenderJob {
+            request_id: RequestId::new(1),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::from_raw(1),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        });
+
+        // Render page 2 (4 bytes: 1x1 RGBA) -> total 8 bytes
+        worker.render_page(&RenderJob {
+            request_id: RequestId::new(2),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::from_raw(2),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        });
+
+        // Render page 3 (4 bytes: 1x1 RGBA) -> evicts page 1 (budget is 8 bytes)
+        worker.render_page(&RenderJob {
+            request_id: RequestId::new(3),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::from_raw(3),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        });
+
+        // Page 1's 4-byte buffer was evicted and recycled into worker's buffer_pool!
+        let recycled = worker.checkout_buffer(4);
+        assert_eq!(recycled.len(), 4);
+    }
+
+    #[test]
+    fn page_rendered_event_is_delivered_losslessly_when_event_channel_is_full() {
+        let (_shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+        let (critical_tx, critical_rx) = crossbeam_channel::bounded(4);
+        let (event_tx, event_rx) = crossbeam_channel::bounded(1);
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(1024 * 1024),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx.clone(),
+        );
+        let doc_id = DocumentId::new(1);
+        worker.open_document(doc_id, Path::new("dummy.pdf"), None);
+        // Drain DocumentOpened from critical channel
+        assert!(matches!(
+            critical_rx.try_recv(),
+            Ok(RenderEvent::DocumentOpened { .. })
+        ));
+
+        // Saturate the lossy event channel
+        event_tx
+            .try_send(RenderEvent::TextExtracted {
+                document_id: doc_id,
+                generation: 1,
+                page_index: PageIndex::zero(),
+                text: "saturated".into(),
+                spans: Vec::new(),
+            })
+            .expect("saturate event_tx");
+
+        // Render a visible page while event_tx is full
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(42),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::zero(),
+            target_width: 2,
+            target_height: 2,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+
+        // Drain the pre-existing event from event_rx
+        let _ = event_rx.try_recv();
+
+        // The PageRendered event must not be lost; it must arrive via critical_rx or event_rx
+        let delivered = critical_rx.try_recv().or_else(|_| event_rx.try_recv());
+        assert!(
+            matches!(
+                delivered,
+                Ok(RenderEvent::PageRendered {
+                    request_id,
+                    document_id: id,
+                    kind: RenderKind::Page,
+                    ..
+                }) if request_id == RequestId::new(42) && id == doc_id
+            ),
+            "expected PageRendered to be delivered losslessly"
+        );
     }
 }

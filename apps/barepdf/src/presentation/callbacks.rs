@@ -7,7 +7,6 @@
     clippy::map_unwrap_or,
     clippy::redundant_closure_for_method_calls,
     clippy::semicolon_if_nothing_returned,
-    clippy::struct_excessive_bools,
     clippy::too_many_lines,
     clippy::uninlined_format_args,
     clippy::unchecked_time_subtraction,
@@ -23,12 +22,15 @@ use crate::infrastructure::{
 
 use barepdf_core::{
     page_range::PageRangeSelection, selection::SelectionEngine, DocumentId, PageCount, PageIndex,
-    RequestId, Rotation, SecretPassword, TextPosition, TextSelection, ViewingMode, WindowMode,
-    ZoomFactor, ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
+    Rotation, SecretPassword, TextPosition, TextSelection, ViewingMode, WindowMode, ZoomFactor,
+    ZoomMode, MAX_OPEN_TABS, MAX_PASSWORD_BYTES,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::conversion::{ConversionDpi, ConversionFormat};
-use barepdf_platform::printing::{Copies, PrintDuplex, PrintOrientation, PrintRange};
+use barepdf_platform::printing::{
+    Copies, InstalledPrinter, PrintDuplex, PrintError, PrintJobId, PrintOrientation, PrintPage,
+    PrintRange, PrinterSink,
+};
 use barepdf_platform::{ClipboardAccess, FileDialogs};
 use barepdf_platform_windows::{
     enumerate_installed_printers, is_installed_build, open_url, WindowsClipboard,
@@ -36,11 +38,10 @@ use barepdf_platform_windows::{
 };
 use barepdf_render::{Priority, RenderCommand, RenderJob, RenderKind, RenderScheduler};
 use barepdf_ui::AppWindow;
-use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -48,7 +49,25 @@ use super::models::{
     refresh_annotation_overlays, refresh_bookmark_model, refresh_page_model, refresh_tab_model,
     refresh_thumbnail_model, refresh_tool_thumbnails, render_signature_pad_preview,
 };
-use super::state::AppState;
+use super::state::{
+    next_print_preview_request_id, AppState, BackgroundUiEvent, PRINT_PREVIEW_MAX_EDGE,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolKind {
+    Merge,
+    SingleSource,
+}
+
+impl ToolKind {
+    #[must_use]
+    pub(crate) fn from_slint_id(id: i32) -> Self {
+        match id {
+            0 => Self::Merge,
+            _ => Self::SingleSource,
+        }
+    }
+}
 use super::ui::{
     apply_theme, begin_open, ensure_layout, invalidate_layout_and_render, navigate_to_page,
     navigate_to_page_inner, parse_drop_paths, persist_preferences, pointer_to_pdf,
@@ -97,7 +116,10 @@ pub(super) fn wire_callbacks(
     let state_password = state.clone();
     let scheduler_password = scheduler.clone();
     window.on_request_unlock_password(move |password| {
-        if password.as_str().len() > MAX_PASSWORD_BYTES {
+        if let Some(window) = weak.upgrade() {
+            clear_document_password_ui(&window);
+        }
+        let Ok(mut password) = consume_ui_password(password) else {
             let language = state_password.borrow().preferences.language.resolve();
             if let Some(window) = weak.upgrade() {
                 window.set_password_error(SharedString::from(barepdf_i18n::t(
@@ -107,11 +129,10 @@ pub(super) fn wire_callbacks(
                 window.set_password_required(true);
             }
             return;
-        }
+        };
         let path = DocumentController::pending_path(&state_password.borrow().application)
             .map(Path::to_path_buf);
         if let (Some(path), Some(window)) = (path, weak.upgrade()) {
-            let password = SecretPassword::new(password.to_string());
             begin_open(
                 path,
                 Some(password),
@@ -119,6 +140,17 @@ pub(super) fn wire_callbacks(
                 &scheduler_password,
                 &window,
             );
+        } else {
+            password.clear();
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_request_cancel_unlock_password(move || {
+        if let Some(window) = weak.upgrade() {
+            clear_document_password_ui(&window);
+            window.set_password_error(SharedString::default());
+            window.set_password_required(false);
         }
     });
 
@@ -317,102 +349,6 @@ pub(super) fn wire_callbacks(
     });
 }
 
-const PRINT_PREVIEW_REQUEST_MASK: u64 = 1 << 63;
-const PRINT_PREVIEW_MAX_EDGE: u32 = 960;
-static PRINT_PREVIEW_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Debug, Clone, Copy)]
-struct PendingPreviewRender {
-    request_id: RequestId,
-    page_index: PageIndex,
-}
-
-#[derive(Debug)]
-struct PrintPreviewState {
-    open: bool,
-    document_id: DocumentId,
-    generation: u64,
-    page_count: PageCount,
-    page_index: PageIndex,
-    orientation: i32,
-    duplex: i32,
-    range: String,
-    pending: Option<PendingPreviewRender>,
-}
-
-impl PrintPreviewState {
-    fn open(
-        document_id: DocumentId,
-        generation: u64,
-        page_count: PageCount,
-        page_index: PageIndex,
-    ) -> Self {
-        Self {
-            open: true,
-            document_id,
-            generation,
-            page_count,
-            page_index: PageIndex::from_raw(page_index.get().min(page_count.get() - 1)),
-            orientation: 0,
-            duplex: 0,
-            range: default_print_preview_range(page_count),
-            pending: None,
-        }
-    }
-
-    fn expect_render(&mut self, request_id: RequestId, page_index: PageIndex) {
-        self.pending = Some(PendingPreviewRender {
-            request_id,
-            page_index,
-        });
-    }
-
-    fn accept_render(
-        &mut self,
-        request_id: RequestId,
-        document_id: DocumentId,
-        generation: u64,
-        page_index: PageIndex,
-    ) -> bool {
-        let matches = self.open
-            && self.document_id == document_id
-            && self.generation == generation
-            && self.pending.is_some_and(|pending| {
-                pending.request_id == request_id
-                    && pending.page_index == page_index
-                    && self.page_index == page_index
-            });
-        if matches {
-            self.pending = None;
-        }
-        matches
-    }
-
-    fn close(&mut self) {
-        self.open = false;
-        self.pending = None;
-    }
-
-    fn set_page(&mut self, page: i32) -> PageIndex {
-        let maximum = self.page_count.get().saturating_sub(1);
-        let page = u32::try_from(page).unwrap_or(0).min(maximum);
-        self.page_index = PageIndex::from_raw(page);
-        self.page_index
-    }
-}
-
-thread_local! {
-    static PRINT_PREVIEW: RefCell<Option<PrintPreviewState>> = const { RefCell::new(None) };
-}
-
-fn default_print_preview_range(page_count: PageCount) -> String {
-    if page_count.get() == 1 {
-        "1".into()
-    } else {
-        format!("1-{}", page_count.get())
-    }
-}
-
 fn parse_print_preview_range(input: &str, page_count: PageCount) -> Option<(PageIndex, PageIndex)> {
     let input = input.trim();
     if input.is_empty() {
@@ -445,11 +381,6 @@ fn parse_print_preview_range(input: &str, page_count: PageCount) -> Option<(Page
     ))
 }
 
-fn next_print_preview_request_id() -> RequestId {
-    let sequence = PRINT_PREVIEW_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    RequestId::new(PRINT_PREVIEW_REQUEST_MASK | (sequence & !PRINT_PREVIEW_REQUEST_MASK).max(1))
-}
-
 fn print_preview_dimensions(dimensions: (f32, f32), rotation: Rotation) -> (u32, u32) {
     let (mut width, mut height) = dimensions;
     if matches!(rotation, Rotation::Degrees90 | Rotation::Degrees270) {
@@ -477,73 +408,41 @@ fn request_print_preview_render(
     let Some(document_id) = app.active_document() else {
         return;
     };
-    let request = PRINT_PREVIEW.with(|preview| {
-        let mut preview = preview.borrow_mut();
-        let preview = preview.as_mut()?;
-        if !preview.open
-            || preview.document_id != document_id
-            || preview.generation != app.generation
-        {
-            return None;
-        }
-        let page_index = preview.page_index;
-        let dimensions = app
-            .page_dimensions
-            .get(page_index.get() as usize)
-            .copied()
-            .unwrap_or(app.first_page_dimensions);
-        let (target_width, target_height) = print_preview_dimensions(dimensions, app.rotation);
-        let request_id = next_print_preview_request_id();
-        preview.expect_render(request_id, page_index);
-        Some((
-            request_id,
-            RenderCommand::RenderPage(RenderJob {
-                request_id,
-                generation: app.generation,
-                document_id,
-                page_index,
-                target_width,
-                target_height,
-                rotation: app.rotation,
-                priority: Priority::Visible,
-                kind: RenderKind::Page,
-            }),
-        ))
-    });
-    let Some((request_id, command)) = request else {
+    if !app.print_preview.open
+        || app.print_preview.document_id != Some(document_id)
+        || app.print_preview.generation != app.generation
+    {
         return;
-    };
+    }
+    let page_index = app.print_preview.page_index;
+    let dimensions = app
+        .page_dimensions
+        .get(page_index.get() as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    let (target_width, target_height) = print_preview_dimensions(dimensions, app.rotation);
+    let request_id = next_print_preview_request_id();
+    app.print_preview.expect_render(request_id, page_index);
+    let command = RenderCommand::RenderPage(RenderJob {
+        request_id,
+        generation: app.generation,
+        document_id,
+        page_index,
+        target_width,
+        target_height,
+        rotation: app.rotation,
+        priority: Priority::Visible,
+        kind: RenderKind::Page,
+    });
     window.set_print_preview_has_image(false);
-    if !send_render_command(app, scheduler, command) {
-        PRINT_PREVIEW.with(|preview| {
-            let mut preview = preview.borrow_mut();
-            if preview
-                .as_ref()
-                .and_then(|preview| preview.pending)
-                .is_some_and(|pending| pending.request_id == request_id)
-            {
-                if let Some(preview) = preview.as_mut() {
-                    preview.pending = None;
-                }
-            }
-        });
+    if !send_render_command(app, scheduler, command)
+        && app
+            .print_preview
+            .pending
+            .is_some_and(|p| p.request_id == request_id)
+    {
+        app.print_preview.pending = None;
     }
-}
-
-pub(super) fn consume_print_preview_render(
-    request_id: RequestId,
-    document_id: DocumentId,
-    generation: u64,
-    page_index: PageIndex,
-) -> Option<bool> {
-    if request_id.get() & PRINT_PREVIEW_REQUEST_MASK == 0 {
-        return None;
-    }
-    Some(PRINT_PREVIEW.with(|preview| {
-        preview.borrow_mut().as_mut().is_some_and(|preview| {
-            preview.accept_render(request_id, document_id, generation, page_index)
-        })
-    }))
 }
 
 pub(super) fn requeue_print_preview_for_generation(
@@ -552,35 +451,95 @@ pub(super) fn requeue_print_preview_for_generation(
     window: &AppWindow,
 ) {
     let document_id = app.active_document();
-    let should_close = PRINT_PREVIEW.with(|preview| {
-        let mut should_close = false;
-        if let Some(preview) = preview.borrow_mut().as_mut() {
-            if preview.open && Some(preview.document_id) == document_id {
-                preview.generation = app.generation;
-                preview.pending = None;
-            } else if preview.open {
-                should_close = true;
-            }
-        }
-        should_close
-    });
-    if should_close {
-        close_print_preview(window);
+    if app.print_preview.open && app.print_preview.document_id == document_id {
+        app.print_preview.generation = app.generation;
+        app.print_preview.pending = None;
+    } else if app.print_preview.open {
+        close_print_preview(app, window);
         return;
     }
     request_print_preview_render(app, scheduler, window);
 }
 
-fn close_print_preview(window: &AppWindow) {
-    PRINT_PREVIEW.with(|preview| {
-        if let Some(preview) = preview.borrow_mut().as_mut() {
-            preview.close();
-        }
-        *preview.borrow_mut() = None;
-    });
+fn close_print_preview(app: &mut AppState, window: &AppWindow) {
+    app.print_preview.close();
     window.set_print_preview_open(false);
     window.set_print_preview_has_image(false);
     window.set_print_preview_image(Image::default());
+}
+
+fn populate_print_preview_printers(window: &AppWindow, installed: &[InstalledPrinter]) {
+    let mut names = Vec::new();
+    let mut default_idx = 0;
+    for (i, p) in installed.iter().enumerate() {
+        names.push(SharedString::from(p.name.clone()));
+        if p.is_default {
+            default_idx = i;
+        }
+    }
+    if names.is_empty() {
+        names.push(SharedString::from("Microsoft Print to PDF"));
+    }
+    window.set_print_preview_printers(ModelRc::new(VecModel::from(names)));
+    window.set_print_preview_selected_printer(default_idx as i32);
+}
+
+struct DeferredPrinterSink<F> {
+    job_id: PrintJobId,
+    target_dpi: u16,
+    factory: Option<F>,
+    inner: Option<Box<dyn PrinterSink>>,
+}
+
+impl<F> DeferredPrinterSink<F>
+where
+    F: FnOnce() -> Result<Box<dyn PrinterSink>, PrintError> + Send,
+{
+    fn new(job_id: PrintJobId, target_dpi: u16, factory: F) -> Self {
+        Self {
+            job_id,
+            target_dpi,
+            factory: Some(factory),
+            inner: None,
+        }
+    }
+}
+
+impl<F> PrinterSink for DeferredPrinterSink<F>
+where
+    F: FnOnce() -> Result<Box<dyn PrinterSink>, PrintError> + Send,
+{
+    fn job_id(&self) -> PrintJobId {
+        self.inner.as_ref().map_or(self.job_id, |s| s.job_id())
+    }
+
+    fn target_dpi(&self) -> u16 {
+        self.inner
+            .as_ref()
+            .map_or(self.target_dpi, |s| s.target_dpi())
+    }
+
+    fn begin(&mut self, title: &str) -> Result<(), PrintError> {
+        if self.inner.is_some() {
+            return Err(PrintError::InvalidState);
+        }
+        let factory = self.factory.take().ok_or(PrintError::InvalidState)?;
+        let mut sink = factory()?;
+        sink.begin(title)?;
+        self.inner = Some(sink);
+        Ok(())
+    }
+
+    fn write_page(&mut self, page: PrintPage<'_>) -> Result<(), PrintError> {
+        self.inner
+            .as_mut()
+            .ok_or(PrintError::InvalidState)?
+            .write_page(page)
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), PrintError> {
+        self.inner.take().ok_or(PrintError::InvalidState)?.finish()
+    }
 }
 
 fn connect_print_callbacks(
@@ -615,38 +574,32 @@ fn connect_print_callbacks(
             );
             return;
         };
-        let preview = PrintPreviewState::open(
-            document.id(),
-            app.generation,
-            document.page_count(),
-            PageIndex::from_raw(app.current_page),
+        let doc_id = document.id();
+        let page_count = document.page_count();
+        let generation = app.generation;
+        let current_page = PageIndex::from_raw(app.current_page);
+        app.print_preview
+            .open(doc_id, generation, page_count, current_page);
+        window.set_print_preview_page(
+            i32::try_from(app.print_preview.page_index.get()).unwrap_or(i32::MAX),
         );
-        window.set_print_preview_page(i32::try_from(preview.page_index.get()).unwrap_or(i32::MAX));
-        window.set_print_preview_range(SharedString::from(preview.range.clone()));
-        window.set_print_preview_orientation(preview.orientation);
-        window.set_print_preview_duplex(preview.duplex);
+        window.set_print_preview_range(SharedString::from(app.print_preview.range.clone()));
+        window.set_print_preview_orientation(app.print_preview.orientation);
+        window.set_print_preview_duplex(app.print_preview.duplex);
         window.set_print_preview_has_image(false);
         window.set_print_preview_image(Image::default());
         window.set_print_preview_open(true);
 
-        let installed = enumerate_installed_printers();
-        let mut names = Vec::new();
-        let mut default_idx = 0;
-        for (i, p) in installed.iter().enumerate() {
-            names.push(SharedString::from(p.name.clone()));
-            if p.is_default {
-                default_idx = i;
-            }
+        populate_print_preview_printers(&window, &app.cached_printers);
+        if !app.in_flight.printer_enum {
+            app.in_flight.printer_enum = true;
+            app.spawn_background_io(|| {
+                BackgroundUiEvent::PrintersEnumerated(enumerate_installed_printers())
+            });
         }
-        if names.is_empty() {
-            names.push(SharedString::from("Microsoft Print to PDF"));
-        }
-        window.set_print_preview_printers(ModelRc::new(VecModel::from(names)));
-        window.set_print_preview_selected_printer(default_idx as i32);
         window.set_print_preview_copies(1);
         window.set_print_preview_range_mode(0);
 
-        PRINT_PREVIEW.with(|state| *state.borrow_mut() = Some(preview));
         request_print_preview_render(&mut app, &scheduler_print, &window);
     });
 
@@ -657,13 +610,14 @@ fn connect_print_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let page = PRINT_PREVIEW.with(|preview| {
-            preview
-                .borrow_mut()
-                .as_mut()
-                .filter(|preview| preview.open)
-                .map(|preview| preview.set_page(page))
-        });
+        let page = {
+            let mut app = state_page.borrow_mut();
+            if app.print_preview.open {
+                Some(app.print_preview.set_page(page))
+            } else {
+                None
+            }
+        };
         let Some(page) = page else {
             return;
         };
@@ -671,40 +625,35 @@ fn connect_print_callbacks(
         request_print_preview_render(&mut state_page.borrow_mut(), &scheduler_page, &window);
     });
 
+    let state_range = state.clone();
     window.on_request_print_preview_range(move |range| {
-        PRINT_PREVIEW.with(|preview| {
-            if let Some(preview) = preview.borrow_mut().as_mut() {
-                if preview.open {
-                    preview.range = range.to_string();
-                }
-            }
-        });
+        let mut app = state_range.borrow_mut();
+        if app.print_preview.open {
+            app.print_preview.range = range.to_string();
+        }
     });
 
+    let state_orientation = state.clone();
     window.on_request_print_preview_orientation(move |orientation| {
-        PRINT_PREVIEW.with(|preview| {
-            if let Some(preview) = preview.borrow_mut().as_mut() {
-                if preview.open {
-                    preview.orientation = orientation.clamp(0, 2);
-                }
-            }
-        });
+        let mut app = state_orientation.borrow_mut();
+        if app.print_preview.open {
+            app.print_preview.orientation = orientation.clamp(0, 2);
+        }
     });
 
+    let state_duplex = state.clone();
     window.on_request_print_preview_duplex(move |duplex| {
-        PRINT_PREVIEW.with(|preview| {
-            if let Some(preview) = preview.borrow_mut().as_mut() {
-                if preview.open {
-                    preview.duplex = duplex.clamp(0, 2);
-                }
-            }
-        });
+        let mut app = state_duplex.borrow_mut();
+        if app.print_preview.open {
+            app.print_preview.duplex = duplex.clamp(0, 2);
+        }
     });
 
     let weak = window.as_weak();
+    let state_close = state.clone();
     window.on_request_close_print_preview(move || {
         if let Some(window) = weak.upgrade() {
-            close_print_preview(&window);
+            close_print_preview(&mut state_close.borrow_mut(), &window);
         }
     });
 
@@ -724,21 +673,22 @@ fn connect_print_callbacks(
             );
             return;
         };
-        let preview_target = PRINT_PREVIEW.with(|preview| {
-            preview
-                .borrow()
-                .as_ref()
-                .filter(|preview| preview.open)
-                .map(|preview| {
+        let preview_target = {
+            let app = state_confirm.borrow();
+            if app.print_preview.open {
+                app.print_preview.document_id.map(|document_id| {
                     (
-                        preview.document_id,
-                        preview.generation,
-                        preview.page_count,
-                        preview.orientation,
-                        preview.range.clone(),
+                        document_id,
+                        app.print_preview.generation,
+                        app.print_preview.page_count,
+                        app.print_preview.orientation,
+                        app.print_preview.range.clone(),
                     )
                 })
-        });
+            } else {
+                None
+            }
+        };
         let Some((document_id, generation, page_count, _orientation, range_input)) = preview_target
         else {
             return;
@@ -759,7 +709,7 @@ fn connect_print_callbacks(
                 })
         };
         let Some((path, title)) = target else {
-            close_print_preview(&window);
+            close_print_preview(&mut state_confirm.borrow_mut(), &window);
             return;
         };
         let selected_printer_idx = window.get_print_preview_selected_printer().max(0) as usize;
@@ -823,30 +773,19 @@ fn connect_print_callbacks(
             }
         };
 
-        let sink = match WindowsPrinterSink::direct(
-            job_id,
-            300,
-            &printer_name,
-            orientation,
-            duplex,
-            copies_num,
-        ) {
-            Ok(sink) => sink,
-            Err(e) => {
-                controller.borrow_mut().release_reservation(job_id);
-                show_banner(
-                    &window,
-                    format!(
-                        "{}: {:?}",
-                        barepdf_i18n::t(language, "print.dialog_failed"),
-                        e
-                    ),
-                    false,
-                );
-                return;
-            }
-        };
-        close_print_preview(&window);
+        let target_dpi = 300;
+        let sink = DeferredPrinterSink::new(job_id, target_dpi, move || {
+            let sink = WindowsPrinterSink::direct(
+                job_id,
+                target_dpi,
+                &printer_name,
+                orientation,
+                duplex,
+                copies_num,
+            )?;
+            Ok(Box::new(sink))
+        });
+        close_print_preview(&mut state_confirm.borrow_mut(), &window);
         match controller
             .borrow_mut()
             .submit(job_id, path, title, range, copies, Box::new(sink))
@@ -861,6 +800,7 @@ fn connect_print_callbacks(
                 state_confirm.borrow_mut().wake_pump();
             }
             Err(_) => {
+                controller.borrow_mut().release_reservation(job_id);
                 show_banner(
                     &window,
                     barepdf_i18n::t(language, "print.queue_failed"),
@@ -948,15 +888,12 @@ fn connect_tab_callbacks(
     let state_activate = state.clone();
     let scheduler_activate = scheduler.clone();
     window.on_request_activate_tab(move |raw_id| {
-        let Ok(raw_id) = u64::try_from(raw_id) else {
-            return;
-        };
         let Some(window) = weak.upgrade() else {
             return;
         };
         let (path, already_ready) = {
             let mut app = state_activate.borrow_mut();
-            let Some(id) = app.application.tabs.find_id(raw_id) else {
+            let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
                 return;
             };
             if app.application.tabs.active_id() == Some(id) {
@@ -1036,15 +973,12 @@ fn connect_tab_callbacks(
     let state_close = state.clone();
     let scheduler_close = scheduler.clone();
     window.on_request_close_tab(move |raw_id| {
-        let Ok(raw_id) = u64::try_from(raw_id) else {
-            return;
-        };
         let Some(window) = weak.upgrade() else {
             return;
         };
         let path = {
             let mut app = state_close.borrow_mut();
-            let Some(id) = app.application.tabs.find_id(raw_id) else {
+            let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
                 return;
             };
             let was_active = app.application.tabs.active_id() == Some(id);
@@ -1137,12 +1071,30 @@ pub(super) fn restore_active_view(app: &mut AppState, window: &AppWindow) {
     update_zoom_ui(window, app.zoom_mode, app.zoom_factor);
 }
 
+fn consume_ui_password(raw: SharedString) -> Result<SecretPassword, ()> {
+    let mut password = SecretPassword::new(raw.to_string());
+    if password.expose().len() > MAX_PASSWORD_BYTES {
+        password.clear();
+        return Err(());
+    }
+    Ok(password)
+}
+
+fn clear_document_password_ui(window: &AppWindow) {
+    window.set_document_password_input(SharedString::default());
+}
+
+fn clear_tool_password_ui(window: &AppWindow) {
+    window.set_tool_password_input(SharedString::default());
+}
+
 fn reset_empty_document(app: &mut AppState, window: &AppWindow) {
     app.current_page = 0;
     app.visible_page_indices.clear();
-    app.page_dimensions.clear();
+    app.page_dimensions = Arc::new(Vec::new());
     app.selection = None;
     window.set_has_document(false);
+    clear_document_password_ui(window);
     window.set_password_required(false);
     window.set_has_selection(false);
     window.set_document_title(SharedString::default());
@@ -1163,15 +1115,17 @@ pub(super) fn close_worker_document(
 }
 
 pub(super) fn clear_document_transients(app: &mut AppState, window: &AppWindow) {
-    close_print_preview(window);
+    close_print_preview(app, window);
     app.selection = None;
     app.is_selecting = false;
-    app.outline.clear();
-    app.outline_requested = false;
+    app.outline = Arc::new(Vec::new());
+    app.in_flight.outline_requested = false;
     app.expanded_outline.clear();
     app.flat_outline.clear();
     app.visible_page_indices.clear();
+    app.failed_pages.clear();
     window.set_has_selection(false);
+    clear_document_password_ui(window);
     window.set_password_required(false);
     window.set_password_error(SharedString::default());
     window.set_outline_items(ModelRc::new(VecModel::default()));
@@ -1437,9 +1391,9 @@ fn connect_view_callbacks(
     window.on_request_sidebar_tab(move |tab| {
         if let Some(window) = weak.upgrade() {
             let mut app = state_tab.borrow_mut();
-            if tab == 1 && !app.outline_requested {
+            if tab == 1 && !app.in_flight.outline_requested {
                 if let Some(document_id) = app.active_document() {
-                    app.outline_requested = send_render_command(
+                    app.in_flight.outline_requested = send_render_command(
                         &mut app,
                         &scheduler_tab,
                         RenderCommand::FetchOutline { document_id },
@@ -1590,17 +1544,30 @@ fn connect_view_callbacks(
         };
 
         let matches = if let Some(doc) = app.active_document() {
-            let geoms = app
-                .text_geometries
-                .in_page_order(doc)
-                .into_iter()
-                .map(|g| (g.page_index.get(), g.clone()))
-                .collect::<std::collections::HashMap<_, _>>();
-            crate::controllers::search_controller::SearchController::execute_search(
-                &query,
-                &geoms,
-                app.page_count(),
-            )
+            let mut all_matches = Vec::new();
+            let mut global_index = 0;
+            for geom in app.text_geometries.in_page_order(doc) {
+                let page_idx = geom.page_index.get();
+                let ranges = query.find_in_geometry(&geom);
+                for range in ranges {
+                    let mut glyph_boxes = Vec::new();
+                    let start = range.start as usize;
+                    let end = range.end as usize;
+
+                    if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
+                        glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
+                    }
+
+                    all_matches.push(barepdf_core::search::SearchMatch {
+                        page_index: PageIndex::from_raw(page_idx),
+                        match_index_in_doc: global_index,
+                        char_range: range,
+                        glyph_boxes,
+                    });
+                    global_index += 1;
+                }
+            }
+            all_matches
         } else {
             Vec::new()
         };
@@ -1752,7 +1719,9 @@ fn connect_selection_callbacks(
         let app = state_copy.borrow();
         if let (Some(selection), Some(document)) = (app.selection, app.active_document()) {
             let geometries = app.text_geometries.in_page_order(document);
-            let text = SelectionEngine::get_selected_text_in_page_order(&selection, &geometries);
+            let geom_refs: Vec<&barepdf_core::types::PageTextGeometry> =
+                geometries.iter().map(AsRef::as_ref).collect();
+            let text = SelectionEngine::get_selected_text_in_page_order(&selection, &geom_refs);
             if !text.is_empty() {
                 if let Err(error) = clipboard.set_text(&text) {
                     diagnostics::warn_redacted(DiagnosticEvent::ClipboardWrite, &error);
@@ -1827,8 +1796,8 @@ fn connect_selection_callbacks(
         let click_count = app.click_count;
         let geometry = app
             .active_document()
-            .and_then(|document| app.text_geometries.get(document, page).cloned());
-        if let Some(geometry) = geometry.as_ref() {
+            .and_then(|document| app.text_geometries.get(document, page));
+        if let Some(geometry) = geometry.as_deref() {
             let character = SelectionEngine::hit_test(geometry, pdf_x, pdf_y);
             app.selection = Some(match click_count {
                 2 => SelectionEngine::select_word(geometry, page_index, character),
@@ -1872,7 +1841,7 @@ fn connect_selection_callbacks(
         let character = app
             .text_geometries
             .get(document, page)
-            .map(|geometry| SelectionEngine::hit_test(geometry, pdf_x, pdf_y))
+            .map(|geometry| SelectionEngine::hit_test(&geometry, pdf_x, pdf_y))
             .unwrap_or(0);
         if let Some(selection) = app.selection.as_mut() {
             selection.focus = TextPosition::new(page_index, character);
@@ -1916,7 +1885,7 @@ fn connect_selection_callbacks(
                 .active_document()
                 .and_then(|doc| app.text_geometries.get(doc, page_u32))
                 .and_then(|geom| {
-                    barepdf_core::hit_test_link(geom, page_width, page_height, norm_x, norm_y)
+                    barepdf_core::hit_test_link(&geom, page_width, page_height, norm_x, norm_y)
                         .cloned()
                 });
             if let Some(target) = link_target {
@@ -2090,12 +2059,14 @@ fn cancel_active_tool(state: &Rc<RefCell<AppState>>, window: &AppWindow) {
     if let Some(worker) = app.tool_worker.as_ref() {
         worker.cancel(active.key, &active.cancellation);
     }
+    clear_tool_password_ui(window);
     window.set_tool_password_prompt_open(false);
     app.tool_password_source = None;
     window.set_tools_working(false);
+    app.wake_pump();
 }
 
-fn handle_tool_event(
+pub(super) fn handle_tool_event(
     event: ToolEvent,
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -2118,6 +2089,7 @@ fn handle_tool_event(
             {
                 app.active_tool_job = None;
                 window.set_tools_working(false);
+                clear_tool_password_ui(window);
                 window.set_tool_password_prompt_open(false);
             }
         }
@@ -2138,6 +2110,7 @@ fn handle_tool_event(
                 },
             );
             state.borrow_mut().tool_password_source = Some(source);
+            clear_tool_password_ui(window);
             window.set_tool_password_error(SharedString::from(error));
             window.set_tool_password_prompt_open(true);
         }
@@ -2145,6 +2118,7 @@ fn handle_tool_event(
             state.borrow_mut().active_tool_job = None;
             state.borrow_mut().tool_password_source = None;
             window.set_tools_working(false);
+            clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
             window.set_tools_open(false);
             window.set_current_tool(-1);
@@ -2186,60 +2160,97 @@ fn handle_tool_event(
             state.borrow_mut().active_tool_job = None;
             state.borrow_mut().tool_password_source = None;
             window.set_tools_working(false);
+            clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
         }
         ToolEvent::Failed { message, .. } => {
             state.borrow_mut().active_tool_job = None;
             state.borrow_mut().tool_password_source = None;
             window.set_tools_working(false);
+            clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
             window.set_tools_error(SharedString::from(message));
         }
     }
 }
 
-fn ensure_tool_event_timer(
+pub(super) fn handle_background_ui_event(
+    event: BackgroundUiEvent,
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
 ) {
-    if state.borrow().tool_event_timer.is_some() {
-        return;
-    }
-    let timer = Rc::new(Timer::default());
-    let weak = window.as_weak();
-    let state_for_timer = state.clone();
-    let scheduler_for_timer = scheduler.clone();
-    let timer_for_callback = timer.clone();
-    timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        let event = state_for_timer
-            .borrow()
-            .tool_worker
-            .as_ref()
-            .and_then(ToolWorker::try_recv_event);
-        if let Some(event) = event {
-            handle_tool_event(event, &window, &state_for_timer, &scheduler_for_timer);
+    match event {
+        BackgroundUiEvent::PrintersEnumerated(printers) => {
+            let mut app = state.borrow_mut();
+            app.in_flight.printer_enum = false;
+            app.cached_printers = printers;
+            if window.get_print_preview_open() {
+                populate_print_preview_printers(window, &app.cached_printers);
+            }
         }
-        let interval = if state_for_timer.borrow().active_tool_job.is_some() {
-            Duration::from_millis(16)
-        } else {
-            Duration::from_millis(250)
-        };
-        timer_for_callback.set_interval(interval);
-    });
-    state.borrow_mut().tool_event_timer = Some(timer);
+        BackgroundUiEvent::AnnotationsSaved {
+            doc_id,
+            output_path,
+            result,
+        } => {
+            let lang = {
+                let mut app = state.borrow_mut();
+                app.in_flight.annotation_save = false;
+                app.preferences.language.resolve()
+            };
+            match result {
+                Ok(()) => {
+                    {
+                        let mut app = state.borrow_mut();
+                        app.annotations.remove(&doc_id);
+                        app.active_stroke = None;
+                        app.page_images.remove_document(doc_id);
+                        app.thumbnail_images.remove_document(doc_id);
+                        app.text_geometries.remove_document(doc_id);
+                        refresh_annotation_overlays(&app, window);
+                    }
+                    window.set_drawing_mode_active(false);
+                    let name = output_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("document.pdf");
+                    let msg = barepdf_i18n::t(lang, "status.saved").replace("{name}", name);
+                    window.set_status_text(SharedString::from(msg.as_str()));
+                    show_banner(window, msg, false);
+                    begin_open(output_path, None, state, scheduler, window);
+                }
+                Err(err) => {
+                    show_banner(window, format!("Failed to save annotations: {err}"), false);
+                }
+            }
+        }
+        BackgroundUiEvent::SignatureImageDecoded { result } => match result {
+            Ok((w, h, pixels)) => {
+                let mut app = state.borrow_mut();
+                app.sign_uploaded_image = Some((w, h, pixels));
+                let preview =
+                    render_signature_pad_preview(&[], None, app.sign_uploaded_image.as_ref());
+                window.set_sign_pad_preview(preview);
+                window.set_sign_has_preview(true);
+            }
+            Err(err) => {
+                show_banner(
+                    window,
+                    format!("Could not load signature image: {err}"),
+                    false,
+                );
+            }
+        },
+    }
 }
 
 fn connect_tools_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
-    scheduler: &Rc<RenderScheduler>,
+    _scheduler: &Rc<RenderScheduler>,
     dialogs: Arc<WindowsFileDialogs>,
 ) {
-    ensure_tool_event_timer(window, state, scheduler);
     window.on_request_open_url(move |url| {
         let _ = open_url(url.as_str());
     });
@@ -2657,18 +2668,23 @@ fn connect_tools_callbacks(
             )));
             return;
         }
-        if tool_id == 0 {
-            app.tools_merge_files.extend(paths);
-            refresh_merge_files(&window, &mut app);
-            window.set_tools_error(SharedString::default());
-        } else if let [source] = paths.as_slice() {
-            set_tool_source(&mut app, source.clone());
-            window.set_tools_error(SharedString::default());
-        } else {
-            window.set_tools_error(SharedString::from(barepdf_i18n::t(
-                window_language(&window),
-                "tools.error.single_source",
-            )));
+        match ToolKind::from_slint_id(tool_id) {
+            ToolKind::Merge => {
+                app.tools_merge_files.extend(paths);
+                refresh_merge_files(&window, &mut app);
+                window.set_tools_error(SharedString::default());
+            }
+            ToolKind::SingleSource => {
+                if let [source] = paths.as_slice() {
+                    set_tool_source(&mut app, source.clone());
+                    window.set_tools_error(SharedString::default());
+                } else {
+                    window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                        window_language(&window),
+                        "tools.error.single_source",
+                    )));
+                }
+            }
         }
     });
 
@@ -2785,20 +2801,25 @@ fn connect_tools_callbacks(
     let weak = window.as_weak();
     let state_password = state.clone();
     window.on_request_submit_tool_password(move |password| {
-        let Some(window) = weak.upgrade() else {
+        let Ok(mut password) = consume_ui_password(password) else {
+            if let Some(window) = weak.upgrade() {
+                clear_tool_password_ui(&window);
+                window.set_tool_password_error(SharedString::from(barepdf_i18n::t(
+                    window_language(&window),
+                    "password.error.too_long",
+                )));
+            }
             return;
         };
-        if password.len() > MAX_PASSWORD_BYTES {
-            window.set_tool_password_error(SharedString::from(barepdf_i18n::t(
-                window_language(&window),
-                "password.error.too_long",
-            )));
+        let Some(window) = weak.upgrade() else {
+            password.clear();
             return;
-        }
-        let password = password.to_string();
+        };
+        clear_tool_password_ui(&window);
         let result = {
             let app = state_password.borrow();
             let Some(active) = app.active_tool_job.as_ref() else {
+                password.clear();
                 return;
             };
             let Some(source) = app
@@ -2806,9 +2827,11 @@ fn connect_tools_callbacks(
                 .clone()
                 .or_else(|| app.tools_source_path.clone())
             else {
+                password.clear();
                 return;
             };
             let Some(worker) = app.tool_worker.as_ref() else {
+                password.clear();
                 return;
             };
             worker.provide_password(active.key, source, password)
@@ -2817,6 +2840,7 @@ fn connect_tools_callbacks(
             Ok(()) => {
                 window.set_tool_password_error(SharedString::default());
                 window.set_tool_password_prompt_open(false);
+                state_password.borrow_mut().wake_pump();
             }
             Err(error) => window.set_tool_password_error(SharedString::from(error.to_string())),
         }
@@ -2826,6 +2850,8 @@ fn connect_tools_callbacks(
     let state_cancel_password = state.clone();
     window.on_request_cancel_tool_password(move || {
         if let Some(window) = weak.upgrade() {
+            clear_tool_password_ui(&window);
+            window.set_tool_password_error(SharedString::default());
             cancel_active_tool(&state_cancel_password, &window);
         }
     });
@@ -2867,8 +2893,16 @@ fn connect_niche_feature_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let mut app = state_cmd.borrow_mut();
-        super::hud_commands::handle_hud_query(&mut app, &scheduler_cmd, &window, &query);
+        let action = {
+            let mut app = state_cmd.borrow_mut();
+            super::hud_commands::execute_hud_command(&mut app, &scheduler_cmd, &window, &query)
+        };
+        match action {
+            super::hud_commands::HudAction::RequestPrint => {
+                window.invoke_request_print();
+            }
+            super::hud_commands::HudAction::None => {}
+        }
     });
 
     let weak = window.as_weak();
@@ -2880,11 +2914,19 @@ fn connect_niche_feature_callbacks(
         };
         let matching =
             super::hud_commands::filter_hud_commands(window.get_command_palette_query().as_str());
-        if let Some(item) = matching.get(idx as usize) {
+        let action = if let Some(item) = matching.get(idx as usize) {
             let mut app = state_sel.borrow_mut();
-            super::hud_commands::handle_hud_query(&mut app, &scheduler_sel, &window, item.id);
-        }
+            super::hud_commands::execute_hud_command(&mut app, &scheduler_sel, &window, item.id)
+        } else {
+            super::hud_commands::HudAction::None
+        };
         window.set_command_palette_open(false);
+        match action {
+            super::hud_commands::HudAction::RequestPrint => {
+                window.invoke_request_print();
+            }
+            super::hud_commands::HudAction::None => {}
+        }
     });
 
     let weak = window.as_weak();
@@ -2947,7 +2989,9 @@ fn connect_annotation_and_signature_callbacks(
             let app = state_find_sel.borrow();
             if let (Some(selection), Some(document)) = (app.selection, app.active_document()) {
                 let geometries = app.text_geometries.in_page_order(document);
-                SelectionEngine::get_selected_text_in_page_order(&selection, &geometries)
+                let geom_refs: Vec<&barepdf_core::types::PageTextGeometry> =
+                    geometries.iter().map(AsRef::as_ref).collect();
+                SelectionEngine::get_selected_text_in_page_order(&selection, &geom_refs)
             } else {
                 String::new()
             }
@@ -2990,7 +3034,7 @@ fn connect_annotation_and_signature_callbacks(
                 .unwrap_or(app.first_page_dimensions);
             if let Some(geom) = app.text_geometries.get(doc_id, p) {
                 new_quads.extend(selection_to_highlight_quads(
-                    geom, page_index, start, end, pw, ph,
+                    &geom, page_index, start, end, pw, ph,
                 ));
             }
         }
@@ -3320,30 +3364,18 @@ fn connect_annotation_and_signature_callbacks(
     let state_sign_img = state.clone();
     let dialogs_sign_img = dialogs;
     window.on_sign_pick_image(move || {
-        let Some(window) = weak.upgrade() else {
+        if weak.upgrade().is_none() {
             return;
-        };
+        }
         let Some(path) = dialogs_sign_img.pick_image_file() else {
             return;
         };
-        match barepdf_platform_windows::decode_image_rgba(&path) {
-            Ok(bmp) => {
-                let (w, h, pixels) = bmp.into_parts();
-                let mut app = state_sign_img.borrow_mut();
-                app.sign_uploaded_image = Some((w, h, pixels));
-                let preview =
-                    render_signature_pad_preview(&[], None, app.sign_uploaded_image.as_ref());
-                window.set_sign_pad_preview(preview);
-                window.set_sign_has_preview(true);
-            }
-            Err(err) => {
-                show_banner(
-                    &window,
-                    format!("Could not load signature image: {err}"),
-                    false,
-                );
-            }
-        }
+        state_sign_img.borrow_mut().spawn_background_io(move || {
+            let result = barepdf_platform_windows::decode_image_rgba(&path)
+                .map(|bmp| bmp.into_parts())
+                .map_err(|err| err.to_string());
+            BackgroundUiEvent::SignatureImageDecoded { result }
+        });
     });
 
     let weak = window.as_weak();
@@ -3412,12 +3444,15 @@ fn connect_annotation_and_signature_callbacks(
 
 fn save_active_annotations(
     state: &Rc<RefCell<AppState>>,
-    scheduler: &Rc<RenderScheduler>,
-    window: &AppWindow,
+    _scheduler: &Rc<RenderScheduler>,
+    _window: &AppWindow,
     save_as_path: Option<PathBuf>,
 ) {
-    let (doc_id, source_path, annotations, lang) = {
-        let app = state.borrow();
+    let (doc_id, source_path, annotations) = {
+        let mut app = state.borrow_mut();
+        if app.in_flight.annotation_save {
+            return;
+        }
         let Some(doc) = app.application.ready_document() else {
             return;
         };
@@ -3428,43 +3463,24 @@ fn save_active_annotations(
         if annotations.is_empty() {
             return;
         }
-        (
-            doc_id,
-            doc.path().to_path_buf(),
-            annotations,
-            app.preferences.language.resolve(),
-        )
+        let source_path = doc.path().to_path_buf();
+        app.in_flight.annotation_save = true;
+        (doc_id, source_path, annotations)
     };
     let output_path = save_as_path.unwrap_or_else(|| source_path.clone());
-    match barepdf_pdf::PdfOperations::save_with_annotations(
-        &source_path,
-        &annotations,
-        &output_path,
-    ) {
-        Ok(()) => {
-            {
-                let mut app = state.borrow_mut();
-                app.annotations.remove(&doc_id);
-                app.active_stroke = None;
-                app.page_images.remove_document(doc_id);
-                app.thumbnail_images.remove_document(doc_id);
-                app.text_geometries.remove_document(doc_id);
-                refresh_annotation_overlays(&app, window);
-            }
-            window.set_drawing_mode_active(false);
-            let name = output_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("document.pdf");
-            let msg = barepdf_i18n::t(lang, "status.saved").replace("{name}", name);
-            window.set_status_text(SharedString::from(msg.as_str()));
-            show_banner(window, msg, false);
-            begin_open(output_path, None, state, scheduler, window);
+    state.borrow_mut().spawn_background_io(move || {
+        let result = barepdf_pdf::PdfOperations::save_with_annotations(
+            &source_path,
+            &annotations,
+            &output_path,
+        )
+        .map_err(|err| err.to_string());
+        BackgroundUiEvent::AnnotationsSaved {
+            doc_id,
+            output_path,
+            result,
         }
-        Err(err) => {
-            show_banner(window, format!("Failed to save annotations: {err}"), false);
-        }
-    }
+    });
 }
 
 fn selection_to_highlight_quads(
@@ -3535,15 +3551,17 @@ fn erase_strokes_near(
 #[cfg(test)]
 mod tests {
     use super::{
-        erase_strokes_near, is_safe_external_link_url, parse_print_preview_range,
-        parse_zoom_percent, print_preview_dimensions, selected_tool_pages,
-        selection_to_highlight_quads, toggle_tool_page_selection, tool_drop_paths,
-        PrintPreviewState, PRINT_PREVIEW_REQUEST_MASK,
+        consume_ui_password, erase_strokes_near, is_safe_external_link_url,
+        parse_print_preview_range, parse_zoom_percent, print_preview_dimensions,
+        selected_tool_pages, selection_to_highlight_quads, toggle_tool_page_selection,
+        tool_drop_paths, MAX_PASSWORD_BYTES,
     };
+    use crate::presentation::state::{PrintPreviewState, PRINT_PREVIEW_REQUEST_MASK};
     use barepdf_core::{
         DocumentId, GlyphRect, InkColor, InkStroke, PageCount, PageIndex, PageTextGeometry,
         RequestId, Rotation,
     };
+    use slint::SharedString;
     use std::path::PathBuf;
 
     fn page_count(value: u32) -> PageCount {
@@ -3553,14 +3571,16 @@ mod tests {
     #[test]
     fn print_preview_initializes_duplex_to_single_sided() {
         let document = DocumentId::new(7);
-        let preview = PrintPreviewState::open(document, 11, page_count(4), PageIndex::zero());
+        let mut preview = PrintPreviewState::default();
+        preview.open(document, 11, page_count(4), PageIndex::zero());
         assert_eq!(preview.duplex, 0);
     }
 
     #[test]
     fn print_preview_accepts_only_the_latest_matching_render_once() {
         let document = DocumentId::new(7);
-        let mut preview = PrintPreviewState::open(document, 11, page_count(4), PageIndex::zero());
+        let mut preview = PrintPreviewState::default();
+        preview.open(document, 11, page_count(4), PageIndex::zero());
         let first = RequestId::new(PRINT_PREVIEW_REQUEST_MASK | 1);
         let latest = RequestId::new(PRINT_PREVIEW_REQUEST_MASK | 2);
         preview.expect_render(first, PageIndex::zero());
@@ -3577,7 +3597,8 @@ mod tests {
     #[test]
     fn closing_print_preview_rejects_an_in_flight_render() {
         let document = DocumentId::new(7);
-        let mut preview = PrintPreviewState::open(document, 11, page_count(2), PageIndex::zero());
+        let mut preview = PrintPreviewState::default();
+        preview.open(document, 11, page_count(2), PageIndex::zero());
         let request = RequestId::new(PRINT_PREVIEW_REQUEST_MASK | 3);
         preview.expect_render(request, PageIndex::zero());
 
@@ -3742,5 +3763,65 @@ mod tests {
         ));
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].page, PageIndex::from_raw(1));
+    }
+
+    #[test]
+    fn consume_ui_password_wraps_in_secret_and_rejects_oversized_inputs() {
+        let mut valid = consume_ui_password(SharedString::from("unlock-123"))
+            .expect("valid password within byte limit");
+        assert_eq!(valid.expose(), "unlock-123");
+        valid.clear();
+        assert!(valid.bytes_for_test().is_empty());
+
+        let oversized = SharedString::from("x".repeat(MAX_PASSWORD_BYTES + 1));
+        assert!(consume_ui_password(oversized).is_err());
+    }
+
+    #[test]
+    fn deferred_printer_sink_defers_spooler_initialization_until_worker_begin() {
+        use super::{DeferredPrinterSink, PrintError, PrintJobId, PrintPage, PrinterSink};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        struct DummySink(PrintJobId);
+        impl PrinterSink for DummySink {
+            fn job_id(&self) -> PrintJobId {
+                self.0
+            }
+            fn target_dpi(&self) -> u16 {
+                300
+            }
+            fn begin(&mut self, _title: &str) -> Result<(), PrintError> {
+                Ok(())
+            }
+            fn write_page(&mut self, _page: PrintPage<'_>) -> Result<(), PrintError> {
+                Ok(())
+            }
+            fn finish(self: Box<Self>) -> Result<(), PrintError> {
+                Ok(())
+            }
+        }
+
+        let job_id = PrintJobId::new(42).expect("valid job id");
+        let initialized = Arc::new(AtomicBool::new(false));
+        let initialized_for_factory = initialized.clone();
+
+        let mut sink: Box<dyn PrinterSink> =
+            Box::new(DeferredPrinterSink::new(job_id, 300, move || {
+                initialized_for_factory.store(true, Ordering::SeqCst);
+                Ok(Box::new(DummySink(job_id)))
+            }));
+
+        // Constructing the sink on the UI thread must NOT run the spooler factory.
+        assert!(!initialized.load(Ordering::SeqCst));
+        assert_eq!(sink.job_id(), job_id);
+        assert_eq!(sink.target_dpi(), 300);
+
+        // Calling begin() on the PrintWorker thread initializes the inner sink.
+        assert!(sink.begin("doc.pdf").is_ok());
+        assert!(initialized.load(Ordering::SeqCst));
+        assert!(sink.finish().is_ok());
     }
 }

@@ -13,8 +13,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const COMMAND_CAPACITY: usize = 1;
-const EVENT_CAPACITY: usize = 1;
+const EVENT_CAPACITY: usize = 16;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ToolJobKey {
@@ -107,17 +108,39 @@ impl ToolRequest {
             .find_map(|(path, password)| (path == source).then(|| password.expose()))
     }
 
-    fn replace_password(&mut self, source: PathBuf, password: String) {
+    fn replace_password(&mut self, source: PathBuf, password: SecretPassword) {
         if let Some((_, existing)) = self.passwords.iter_mut().find(|(path, _)| path == &source) {
             existing.clear();
-            *existing = SecretPassword::new(password);
+            *existing = password;
         } else {
-            self.passwords.push((source, SecretPassword::new(password)));
+            self.passwords.push((source, password));
         }
+    }
+
+    fn clear_password_for(&mut self, source: &Path) {
+        for (path, password) in &mut self.passwords {
+            if path == source {
+                password.clear();
+            }
+        }
+        self.passwords.retain(|(path, _)| path != source);
+    }
+
+    fn clear_passwords(&mut self) {
+        for (_, password) in &mut self.passwords {
+            password.clear();
+        }
+        self.passwords.clear();
     }
 
     fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
+    }
+}
+
+impl Drop for ToolRequest {
+    fn drop(&mut self) {
+        self.clear_passwords();
     }
 }
 
@@ -177,7 +200,7 @@ enum ToolCommand {
     ProvidePassword {
         key: ToolJobKey,
         source: PathBuf,
-        password: String,
+        password: SecretPassword,
     },
     Cancel(ToolJobKey),
     Shutdown,
@@ -217,6 +240,7 @@ pub(crate) struct ToolWorker {
     shutdown: Arc<AtomicBool>,
     done_receiver: Receiver<()>,
     handle: Option<JoinHandle<()>>,
+    shutdown_timed_out: bool,
 }
 
 impl ToolWorker {
@@ -258,6 +282,7 @@ impl ToolWorker {
             shutdown,
             done_receiver,
             handle: Some(handle),
+            shutdown_timed_out: false,
         })
     }
 
@@ -295,12 +320,12 @@ impl ToolWorker {
         &self,
         key: ToolJobKey,
         source: PathBuf,
-        password: String,
+        mut password: SecretPassword,
     ) -> Result<(), ToolWorkerError> {
-        let sender = self
-            .command_sender
-            .as_ref()
-            .ok_or(ToolWorkerError::Disconnected)?;
+        let Some(sender) = self.command_sender.as_ref() else {
+            password.clear();
+            return Err(ToolWorkerError::Disconnected);
+        };
         sender
             .try_send(ToolCommand::ProvidePassword {
                 key,
@@ -337,22 +362,35 @@ impl ToolWorker {
             return Ok(());
         };
         self.shutdown.store(true, Ordering::Release);
-        if let Ok(guard) = self.current_cancellation.lock() {
-            if let Some(cancellation) = guard.as_ref() {
-                cancellation.cancel();
-            }
+        let guard = self
+            .current_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cancellation) = guard.as_ref() {
+            cancellation.cancel();
         }
+        drop(guard);
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.try_send(ToolCommand::Shutdown);
         }
-        match self.done_receiver.recv_timeout(SHUTDOWN_TIMEOUT) {
+        while self.event_receiver.try_recv().is_ok() {}
+        let wait_timeout = if self.shutdown_timed_out {
+            SHUTDOWN_RETRY_TIMEOUT
+        } else {
+            SHUTDOWN_TIMEOUT
+        };
+        match self.done_receiver.recv_timeout(wait_timeout) {
             Ok(()) => self
                 .handle
                 .take()
                 .ok_or(ToolWorkerError::Disconnected)?
                 .join()
                 .map_err(|_| ToolWorkerError::Panicked),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(ToolWorkerError::ShutdownTimeout),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                while self.event_receiver.try_recv().is_ok() {}
+                self.shutdown_timed_out = true;
+                Err(ToolWorkerError::ShutdownTimeout)
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => self
                 .handle
                 .take()
@@ -394,6 +432,42 @@ impl Drop for ToolWorker {
     }
 }
 
+fn send_event(
+    events: &SyncSender<ToolEvent>,
+    mut event: ToolEvent,
+    shutdown: &AtomicBool,
+) -> Result<(), ()> {
+    if shutdown.load(Ordering::Acquire) {
+        let _ = events.try_send(event);
+        return Ok(());
+    }
+    match events.try_send(event) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Disconnected(_)) => Err(()),
+        Err(TrySendError::Full(returned)) => {
+            event = returned;
+            let start = std::time::Instant::now();
+            loop {
+                if shutdown.load(Ordering::Acquire) {
+                    let _ = events.try_send(event);
+                    return Ok(());
+                }
+                match events.try_send(event) {
+                    Ok(()) => return Ok(()),
+                    Err(TrySendError::Disconnected(_)) => return Err(()),
+                    Err(TrySendError::Full(returned)) => {
+                        event = returned;
+                        if start.elapsed() > Duration::from_millis(500) {
+                            return Ok(());
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn worker_loop(
     commands: &Receiver<ToolCommand>,
     events: &SyncSender<ToolEvent>,
@@ -415,6 +489,7 @@ fn worker_loop(
                 active,
                 current_cancellation,
                 &mut pending,
+                shutdown,
             ),
             ToolCommand::ProvidePassword {
                 key,
@@ -433,7 +508,7 @@ fn worker_loop(
                         wrong_password,
                     };
                     pending = Some((request, awaited_source, wrong_password));
-                    if events.send(event).is_err() {
+                    if send_event(events, event, shutdown).is_err() {
                         break;
                     }
                     continue;
@@ -446,6 +521,7 @@ fn worker_loop(
                     active,
                     current_cancellation,
                     &mut pending,
+                    shutdown,
                 );
             }
             ToolCommand::Cancel(key) => {
@@ -456,7 +532,7 @@ fn worker_loop(
                     pending = None;
                     active.store(false, Ordering::Release);
                     clear_current_cancellation(current_cancellation);
-                    if events.send(ToolEvent::Cancelled { key }).is_err() {
+                    if send_event(events, ToolEvent::Cancelled { key }, shutdown).is_err() {
                         break;
                     }
                 }
@@ -477,46 +553,80 @@ fn run_and_emit(
     active: &AtomicBool,
     current_cancellation: &Mutex<Option<CancellationToken>>,
     pending: &mut Option<(ToolRequest, PathBuf, bool)>,
+    shutdown: &AtomicBool,
 ) {
-    if let Ok(mut guard) = current_cancellation.lock() {
-        *guard = Some(request.cancellation());
-    }
+    let mut guard = current_cancellation
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(request.cancellation());
+    drop(guard);
     let key = request.key;
-    let execution = executor(&mut request);
+    let execution_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| executor(&mut request)));
+    let execution = match execution_result {
+        Ok(exec) => exec,
+        Err(_) => {
+            request.clear_passwords();
+            active.store(false, Ordering::Release);
+            clear_current_cancellation(current_cancellation);
+            *pending = None;
+            let _ = send_event(
+                events,
+                ToolEvent::Failed {
+                    key,
+                    message: "PDF tool worker panicked during execution".to_string(),
+                },
+                shutdown,
+            );
+            return;
+        }
+    };
     let event = match execution {
-        ExecutionResult::Completed(outcome) => ToolEvent::Completed { key, outcome },
+        ExecutionResult::Completed(outcome) => {
+            request.clear_passwords();
+            ToolEvent::Completed { key, outcome }
+        }
         ExecutionResult::PasswordRequired {
             source,
             wrong_password,
         } => {
+            if wrong_password {
+                request.clear_password_for(&source);
+            }
             let event = ToolEvent::PasswordRequired {
                 key,
                 source: source.clone(),
                 wrong_password,
             };
             *pending = Some((request, source, wrong_password));
-            if events.send(event).is_err() {
+            if send_event(events, event, shutdown).is_err() {
                 *pending = None;
             }
             return;
         }
-        ExecutionResult::Cancelled => ToolEvent::Cancelled { key },
-        ExecutionResult::Failed(message) => ToolEvent::Failed { key, message },
+        ExecutionResult::Cancelled => {
+            request.clear_passwords();
+            ToolEvent::Cancelled { key }
+        }
+        ExecutionResult::Failed(message) => {
+            request.clear_passwords();
+            ToolEvent::Failed { key, message }
+        }
     };
     active.store(false, Ordering::Release);
     clear_current_cancellation(current_cancellation);
-    let _ = events.send(event);
+    let _ = send_event(events, event, shutdown);
 }
 
 fn clear_current_cancellation(current: &Mutex<Option<CancellationToken>>) {
-    if let Ok(mut guard) = current.lock() {
-        *guard = None;
-    }
+    let mut guard = current
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = None;
 }
 
-fn clear_rejected_password(password: String) {
-    let mut secret = SecretPassword::new(password);
-    secret.clear();
+fn clear_rejected_password(mut password: SecretPassword) {
+    password.clear();
 }
 
 fn execute_request(request: &mut ToolRequest) -> ExecutionResult {
@@ -550,6 +660,20 @@ enum ToolFailure {
     Failed(String),
 }
 
+fn format_error_with_source(error: &(impl std::error::Error + ?Sized)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_str = cause.to_string();
+        if !message.contains(&cause_str) {
+            message.push_str(": ");
+            message.push_str(&cause_str);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailure> {
     match &request.operation {
         ToolOperation::Merge { inputs, output } => {
@@ -559,7 +683,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
                 check_cancel(request)?;
             }
             let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             let entries = inputs
                 .iter()
                 .map(|source| PdfOperationInput::new(source, request.password_for(source)))
@@ -580,9 +704,9 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
             let backend = new_backend()?;
             let page_count = preflight(&backend, source, request.password_for(source))?;
             let pages = PageRangeSelection::parse(range, page_count)
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             PdfOperations::extract_pages_with_password(
                 source,
                 &pages,
@@ -606,7 +730,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
             let staging = tempfile::Builder::new()
                 .prefix(".barepdf-split-")
                 .tempdir_in(output_parent)
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             let paths = PdfOperations::split_into_single_pages_with_password(
                 source,
                 staging.path(),
@@ -617,7 +741,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
             check_cancel(request)?;
             let output_directory = unique_output_directory(output_parent, base_name)?;
             std::fs::rename(staging.path(), &output_directory)
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             Ok(ToolOutcome::Split {
                 output_directory,
                 file_count: paths.len(),
@@ -631,9 +755,9 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
             let backend = new_backend()?;
             let page_count = preflight(&backend, source, request.password_for(source))?;
             let pages = PageRangeSelection::parse(range, page_count)
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             PdfOperations::delete_pages_with_password(
                 source,
                 &pages,
@@ -661,7 +785,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
                 .map(|page| (page, *rotation))
                 .collect::<Vec<_>>();
             let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
-                .map_err(|error| ToolFailure::Failed(error.to_string()))?;
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
             PdfOperations::rotate_pages_with_password(
                 source,
                 &rotations,
@@ -699,7 +823,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
                         operation_error(Some(source), pdf_error)
                     }
                     barepdf_pdf::conversion::ConversionError::Cancelled => ToolFailure::Cancelled,
-                    other => ToolFailure::Failed(other.to_string()),
+                    other => ToolFailure::Failed(format_error_with_source(&other)),
                 })
         }
         #[cfg(test)]
@@ -708,7 +832,7 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
 }
 
 fn new_backend() -> Result<PdfiumEngine, ToolFailure> {
-    PdfiumEngine::new().map_err(|error| ToolFailure::Failed(error.to_string()))
+    PdfiumEngine::new().map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))
 }
 
 fn preflight(
@@ -732,7 +856,7 @@ fn operation_error(source: Option<&Path>, error: PdfError) -> ToolFailure {
             source: source.map(Path::to_path_buf).unwrap_or_default(),
             wrong_password: true,
         },
-        other => ToolFailure::Failed(other.to_string()),
+        other => ToolFailure::Failed(format_error_with_source(&other)),
     }
 }
 
@@ -749,7 +873,7 @@ fn parse_pages_or_all(range: &str, page_count: PageCount) -> Result<Vec<PageInde
         Ok((0..page_count.get()).map(PageIndex::from_raw).collect())
     } else {
         PageRangeSelection::parse(range, page_count)
-            .map_err(|error| ToolFailure::Failed(error.to_string()))
+            .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))
     }
 }
 
@@ -761,7 +885,7 @@ fn persist_file(staged: tempfile::NamedTempFile, output: &Path) -> Result<(), To
     staged
         .persist_noclobber(output)
         .map(|_| ())
-        .map_err(|error| ToolFailure::Failed(error.error.to_string()))
+        .map_err(|error| ToolFailure::Failed(format_error_with_source(&error.error)))
 }
 
 fn unique_output_directory(parent: &Path, base_name: &str) -> Result<PathBuf, ToolFailure> {
@@ -867,7 +991,11 @@ mod tests {
         ));
 
         worker
-            .provide_password(key, PathBuf::from("other.pdf"), "wrong-target".to_owned())
+            .provide_password(
+                key,
+                PathBuf::from("other.pdf"),
+                SecretPassword::new("wrong-target".to_owned()),
+            )
             .expect("response command queues");
         assert!(matches!(
             worker.recv_event_timeout(Duration::from_secs(1)),
@@ -876,12 +1004,91 @@ mod tests {
         ));
 
         worker
-            .provide_password(key, PathBuf::from("protected.pdf"), "bad".to_owned())
+            .provide_password(
+                key,
+                PathBuf::from("protected.pdf"),
+                SecretPassword::new("bad".to_owned()),
+            )
             .expect("password command queues");
         assert!(matches!(
             worker.recv_event_timeout(Duration::from_secs(1)),
             Some(ToolEvent::PasswordRequired { key: event_key, ref source, wrong_password: true })
                 if event_key == key && source == &PathBuf::from("protected.pdf")
         ));
+    }
+
+    #[test]
+    fn tool_request_replaces_and_zeroizes_passwords_per_source() {
+        let key = ToolJobKey::new(7, 1, 1);
+        let mut request = super::ToolRequest::new(key, super::ToolOperation::Test);
+        let source = PathBuf::from("secret.pdf");
+
+        request.replace_password(source.clone(), SecretPassword::new("first-pass".to_owned()));
+        assert_eq!(request.password_for(&source), Some("first-pass"));
+
+        request.replace_password(
+            source.clone(),
+            SecretPassword::new("second-pass".to_owned()),
+        );
+        assert_eq!(request.password_for(&source), Some("second-pass"));
+
+        request.clear_password_for(&source);
+        assert_eq!(request.password_for(&source), None);
+
+        request.replace_password(source.clone(), SecretPassword::new("third-pass".to_owned()));
+        request.clear_passwords();
+        assert_eq!(request.password_for(&source), None);
+    }
+
+    #[test]
+    fn panic_in_executor_does_not_leave_worker_zombie_and_worker_can_accept_subsequent_job() {
+        use std::sync::atomic::AtomicUsize;
+        let counter = Arc::new(AtomicUsize::new(0));
+        let worker_counter = counter.clone();
+        let worker = ToolWorker::spawn_with_executor(move |_request| {
+            let attempt = worker_counter.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                panic!("intentional tool worker panic");
+            } else {
+                ExecutionResult::Completed(super::ToolOutcome::Test)
+            }
+        })
+        .expect("test worker starts");
+
+        let first = ToolJobKey::new(101, 1, 1);
+        let _ = worker.submit_test_job(first).expect("first job queues");
+        let event = worker
+            .recv_event_timeout(Duration::from_secs(1))
+            .expect("event received");
+        assert!(matches!(
+            event,
+            ToolEvent::Failed { key, ref message }
+                if key == first && message.contains("panicked")
+        ));
+
+        // Worker must not be in zombie/busy state; subsequent job succeeds
+        let second = ToolJobKey::new(102, 1, 1);
+        let _ = worker.submit_test_job(second).expect("second job queues");
+        let event2 = worker
+            .recv_event_timeout(Duration::from_secs(1))
+            .expect("event received");
+        assert!(matches!(
+            event2,
+            ToolEvent::Completed { key, .. } if key == second
+        ));
+    }
+
+    #[test]
+    fn shutdown_does_not_deadlock_when_event_channel_is_unconsumed() {
+        let worker = ToolWorker::spawn_with_executor(|_request| {
+            ExecutionResult::Completed(super::ToolOutcome::Test)
+        })
+        .expect("test worker starts");
+
+        let key = ToolJobKey::new(201, 1, 1);
+        let _ = worker.submit_test_job(key).expect("job queues");
+        // We do NOT drain the event here; immediately shut down
+        let mut worker = worker;
+        assert!(worker.shutdown().is_ok());
     }
 }

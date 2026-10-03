@@ -8,6 +8,7 @@ use pdfium_render::prelude::*;
 /// Helper to create a test PDF with `count` pages, where each page `i` (0-indexed)
 /// has width `(i + 1) * 100` and height `(i + 1) * 200` points.
 fn create_test_pdf(path: &Path, count: usize) {
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
     let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
     let pdfium = Pdfium::default();
     let mut doc = pdfium.create_new_pdf().expect("create new pdf");
@@ -53,6 +54,7 @@ fn decode_base64(value: &str) -> Vec<u8> {
 
 /// Helper to inspect page count, dimensions, and rotations of a saved PDF.
 fn inspect_pdf(path: &Path) -> (usize, Vec<(f32, f32)>, Vec<PdfPageRenderRotation>) {
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
     let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
     let pdfium = Pdfium::default();
     let doc = pdfium.load_pdf_from_file(path, None).expect("load pdf");
@@ -799,4 +801,151 @@ fn test_save_with_annotations_embeds_highlights_strokes_and_signatures() {
     PdfOperations::save_with_annotations(&output, &annotations, &output)
         .expect("in-place save_with_annotations succeeds");
     assert_eq!(inspect_pdf(&output).0, 2);
+}
+
+#[test]
+#[allow(clippy::permissions_set_readonly_false)]
+fn test_save_with_annotations_atomic_write_preserves_original_on_failure() {
+    use barepdf_core::DocumentAnnotations;
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("source.pdf");
+    create_test_pdf(&source, 1);
+
+    let output = dir.path().join("destination.pdf");
+    let original_content = b"ORIGINAL_IMPORTANT_DOCUMENT_BYTES_NOT_ZERO";
+    std::fs::write(&output, original_content).expect("write original destination");
+
+    // Make destination read-only so write/rename fails
+    let mut perms = std::fs::metadata(&output).expect("metadata").permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&output, perms).expect("set readonly");
+
+    let annotations = DocumentAnnotations {
+        highlights: Vec::new(),
+        strokes: Vec::new(),
+        signatures: Vec::new(),
+    };
+
+    let result = PdfOperations::save_with_annotations(&source, &annotations, &output);
+    assert!(
+        result.is_err(),
+        "saving over read-only destination must fail"
+    );
+
+    // Restore permissions so file inspection and tempdir cleanup succeed
+    let mut restore_perms = std::fs::metadata(&output).expect("metadata").permissions();
+    restore_perms.set_readonly(false);
+    let _ = std::fs::set_permissions(&output, restore_perms);
+
+    // Verify original content is completely intact and never truncated
+    let current_content = std::fs::read(&output).expect("read output after failed save");
+    assert_eq!(
+        current_content, original_content,
+        "Original file must be preserved and not zero-byte corrupted"
+    );
+
+    // Verify no temporary files remain in output directory
+    let temp_files: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read dir")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".destination.pdf.tmp-")
+        })
+        .collect();
+    assert!(
+        temp_files.is_empty(),
+        "No temporary staging files should remain after failure"
+    );
+}
+
+#[test]
+fn test_split_rolls_back_created_files_when_later_page_fails() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("three_pages.pdf");
+    let out_dir = dir.path().join("split_rollback");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    create_test_pdf(&src, 3);
+
+    // Pre-create a directory at the path where page 2's file would be renamed,
+    // causing page 1 to succeed and page 2's atomic rename to fail.
+    let blocking_dir = out_dir.join("doc_page_2.pdf");
+    std::fs::create_dir_all(&blocking_dir).expect("create blocking directory for page 2");
+
+    let result = PdfOperations::split_into_single_pages(&src, &out_dir, "doc");
+    assert!(
+        result.is_err(),
+        "split must fail when page 2 cannot be written"
+    );
+
+    let page_1_path = out_dir.join("doc_page_1.pdf");
+    let page_3_path = out_dir.join("doc_page_3.pdf");
+    assert!(
+        !page_1_path.exists(),
+        "page 1 partial output must be rolled back on mid-split failure"
+    );
+    assert!(
+        !page_3_path.exists(),
+        "page 3 output must not be created after page 2 failure"
+    );
+}
+
+#[test]
+fn test_save_with_annotations_rejects_malformed_signature_images() {
+    use barepdf_core::limits::MAX_SAFE_RENDER_DIMENSION;
+    use barepdf_core::{DocumentAnnotations, SignaturePayload, SignatureStamp};
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("source.pdf");
+    let output = dir.path().join("rejected_out.pdf");
+    create_test_pdf(&source, 1);
+
+    let invalid_payloads = [
+        SignaturePayload::Image {
+            width: 0,
+            height: 2,
+            rgba: Vec::new(),
+        },
+        SignaturePayload::Image {
+            width: 2,
+            height: 0,
+            rgba: Vec::new(),
+        },
+        SignaturePayload::Image {
+            width: MAX_SAFE_RENDER_DIMENSION + 1,
+            height: 1,
+            rgba: vec![0; 4],
+        },
+        SignaturePayload::Image {
+            width: 2,
+            height: 2,
+            rgba: vec![255; 15], // expected 16 bytes
+        },
+    ];
+
+    for payload in invalid_payloads {
+        let annotations = DocumentAnnotations {
+            highlights: Vec::new(),
+            strokes: Vec::new(),
+            signatures: vec![SignatureStamp {
+                page: idx(0),
+                x_norm: 0.1,
+                y_norm: 0.1,
+                w_norm: 0.2,
+                h_norm: 0.1,
+                payload,
+            }],
+        };
+
+        let result = PdfOperations::save_with_annotations(&source, &annotations, &output);
+        assert!(
+            matches!(result, Err(PdfError::InvalidPdfReason(_))),
+            "expected InvalidPdfReason for malformed signature image, got: {result:?}"
+        );
+        assert!(!output.exists());
+    }
 }

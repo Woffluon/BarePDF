@@ -1,4 +1,4 @@
-import { LineEdit, Palette } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { ThemeTokens } from "../tokens.slint";
 import { TextButton } from "./button.slint";
 import { IconButton } from "./icon_button.slint";
@@ -11,8 +11,6 @@ export component SearchBar inherits Rectangle {
     in property <bool> has_matches: false;
     
     in property <string> placeholder: "Find in document...";
-    in property <string> match_case_text: "Match Case";
-    in property <string> whole_word_text: "Whole Word";
     
     callback query_changed(string);
     callback next_clicked();

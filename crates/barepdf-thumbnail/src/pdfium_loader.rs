@@ -9,6 +9,13 @@ use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 const INITIAL_MODULE_PATH_CAPACITY: usize = 260;
 const MAX_MODULE_PATH_CAPACITY: usize = 32 * 1024;
 
+/// Process-wide `PDFium` instance bound on first thumbnail request.
+///
+/// Rust `static` items in a `cdylib` are not dropped automatically when `DLL_PROCESS_DETACH` fires,
+/// which is required here for safety: `Pdfium`'s `Drop` implementation calls `FPDF_DestroyLibrary`
+/// and `FreeLibrary` (via `libloading`), both of which are forbidden inside `DllMain` while the
+/// Windows loader lock is held. Keeping `OnceLock<Pdfium>` alive until the host process (`prevhost`
+/// / `dllhost` / `explorer`) exits or unloads the module avoids loader-lock deadlocks.
 static PDFIUM: OnceLock<Pdfium> = OnceLock::new();
 static PDFIUM_INIT_LOCK: Mutex<()> = Mutex::new(());
 

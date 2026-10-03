@@ -67,6 +67,20 @@ impl PrintController {
         copies: Copies,
         sink: Box<dyn PrinterSink>,
     ) -> Result<(), PrintControllerError> {
+        self.submit_with_password(id, path, None, title, range, copies, sink)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn submit_with_password(
+        &mut self,
+        id: PrintJobId,
+        path: PathBuf,
+        password: Option<String>,
+        title: String,
+        range: PrintRange,
+        copies: Copies,
+        sink: Box<dyn PrinterSink>,
+    ) -> Result<(), PrintControllerError> {
         let cancel = self
             .active
             .as_ref()
@@ -76,6 +90,7 @@ impl PrintController {
         let result = self.worker.submit(PrintRequest {
             id,
             path,
+            password,
             title,
             range,
             copies,

@@ -1,17 +1,39 @@
 export type ReleaseAssetType = 'installer' | 'portable' | 'checksum';
 
 const GITHUB_HOST = 'github.com';
-const GITHUB_CONTENT_HOST_SUFFIX = '.githubusercontent.com';
+const TRUSTED_ASSET_HOSTS = new Set([
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+]);
+const BAREPDF_REPO_PATH = '/Woffluon/BarePDF';
+const GITHUB_RELEASE_ASSET_PREFIX = '/github-production-release-asset';
+
+function isApprovedGitHubPath(hostname: string, pathname: string): boolean {
+  if (/(?:%2e|%2f|%5c|\/\/)/i.test(pathname)) return false;
+
+  if (hostname === GITHUB_HOST) {
+    return pathname === BAREPDF_REPO_PATH || pathname.startsWith(`${BAREPDF_REPO_PATH}/`);
+  }
+
+  if (TRUSTED_ASSET_HOSTS.has(hostname)) {
+    return (
+      pathname === BAREPDF_REPO_PATH
+      || pathname.startsWith(`${BAREPDF_REPO_PATH}/`)
+      || pathname.startsWith(GITHUB_RELEASE_ASSET_PREFIX)
+    );
+  }
+
+  return false;
+}
 
 export function trustedGitHubUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
 
   try {
     const url = new URL(value);
-    const trustedHost = url.hostname === GITHUB_HOST || url.hostname.endsWith(GITHUB_CONTENT_HOST_SUFFIX);
     if (
       url.protocol !== 'https:'
-      || !trustedHost
+      || !isApprovedGitHubPath(url.hostname, url.pathname)
       || url.username
       || url.password
       || url.port

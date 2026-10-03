@@ -1,16 +1,23 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     {
+        println!("cargo:rerun-if-env-changed=CARGO_PKG_VERSION");
+
         let manifest_dir = std::path::PathBuf::from(
             std::env::var_os("CARGO_MANIFEST_DIR")
                 .ok_or_else(|| std::io::Error::other("CARGO_MANIFEST_DIR missing"))?,
         );
         let ico_path = manifest_dir.join("../../assets/app.ico");
-        assert!(
-            ico_path.is_file(),
-            "Required application icon is missing: {}",
-            ico_path.display()
-        );
+        if !ico_path.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Required application icon is missing at expected path: {}",
+                    ico_path.display()
+                ),
+            )
+            .into());
+        }
         println!("cargo:rerun-if-changed={}", ico_path.display());
 
         let mut res = winres::WindowsResource::new();

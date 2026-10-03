@@ -63,10 +63,7 @@ pub fn sanitize_render_dimensions(
     {
         Err(crate::error::PdfError::RenderingFailed {
             page_index: 0,
-            reason: format!(
-                "Dimensions {}x{} are out of safe rendering bounds",
-                width, height
-            ),
+            reason: format!("Dimensions {width}x{height} are out of safe rendering bounds"),
         })
     } else {
         Ok((width, height))

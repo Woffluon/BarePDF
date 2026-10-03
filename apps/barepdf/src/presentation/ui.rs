@@ -7,7 +7,6 @@
     clippy::map_unwrap_or,
     clippy::redundant_closure_for_method_calls,
     clippy::semicolon_if_nothing_returned,
-    clippy::struct_excessive_bools,
     clippy::too_many_lines,
     clippy::uninlined_format_args,
     clippy::unchecked_time_subtraction,
@@ -20,8 +19,7 @@ use crate::application::{
 };
 use crate::diagnostics::{self, DiagnosticEvent};
 use crate::infrastructure::{
-    default_config_path, save_to_file, start_update_worker, try_load_from_file,
-    PreferencesLoadError, CURRENT_VERSION,
+    default_config_path, load, save_to_file, start_update_worker, CURRENT_VERSION,
 };
 
 use barepdf_core::{
@@ -49,10 +47,11 @@ use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-pub(crate) const RAW_BITMAP_BUDGET: usize = 32 * 1024 * 1024;
+pub(crate) const RAW_BITMAP_BUDGET: usize = 4 * 1024 * 1024;
 pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
 pub(crate) const PAGE_IMAGE_BUDGET: usize = 32 * 1024 * 1024;
 pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
@@ -66,8 +65,8 @@ const WELCOME_DOCUMENT_NAME: &str = "BarePDF Welcome.pdf";
 const WELCOME_PDF: &[u8] = include_bytes!("../../../../assets/barepdf-welcome.pdf");
 
 use super::callbacks::{
-    clear_document_transients, consume_print_preview_render, requeue_print_preview_for_generation,
-    restore_active_view, snapshot_active_view,
+    clear_document_transients, requeue_print_preview_for_generation, restore_active_view,
+    snapshot_active_view,
 };
 use super::models::{
     refresh_page_model, refresh_tab_model, refresh_thumbnail_model, refresh_thumbnail_row,
@@ -91,19 +90,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     };
 
     let preferences_path = default_config_path();
-    let mut preferences = match try_load_from_file(&preferences_path) {
-        Ok(preferences) => preferences,
-        Err(PreferencesLoadError::Read(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            UserPreferences::default()
-        }
-        Err(error) => {
-            show_fatal_error(
-                "BarePDF",
-                &format!("Preferences could not be loaded.\n\n{error}"),
-            );
-            return Err(error.into());
-        }
-    };
+    let mut preferences = load(&preferences_path);
     if preferences.update_checks_enabled.is_none() {
         let language = preferences.language.resolve();
         preferences.update_checks_enabled = Some(ask_yes_no(
@@ -242,12 +229,19 @@ pub(crate) fn snapshot_sessions(app: &AppState) -> (Vec<DocumentSession>, usize)
             if Some(tab.id) == active_id {
                 active_index = sessions.len();
             }
+            let bookmarks = app
+                .preferences
+                .open_tabs
+                .iter()
+                .find(|s| &s.path == path)
+                .map(|s| s.bookmarks.clone())
+                .unwrap_or_default();
             sessions.push(DocumentSession {
                 path: path.clone(),
                 page_index: tab.view.current_page.get(),
                 scroll_y: tab.view.scroll_y,
                 zoom_mode: tab.view.zoom_mode,
-                bookmarks: Vec::new(),
+                bookmarks,
             });
         }
     }
@@ -438,12 +432,12 @@ pub(crate) fn handle_render_event(
                 .get()
                 .min(page_count.saturating_sub(1));
             app.first_page_dimensions = first_page_dimensions;
-            app.page_dimensions = vec![first_page_dimensions; page_count as usize];
+            app.page_dimensions = Arc::new(vec![first_page_dimensions; page_count as usize]);
             app.dimensions_revision += 1;
             app.next_dimensions_start = 1;
-            app.dimensions_request_pending = false;
+            app.in_flight.dimensions_request = false;
             app.layout_key = None;
-            let page_dims = app.page_dimensions.clone();
+            let page_dims = Arc::clone(&app.page_dimensions);
             let dims_rev = app.dimensions_revision;
             let next_dims = app.next_dimensions_start;
             if let Some(tab) = app.application.tabs.active_mut() {
@@ -452,15 +446,15 @@ pub(crate) fn handle_render_event(
                     first_page_dimensions,
                     dimensions_revision: dims_rev,
                     next_dimensions_start: next_dims,
-                    outline: Vec::new(),
+                    outline: Arc::new(Vec::new()),
                 };
             }
             app.visible_page_indices.clear();
-            app.first_page_ready = false;
-            app.profile_recorded = false;
+            app.status.first_page_ready = false;
+            app.status.profile_recorded = false;
             app.open_started_at = Some(ready.started_at());
-            app.outline.clear();
-            app.outline_requested = false;
+            app.outline = Arc::new(Vec::new());
+            app.in_flight.outline_requested = false;
             app.expanded_outline.clear();
             app.flat_outline.clear();
             app.selection = None;
@@ -508,10 +502,12 @@ pub(crate) fn handle_render_event(
             kind,
             bitmap,
         } => {
-            if let Some(accepted) =
-                consume_print_preview_render(request_id, document_id, generation, page_index)
             {
-                if accepted {
+                let mut app = state.borrow_mut();
+                if app
+                    .print_preview
+                    .accept_render(request_id, document_id, generation, page_index)
+                {
                     let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
                         bitmap.pixels(),
                         bitmap.width(),
@@ -519,8 +515,8 @@ pub(crate) fn handle_render_event(
                     );
                     window.set_print_preview_image(Image::from_rgba8(buffer));
                     window.set_print_preview_has_image(true);
+                    return;
                 }
-                return;
             }
             let mut app = state.borrow_mut();
             if !RenderController::accepts(
@@ -542,6 +538,7 @@ pub(crate) fn handle_render_event(
             let image = Image::from_rgba8(buffer);
             match kind {
                 RenderKind::Page => {
+                    app.failed_pages.remove(&(document_id, page_index.get()));
                     app.page_images.insert(
                         document_id,
                         page_index.get(),
@@ -552,8 +549,8 @@ pub(crate) fn handle_render_event(
                     if page_index.get() == app.current_page {
                         window.set_page_bitmap(image);
                     }
-                    if !app.first_page_ready {
-                        app.first_page_ready = true;
+                    if !app.status.first_page_ready {
+                        app.status.first_page_ready = true;
                         record_first_page_profile(&mut app);
                         window.set_visual_effects_ready(true);
                         start_deferred_document_work(&mut app, scheduler, window);
@@ -597,7 +594,7 @@ pub(crate) fn handle_render_event(
         } => {
             let mut app = state.borrow_mut();
             if RenderController::accepts(&app.application, document_id, None, app.generation) {
-                app.outline = outline;
+                app.outline = Arc::new(outline);
                 for index in 0..app.outline.len() {
                     if !app.outline[index].children.is_empty() {
                         app.expanded_outline.insert(vec![index]);
@@ -615,7 +612,7 @@ pub(crate) fn handle_render_event(
             if !RenderController::accepts(&app.application, document_id, None, app.generation) {
                 return;
             }
-            app.dimensions_request_pending = false;
+            app.in_flight.dimensions_request = false;
             if dimensions.is_empty() {
                 return;
             }
@@ -626,8 +623,9 @@ pub(crate) fn handle_render_event(
                 app.viewport_height as f32,
             );
             let mut changed_pages = Vec::new();
+            let dims = Arc::make_mut(&mut app.page_dimensions);
             for (offset, new_dimensions) in dimensions.iter().copied().enumerate() {
-                if let Some(slot) = app.page_dimensions.get_mut(start as usize + offset) {
+                if let Some(slot) = dims.get_mut(start as usize + offset) {
                     if *slot != new_dimensions {
                         changed_pages.push(start.saturating_add(offset as u32));
                         *slot = new_dimensions;
@@ -692,6 +690,15 @@ pub(crate) fn handle_render_event(
                 generation,
                 app.generation,
             ) {
+                let visible = app.visible_page_indices.clone();
+                for page in visible {
+                    if !app
+                        .page_images
+                        .contains_key(document_id, page, RenderKind::Page)
+                    {
+                        app.failed_pages.insert((document_id, page));
+                    }
+                }
                 show_banner(window, format!("PDF rendering failed: {error}"), true);
             }
             refresh_tab_model(&app, window);
@@ -707,11 +714,11 @@ pub(crate) fn begin_open(
     scheduler: &RenderScheduler,
     window: &AppWindow,
 ) {
-    if !path.is_file() || !is_pdf_path(&path) {
+    if !is_pdf_path(&path) {
         show_banner(window, "Choose an existing PDF file.", false);
         return;
     }
-    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let path = std::path::absolute(&path).unwrap_or(path);
     let title = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -790,9 +797,29 @@ fn ensure_welcome_document() -> Option<PathBuf> {
         return Some(path);
     }
 
-    std::fs::create_dir_all(parent).ok()?;
-    std::fs::write(&path, WELCOME_PDF).ok()?;
-    Some(path)
+    if let Err(e) = std::fs::create_dir_all(parent) {
+        tracing::warn!(error = %e, "failed to create directory for welcome document");
+        return None;
+    }
+
+    match tempfile::NamedTempFile::new_in(parent) {
+        Ok(mut temp) => {
+            use std::io::Write;
+            if let Err(e) = temp.write_all(WELCOME_PDF) {
+                tracing::warn!(error = %e, "failed to write welcome document bytes");
+                return None;
+            }
+            if let Err(e) = temp.persist(&path) {
+                tracing::warn!(error = %e, "failed to persist welcome document");
+                return None;
+            }
+            Some(path)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to create tempfile for welcome document");
+            None
+        }
+    }
 }
 
 pub(crate) fn send_render_command(
@@ -891,6 +918,7 @@ pub(crate) fn refresh_generation_bound_views(
     scheduler: &RenderScheduler,
     window: &AppWindow,
 ) {
+    app.failed_pages.clear();
     run_generation_refreshes(
         app,
         |app| render_visible_pages(app, scheduler, window),
@@ -925,10 +953,16 @@ pub(crate) fn ensure_layout(app: &mut AppState) {
         app.rotation,
         barepdf_core::Rotation::Degrees90 | barepdf_core::Rotation::Degrees270
     );
-    let effective_dimensions: Vec<(f32, f32)> = if rotated {
-        app.page_dimensions.iter().map(|&(w, h)| (h, w)).collect()
+    let rotated_dimensions;
+    let dimensions_slice: &[(f32, f32)] = if rotated {
+        rotated_dimensions = app
+            .page_dimensions
+            .iter()
+            .map(|&(w, h)| (h, w))
+            .collect::<Vec<_>>();
+        &rotated_dimensions
     } else {
-        app.page_dimensions.clone()
+        app.page_dimensions.as_slice()
     };
     let effective_viewport_width = if app.viewing_mode == ViewingMode::TwoPageSpread {
         app.viewport_width.saturating_sub(64).max(2) / 2
@@ -936,7 +970,7 @@ pub(crate) fn ensure_layout(app: &mut AppState) {
         app.viewport_width.saturating_sub(32).max(1)
     };
     app.layout = ContinuousLayout::compute(
-        &effective_dimensions,
+        dimensions_slice,
         effective_viewport_width,
         app.viewport_height.saturating_sub(32).max(1),
         app.zoom_mode,
@@ -1015,7 +1049,7 @@ pub(crate) fn render_visible_pages(
         };
         // Show the first bitmap at logical resolution, then immediately replace it with the
         // native-DPI render. This keeps startup responsive without leaving high-DPI displays soft.
-        let render_scale = if app.first_page_ready {
+        let render_scale = if app.status.first_page_ready {
             app.scale_factor
         } else {
             0.45
@@ -1061,7 +1095,7 @@ pub(crate) fn render_visible_pages(
         );
     }
 
-    if app.first_page_ready {
+    if app.status.first_page_ready {
         for page in pages.iter().copied() {
             if !app.text_geometries.contains_key(document_id, page) {
                 send_render_command(
@@ -1084,7 +1118,7 @@ pub(crate) fn request_visible_thumbnails(
     scheduler: &RenderScheduler,
     window: &AppWindow,
 ) {
-    if !app.first_page_ready
+    if !app.status.first_page_ready
         || !window.get_sidebar_visible()
         || window.get_sidebar_tab() != 0
         || app.page_count() == 0
@@ -1150,9 +1184,9 @@ fn start_deferred_document_work(
 ) {
     request_next_dimensions_batch(app, scheduler);
     request_visible_thumbnails(app, scheduler, window);
-    if window.get_sidebar_tab() == 1 && !app.outline_requested {
+    if window.get_sidebar_tab() == 1 && !app.in_flight.outline_requested {
         if let Some(document_id) = app.active_document() {
-            app.outline_requested =
+            app.in_flight.outline_requested =
                 send_render_command(app, scheduler, RenderCommand::FetchOutline { document_id });
         }
     }
@@ -1170,11 +1204,11 @@ fn start_deferred_document_work(
 }
 
 pub(crate) fn request_next_dimensions_batch(app: &mut AppState, scheduler: &RenderScheduler) {
-    if app.dimensions_request_pending || app.next_dimensions_start >= app.page_count() {
+    if app.in_flight.dimensions_request || app.next_dimensions_start >= app.page_count() {
         return;
     }
     if let Some(document_id) = app.active_document() {
-        app.dimensions_request_pending = send_render_command(
+        app.in_flight.dimensions_request = send_render_command(
             app,
             scheduler,
             RenderCommand::FetchPageDimensions {
@@ -1203,14 +1237,10 @@ fn flatten_outline(
     struct Frame<'a> {
         nodes: &'a [OutlineNode],
         next: usize,
-        path: Vec<usize>,
     }
 
-    let mut stack = vec![Frame {
-        nodes,
-        next: 0,
-        path: Vec::new(),
-    }];
+    let mut path = Vec::new();
+    let mut stack = vec![Frame { nodes, next: 0 }];
     while let Some(frame) = stack.last_mut() {
         if items.len() >= MAX_OUTLINE_ITEMS {
             tracing::warn!(limit = MAX_OUTLINE_ITEMS, "outline truncated at item limit");
@@ -1218,13 +1248,15 @@ fn flatten_outline(
         }
         if frame.next == frame.nodes.len() {
             stack.pop();
+            if !stack.is_empty() {
+                path.pop();
+            }
             continue;
         }
 
         let index = frame.next;
         frame.next += 1;
         let node = &frame.nodes[index];
-        let mut path = frame.path.clone();
         path.push(index);
         let has_children = !node.children.is_empty();
         let is_expanded = has_children && expanded.contains(&path);
@@ -1248,13 +1280,15 @@ fn flatten_outline(
             stack.push(Frame {
                 nodes: &node.children,
                 next: 0,
-                path,
             });
-        } else if is_expanded && has_children {
-            tracing::warn!(
-                limit = MAX_OUTLINE_DEPTH,
-                "outline truncated at depth limit"
-            );
+        } else {
+            if is_expanded && has_children {
+                tracing::warn!(
+                    limit = MAX_OUTLINE_DEPTH,
+                    "outline truncated at depth limit"
+                );
+            }
+            path.pop();
         }
     }
 }
@@ -1410,17 +1444,21 @@ pub(crate) fn save_zoom_preference(app: &mut AppState) {
 }
 
 fn record_first_page_profile(app: &mut AppState) {
-    if app.profile_recorded {
+    if app.status.profile_recorded {
         return;
     }
-    app.profile_recorded = true;
+    app.status.profile_recorded = true;
     let Some(started) = app.open_started_at else {
         return;
     };
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = env::var_os("BAREPDF_PROFILE_FILE") {
         let payload = format!("{{\"first_bitmap_ms\":{elapsed_ms:.2}}}\n");
-        let _ = std::fs::write(path, payload);
+        let _ = std::thread::Builder::new()
+            .name("barepdf-profile-io".into())
+            .spawn(move || {
+                let _ = std::fs::write(path, payload);
+            });
     }
 }
 
@@ -1445,6 +1483,21 @@ pub(crate) fn persist_preferences(
     preferences_path: &Path,
     window: Option<&AppWindow>,
 ) {
+    if window.is_some() {
+        let preferences = preferences.clone();
+        let preferences_path = preferences_path.to_path_buf();
+        if std::thread::Builder::new()
+            .name("barepdf-prefs-io".into())
+            .spawn(move || {
+                if let Err(error) = save_to_file(&preferences, &preferences_path) {
+                    diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, &error);
+                }
+            })
+            .is_ok()
+        {
+            return;
+        }
+    }
     if let Err(error) = save_to_file(preferences, preferences_path) {
         diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, &error);
         if let Some(window) = window {
@@ -1741,11 +1794,10 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     );
 }
 
+static UNIQUE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 fn unique_id() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(1)
+    UNIQUE_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -1942,5 +1994,30 @@ mod tests {
             pixels,
             [255, 245, 55, 255, 0, 10, 200, 128, 127, 127, 127, 0,]
         );
+    }
+
+    #[test]
+    fn snapshot_sessions_preserves_bookmarks_for_open_tabs() {
+        use barepdf_core::preferences::BookmarkEntry;
+        let mut app = AppState::new(UserPreferences::default());
+        let path = std::path::PathBuf::from("test_doc.pdf");
+        let _ = app.application.tabs.open(path.clone(), "test_doc".into());
+        let bookmark = BookmarkEntry {
+            page_index: 3,
+            title: "Important Section".into(),
+            created_unix: 12345678,
+        };
+        app.preferences.open_tabs = vec![DocumentSession {
+            path: path.clone(),
+            page_index: 2,
+            scroll_y: 100.0,
+            zoom_mode: ZoomMode::FitWidth,
+            bookmarks: vec![bookmark.clone()],
+        }];
+
+        let (sessions, _active_index) = snapshot_sessions(&app);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].path, path);
+        assert_eq!(sessions[0].bookmarks, vec![bookmark]);
     }
 }

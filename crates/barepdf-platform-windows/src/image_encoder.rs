@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
+use std::marker::PhantomData;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -287,11 +288,17 @@ struct OutputReservation {
 
 impl OutputReservation {
     fn create(path: &Path) -> Result<Self, ImageEncodeError> {
-        OpenOptions::new()
+        // Reserve the target path atomically with `CREATE_NEW` (`create_new(true)`), then
+        // immediately drop the `std::fs::File` handle so `IWICStream::InitializeFromFilename` can
+        // open the newly created empty file with `GENERIC_WRITE` without a Win32 sharing violation.
+        // If `encode_with_wic` fails or panics before `commit()`, `Drop` removes the partial file
+        // after `IWICStream` and `IWICBitmapEncoder` have already been dropped.
+        let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
             .map_err(ImageEncodeError::from_io)?;
+        drop(file);
         Ok(Self {
             path: Some(path.to_owned()),
         })
@@ -312,6 +319,7 @@ impl Drop for OutputReservation {
 
 struct ComApartment {
     uninitialize: bool,
+    _not_send_or_sync: PhantomData<*mut ()>,
 }
 
 impl ComApartment {
@@ -322,10 +330,14 @@ impl ComApartment {
             CoInitializeEx(None, COINIT_MULTITHREADED)
         };
         if result.is_ok() {
-            Ok(Self { uninitialize: true })
+            Ok(Self {
+                uninitialize: true,
+                _not_send_or_sync: PhantomData,
+            })
         } else if result == RPC_E_CHANGED_MODE {
             Ok(Self {
                 uninitialize: false,
+                _not_send_or_sync: PhantomData,
             })
         } else {
             Err(ImageEncodeError::new(format!(
@@ -455,5 +467,33 @@ mod tests {
 
         let decoded = decode_image_rgba(&png_path).unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn com_apartment_initializes_and_is_thread_bound() {
+        // Verify PhantomData<*mut ()> is zero-sized and ComApartment initializes/drops cleanly
+        assert_eq!(
+            std::mem::size_of::<ComApartment>(),
+            std::mem::size_of::<bool>()
+        );
+        let apt1 = ComApartment::initialize().expect("first COM apartment init succeeds");
+        let apt2 = ComApartment::initialize().expect("nested COM apartment init succeeds");
+        drop(apt2);
+        drop(apt1);
+    }
+
+    #[test]
+    fn output_reservation_releases_handle_for_wic_and_cleans_up_on_drop() {
+        let dir = tempdir().unwrap();
+        let reserved_path = dir.path().join("reserved.png");
+
+        let reservation = OutputReservation::create(&reserved_path).unwrap();
+        assert!(reserved_path.exists());
+        // Verify a second create_new on the same path fails while reserved
+        assert!(OutputReservation::create(&reserved_path).is_err());
+
+        // Dropping uncommitted reservation removes the file
+        drop(reservation);
+        assert!(!reserved_path.exists());
     }
 }

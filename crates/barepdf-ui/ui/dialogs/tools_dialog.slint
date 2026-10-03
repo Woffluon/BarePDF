@@ -1,0 +1,637 @@
+import { LineEdit, ListView } from "std-widgets.slint";
+import { ThemeTokens } from "../tokens.slint";
+import { ThumbnailItem } from "../types.slint";
+import { IconButton } from "../components/icon_button.slint";
+import { TextButton } from "../components/button.slint";
+
+component ToolChoice inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> enabled: true;
+    callback selected();
+
+    height: 52px;
+    border-radius: ThemeTokens.control-radius;
+    background: !root.enabled ? ThemeTokens.control.with-alpha(0.62)
+        : choice-touch.pressed ? ThemeTokens.control-pressed
+        : choice-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
+    border-width: 1px;
+    border-color: choice-focus.has-focus ? ThemeTokens.focus : ThemeTokens.border;
+    accessible-role: button;
+    accessible-label: root.title + ": " + root.description;
+    accessible-enabled: root.enabled;
+    choice-touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { choice-focus.focus(); root.selected(); }
+    }
+    choice-focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled <=> root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") { root.selected(); return accept; }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 15px;
+        padding-right: 15px;
+        spacing: 12px;
+        VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.title; color: root.enabled ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 13px; font-weight: 650; overflow: elide; }
+            Text { text: root.description; color: ThemeTokens.text-muted; font-size: 11px; overflow: elide; }
+        }
+    }
+    if choice-focus.has-focus && root.enabled : Rectangle {
+        border-width: ThemeTokens.focus-width;
+        border-color: ThemeTokens.focus;
+        border-radius: root.border-radius;
+    }
+}
+
+component ToolDropZone inherits Rectangle {
+    in property <string> label: "Drop PDF files here";
+    callback dropped(data-transfer);
+
+    height: 38px;
+    border-radius: ThemeTokens.control-radius;
+    background: drop-target.has-drag ? ThemeTokens.accent.with-alpha(0.12) : ThemeTokens.control;
+    border-width: drop-target.has-drag ? 2px : 1px;
+    border-color: drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.border;
+    drop-target := DropArea {
+        can-drop(event) => { return DragAction.copy; }
+        dropped(event) => { root.dropped(event.data); return DragAction.copy; }
+    }
+    Text { text: root.label; color: ThemeTokens.text-muted; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component PageSelectionCard inherits Rectangle {
+    in property <ThumbnailItem> item;
+    in property <bool> is-selected: item.is_selected;
+    callback selected(bool, bool);
+
+    width: 58px;
+    height: 66px;
+    border-radius: ThemeTokens.control-radius;
+    background: card-focus.has-focus ? ThemeTokens.selection
+        : root.is-selected ? ThemeTokens.selection
+        : (card-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+    border-width: card-focus.has-focus ? ThemeTokens.focus-width : (root.is-selected ? 2px : 1px);
+    border-color: card-focus.has-focus ? ThemeTokens.focus : (root.is-selected ? ThemeTokens.accent : ThemeTokens.border);
+    accessible-role: button;
+    accessible-label: "Page " + item.page_number + (root.is-selected ? ", selected. " : ". ") + "Use Control or Shift with Enter to extend selection.";
+    card-touch := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                card-focus.focus();
+                root.selected(event.modifiers.control, event.modifiers.shift);
+            }
+        }
+    }
+    card-focus := FocusScope {
+        x: 0px; width: 0px;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") { root.selected(event.modifiers.control, event.modifiers.shift); return accept; }
+            return reject;
+        }
+    }
+    Rectangle {
+        x: (parent.width - 28px) / 2; y: 5px; width: 28px; height: 38px;
+        background: white; border-width: 1px; border-color: #00000020;
+        if root.item.has_bitmap : Image { source: root.item.bitmap; width: 100%; height: 100%; image-fit: contain; }
+    }
+    if root.is-selected : Rectangle {
+        x: parent.width - 15px;
+        y: 3px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: ThemeTokens.accent;
+        Text {
+            text: "✓";
+            color: ThemeTokens.accent-content;
+            font-size: 8px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Text { x: 3px; y: 46px; width: parent.width - 6px; height: 16px; text: root.item.page_number; color: root.is-selected ? ThemeTokens.text : ThemeTokens.text-muted; font-size: 11px; font-weight: root.is-selected ? 600 : 400; horizontal-alignment: center; overflow: elide; }
+}
+
+export component ToolsModal inherits Rectangle {
+    in-out property <int> current-tool: -1;
+    in property <[string]> merge-files: [];
+    in property <[image]> merge-first-page-images: [];
+    in property <[ThumbnailItem]> page-thumbnails: [];
+    in-out property <int> selected-merge-index: -1;
+    in-out property <int> merge-drag-index: -1;
+    in-out property <string> page-range-input: "";
+    in-out property <int> split-mode: 0;
+    in-out property <int> rotation: 1;
+    in-out property <int> convert-format: 0;
+    in-out property <int> convert-dpi: 150;
+    in-out property <int> convert-jpeg-quality: 90;
+    property <int> convert-scope: 0;
+    in property <string> error-text: "";
+    in property <bool> is-working: false;
+    in property <string> active-doc-title: "";
+    in property <string> active-doc-pages: "";
+
+    in property <string> title: "";
+    in property <string> text-merge: "";
+    in property <string> text-merge-desc: "";
+    in property <string> text-split: "";
+    in property <string> text-split-desc: "";
+    in property <string> text-delete: "";
+    in property <string> text-delete-desc: "";
+    in property <string> text-rotate: "";
+    in property <string> text-rotate-desc: "";
+    in property <string> text-convert: "";
+    in property <string> text-convert-desc: "";
+    in property <string> text-drop-merge: "";
+    in property <string> text-drop-split: "";
+    in property <string> text-drop-delete: "";
+    in property <string> text-drop-rotate: "";
+    in property <string> text-drop-convert: "";
+    in property <string> text-pages-unit: "";
+    in property <string> text-pages-empty-hint: "";
+    in property <string> text-pages-select-all: "";
+    in property <string> text-pages-clear-selection: "";
+    in property <string> text-split-placeholder: "";
+    in property <string> text-delete-placeholder: "";
+    in property <string> text-rotate-placeholder: "";
+    in property <string> text-format: "";
+    in property <string> text-resolution: "";
+    in property <string> text-jpeg-quality: "";
+    in property <string> text-convert-all: "";
+    in property <string> text-convert-custom: "";
+    in property <string> text-merge-drag-hint: "";
+    in property <string> text-merge-dragged-hint: "";
+    in property <string> btn-add-files: "";
+    in property <string> btn-move-up: "";
+    in property <string> btn-move-down: "";
+    in property <string> btn-remove: "";
+    in property <string> btn-clear: "";
+    in property <string> btn-cancel: "";
+    in property <string> btn-save: "";
+    in property <string> btn-convert-all: "";
+    in property <string> label-pages: "";
+    in property <string> label-split-mode: "";
+    in property <string> split-extract: "";
+    in property <string> split-separate: "";
+    in property <string> label-rotation: "";
+    in property <string> rotation-90: "";
+    in property <string> rotation-180: "";
+    in property <string> rotation-270: "";
+
+    callback select-tool(int);
+    callback close();
+    callback merge-add-files();
+    callback merge-select-file(int);
+    callback merge-move-up(int);
+    callback merge-move-down(int);
+    callback merge-reorder(int, int);
+    callback merge-remove(int);
+    callback merge-clear();
+    callback merge-submit();
+    callback split-submit(string, int);
+    callback delete-submit(string);
+    callback rotate-submit(string, int);
+    callback convert-submit(int, int, int, string);
+    callback drop-files(data-transfer, int);
+    callback select-page(int, bool, bool);
+    callback select-all-pages();
+    callback clear-pages();
+
+    background: #0000008a;
+    forward-focus: modal-focus;
+    TouchArea { clicked => { } }
+
+    modal-focus := FocusScope {
+        width: Math.min(parent.width - 32px, root.current-tool == -1 ? 520px : 560px);
+        height: Math.min(parent.height - 32px, root.current-tool == -1 ? 410px : (root.current-tool == 0 ? 500px : (root.current-tool == 4 ? (root.convert-scope == 1 ? 520px : 440px) : 460px)));
+        key-pressed(event) => {
+            if (event.text == "\u{001b}") {
+                if root.current-tool != -1 {
+                    root.select-tool(-1);
+                } else {
+                    root.close();
+                }
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            background: ThemeTokens.surface-modal;
+            border-radius: ThemeTokens.flyout-radius;
+            border-width: 1px;
+            border-color: ThemeTokens.border;
+            accessible-role: groupbox;
+            accessible-label: root.title;
+            drop-shadow-blur: ThemeTokens.effects-active ? 22px : 16px;
+            drop-shadow-offset-y: ThemeTokens.effects-active ? 6px : 3px;
+            drop-shadow-color: ThemeTokens.warm-shadow;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    height: 28px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        if root.current-tool != -1 : TextButton {
+                            text: "←";
+                            clicked => { root.select-tool(-1); }
+                        }
+                        Text {
+                            text: root.current-tool == -1 ? root.title :
+                                  root.current-tool == 0 ? root.text-merge :
+                                  root.current-tool == 1 ? root.text-split :
+                                  root.current-tool == 2 ? root.text-delete :
+                                  root.current-tool == 3 ? root.text-rotate : root.text-convert;
+                            color: ThemeTokens.text;
+                            font-size: 18px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    IconButton {
+                        icon: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                        tooltip: root.btn-cancel;
+                        clicked => { root.close(); }
+                    }
+                }
+
+                if root.error-text != "" : Rectangle {
+                    height: 40px;
+                    border-radius: ThemeTokens.control-radius;
+                    background: ThemeTokens.danger.with-alpha(0.10);
+                    border-width: 1px;
+                    border-color: ThemeTokens.danger.with-alpha(0.55);
+                    accessible-role: text;
+                    accessible-label: root.error-text;
+                    accessible-live-region: assertive;
+                    Text { x: 10px; width: parent.width - 20px; text: root.error-text; color: ThemeTokens.danger; font-size: 12px; vertical-alignment: center; wrap: word-wrap; }
+                }
+
+                if root.current-tool == -1 : VerticalLayout {
+                    spacing: 10px;
+                    ToolChoice { title: root.text-merge; description: root.text-merge-desc; selected => { root.select-tool(0); } }
+                    ToolChoice { title: root.text-split; description: root.text-split-desc; selected => { root.select-tool(1); } }
+                    ToolChoice { title: root.text-delete; description: root.text-delete-desc; selected => { root.select-tool(2); } }
+                    ToolChoice { title: root.text-rotate; description: root.text-rotate-desc; selected => { root.select-tool(3); } }
+                    ToolChoice { title: root.text-convert; description: root.text-convert-desc; selected => { root.select-tool(4); } }
+                }
+
+                if root.current-tool == 0 : VerticalLayout {
+                    spacing: 10px;
+                    ToolDropZone { label: root.text-drop-merge; dropped(data) => { root.drop-files(data, 0); } }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextButton { text: root.btn-add-files; primary: true; clicked => { root.merge-add-files(); } }
+                        TextButton { text: root.btn-move-up; enabled: root.selected-merge-index > 0; clicked => { root.merge-move-up(root.selected-merge-index); } }
+                        TextButton { text: root.btn-move-down; enabled: root.selected-merge-index >= 0 && root.selected-merge-index < root.merge-files.length - 1; clicked => { root.merge-move-down(root.selected-merge-index); } }
+                        TextButton { text: root.btn-remove; enabled: root.selected-merge-index >= 0; clicked => { root.merge-remove(root.selected-merge-index); } }
+                        TextButton { text: root.btn-clear; enabled: root.merge-files.length > 0; clicked => { root.merge-clear(); } }
+                    }
+                    Rectangle {
+                        height: 240px;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.control;
+                        border-width: 1px;
+                        border-color: ThemeTokens.border;
+                        if root.merge-files.length == 0 : Text {
+                            text: root.text-merge-desc;
+                            color: ThemeTokens.text-muted;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        if root.merge-files.length > 0 : ListView {
+                            for file-path[fidx] in root.merge-files : Rectangle {
+                                height: 64px;
+                                background: root.merge-drag-index == fidx ? ThemeTokens.accent.with-alpha(0.18)
+                                    : root.selected-merge-index == fidx ? ThemeTokens.selection
+                                    : (f-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                                border-width: focus-row.has-focus ? ThemeTokens.focus-width : (root.merge-drag-index >= 0 && root.merge-drag-index != fidx ? 1px : 0px);
+                                border-color: focus-row.has-focus ? ThemeTokens.focus : ThemeTokens.accent;
+                                f-touch := TouchArea {
+                                    clicked => { focus-row.focus(); root.merge-select-file(fidx); }
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                            focus-row.focus();
+                                            root.merge-select-file(fidx);
+                                            root.merge-drag-index = fidx;
+                                        }
+                                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                            if (root.merge-drag-index >= 0 && root.merge-drag-index != fidx) {
+                                                root.merge-reorder(root.merge-drag-index, fidx);
+                                            }
+                                            root.merge-drag-index = -1;
+                                        }
+                                    }
+                                }
+                                focus-row := FocusScope {
+                                    x: 0px; width: 0px;
+                                    key-pressed(event) => {
+                                        if (event.text == " " || event.text == "\n") { root.merge-select-file(fidx); return accept; }
+                                        if (event.text == Key.UpArrow && fidx > 0) { root.merge-move-up(fidx); return accept; }
+                                        if (event.text == Key.DownArrow && fidx + 1 < root.merge-files.length) { root.merge-move-down(fidx); return accept; }
+                                        return reject;
+                                    }
+                                }
+                                accessible-role: button;
+                                accessible-label: "Merge item " + (fidx + 1) + ": " + file-path + ". Drag to a card or use Up or Down arrow to reorder.";
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                    Rectangle {
+                                        width: 34px; height: 46px; background: white; border-width: 1px; border-color: #00000020;
+                                        if root.merge-first-page-images.length > fidx : Image { source: root.merge-first-page-images[fidx]; width: 100%; height: 100%; image-fit: contain; }
+                                        if root.merge-first-page-images.length <= fidx : Text { text: "1"; color: #626972; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                    Text { text: (fidx + 1) + "."; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
+                                    VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
+                                        Text { text: file-path; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                                        Text { text: root.merge-drag-index == fidx ? root.text-merge-dragged-hint : root.text-merge-drag-hint; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                        TextButton {
+                            text: root.btn-save;
+                            primary: true;
+                            enabled: root.merge-files.length >= 2 && !root.is-working;
+                            clicked => { root.merge-submit(); }
+                        }
+                    }
+                }
+
+                if root.current-tool == 1 : VerticalLayout {
+                    spacing: 12px;
+                    ToolDropZone { label: root.text-drop-split; dropped(data) => { root.drop-files(data, 1); } }
+                    Text {
+                        text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
+                        color: ThemeTokens.text-muted;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                    Text { text: root.label-split-mode; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextButton { text: root.split-extract; active: root.split-mode == 0; clicked => { root.split-mode = 0; } }
+                        TextButton { text: root.split-separate; active: root.split-mode == 1; clicked => { root.split-mode = 1; } }
+                    }
+                    if root.split-mode == 0 : VerticalLayout {
+                        spacing: 6px;
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                            }
+                        }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                            }
+                        }
+                        range-edit := LineEdit {
+                            text <=> root.page-range-input;
+                            placeholder-text: root.text-split-placeholder;
+                            accepted => { root.split-submit(root.page-range-input, root.split-mode); }
+                        }
+                    }
+                    Rectangle { height: 8px; }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                        TextButton {
+                            text: root.btn-save;
+                            primary: true;
+                            enabled: !root.is-working && (root.split-mode == 1 || root.page-range-input != "");
+                            clicked => { root.split-submit(root.page-range-input, root.split-mode); }
+                        }
+                    }
+                }
+
+                if root.current-tool == 2 : VerticalLayout {
+                    spacing: 12px;
+                    ToolDropZone { label: root.text-drop-delete; dropped(data) => { root.drop-files(data, 2); } }
+                    Text {
+                        text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
+                        color: ThemeTokens.text-muted;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                            TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                        }
+                    }
+                    Flickable {
+                        height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                        HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                            for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                        }
+                    }
+                    del-edit := LineEdit {
+                        text <=> root.page-range-input;
+                        placeholder-text: root.text-delete-placeholder;
+                        accepted => { root.delete-submit(root.page-range-input); }
+                    }
+                    Rectangle { height: 16px; }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                        TextButton {
+                            text: root.btn-save;
+                            primary: true;
+                            enabled: !root.is-working && root.page-range-input != "";
+                            clicked => { root.delete-submit(root.page-range-input); }
+                        }
+                    }
+                }
+
+                if root.current-tool == 3 : VerticalLayout {
+                    spacing: 12px;
+                    ToolDropZone { label: root.text-drop-rotate; dropped(data) => { root.drop-files(data, 3); } }
+                    Text {
+                        text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
+                        color: ThemeTokens.text-muted;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text { text: root.label-pages + " (" + root.text-pages-empty-hint + ")"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                            TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                        }
+                    }
+                    Flickable {
+                        height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                        HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                            for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                        }
+                    }
+                    rot-edit := LineEdit {
+                        text <=> root.page-range-input;
+                        placeholder-text: root.text-rotate-placeholder;
+                    }
+                    Text { text: root.label-rotation; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextButton { text: root.rotation-90; active: root.rotation == 1; clicked => { root.rotation = 1; } }
+                        TextButton { text: root.rotation-180; active: root.rotation == 2; clicked => { root.rotation = 2; } }
+                        TextButton { text: root.rotation-270; active: root.rotation == 3; clicked => { root.rotation = 3; } }
+                    }
+                    Rectangle { height: 8px; }
+                    HorizontalLayout {
+                        spacing: ThemeTokens.space-2;
+                        alignment: end;
+                        TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                        TextButton {
+                            text: root.btn-save;
+                            primary: true;
+                            enabled: !root.is-working;
+                            clicked => { root.rotate-submit(root.page-range-input, root.rotation); }
+                        }
+                    }
+                }
+
+                if root.current-tool == 4 : VerticalLayout {
+                    spacing: 12px;
+                    ToolDropZone { label: root.text-drop-convert; dropped(data) => { root.drop-files(data, 4); } }
+                    Text { text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")"; color: ThemeTokens.text-muted; font-size: 12px; overflow: elide; }
+
+                    HorizontalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: root.text-format; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            HorizontalLayout {
+                                spacing: 5px;
+                                TextButton { text: "TXT"; active: root.convert-format == 0; clicked => { root.convert-format = 0; } }
+                                TextButton { text: "MD"; active: root.convert-format == 1; clicked => { root.convert-format = 1; } }
+                                TextButton { text: "PNG"; active: root.convert-format == 2; clicked => { root.convert-format = 2; } }
+                                TextButton { text: "JPEG"; active: root.convert-format == 3; clicked => { root.convert-format = 3; } }
+                            }
+                        }
+                        if root.convert-format >= 2 : VerticalLayout {
+                            spacing: 4px;
+                            Text { text: root.text-resolution; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            HorizontalLayout {
+                                spacing: 5px;
+                                TextButton { text: "150 DPI"; active: root.convert-dpi == 150; clicked => { root.convert-dpi = 150; } }
+                                TextButton { text: "300 DPI"; active: root.convert-dpi == 300; clicked => { root.convert-dpi = 300; } }
+                            }
+                        }
+                        if root.convert-format == 3 : VerticalLayout {
+                            spacing: 4px;
+                            Text { text: root.text-jpeg-quality; color: ThemeTokens.text; font-size: 12px; font-weight: 600; }
+                            HorizontalLayout {
+                                spacing: 5px;
+                                TextButton { text: "90"; active: root.convert-jpeg-quality == 90; clicked => { root.convert-jpeg-quality = 90; } }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        TextButton {
+                            text: root.text-convert-all + (root.active-doc-pages != "" ? " (" + root.active-doc-pages + " " + root.text-pages-unit + ")" : "");
+                            active: root.convert-scope == 0;
+                            clicked => { root.convert-scope = 0; }
+                        }
+                        TextButton {
+                            text: root.text-convert-custom;
+                            active: root.convert-scope == 1;
+                            clicked => { root.convert-scope = 1; }
+                        }
+                    }
+
+                    if root.convert-scope == 0 : VerticalLayout {
+                        spacing: 12px;
+                        Rectangle { height: 12px; }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-convert-all;
+                                primary: true;
+                                enabled: !root.is-working;
+                                clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, ""); }
+                            }
+                        }
+                    }
+
+                    if root.convert-scope == 1 : VerticalLayout {
+                        spacing: 6px;
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: root.label-pages; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-pages-select-all; clicked => { root.select-all-pages(); } }
+                                TextButton { text: root.text-pages-clear-selection; clicked => { root.clear-pages(); } }
+                            }
+                        }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                            }
+                        }
+                        conv-edit := LineEdit {
+                            text <=> root.page-range-input;
+                            placeholder-text: root.text-split-placeholder;
+                            accepted => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); }
+                        }
+                        Rectangle { height: 8px; }
+                        HorizontalLayout {
+                            spacing: ThemeTokens.space-2;
+                            alignment: end;
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working && root.page-range-input != "";
+                                clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                border-radius: ThemeTokens.flyout-radius - 1px;
+                border-width: ThemeTokens.effects-active ? 1px : 0px;
+                border-color: ThemeTokens.inner-highlight;
+            }
+        }
+    }
+}

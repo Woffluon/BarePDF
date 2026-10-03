@@ -1,4 +1,7 @@
-use super::callbacks::{handle_print_event, refresh_merge_files, set_tool_source};
+use super::callbacks::{
+    handle_background_ui_event, handle_print_event, handle_tool_event, refresh_merge_files,
+    set_tool_source,
+};
 use super::state::AppState;
 use super::ui::{
     begin_open, handle_render_event, install_native_file_drop, is_pdf_path, process_view_changes,
@@ -6,7 +9,7 @@ use super::ui::{
 };
 use super::update_ui::handle_update_event;
 use crate::application::PrintController;
-use crate::infrastructure::UpdateEvent;
+use crate::infrastructure::{ToolWorker, UpdateEvent};
 use barepdf_render::RenderScheduler;
 use barepdf_ui::AppWindow;
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
@@ -152,6 +155,25 @@ pub(super) fn start(
                 had_activity = true;
                 handle_print_event(event, &window);
             }
+        }
+        for _ in 0..EVENTS_PER_TICK {
+            let event = state
+                .borrow()
+                .tool_worker
+                .as_ref()
+                .and_then(ToolWorker::try_recv_event);
+            let Some(event) = event else {
+                break;
+            };
+            had_activity = true;
+            handle_tool_event(event, &window, &state, &scheduler);
+        }
+        for _ in 0..EVENTS_PER_TICK {
+            let Some(event) = state.borrow().try_recv_background_io() else {
+                break;
+            };
+            had_activity = true;
+            handle_background_ui_event(event, &window, &state, &scheduler);
         }
         process_view_changes(&window, &state, &scheduler);
         if !worker_terminated {

@@ -17,3 +17,7 @@ barepdf-i18n = { path = "../barepdf-i18n" }
 [dev-dependencies]
 serde_json.workspace = true
 
+[lints]
+workspace = true
+
+

@@ -66,21 +66,69 @@ fn dialog_initial_values(page_count: u32, options: PrintDialogOptions) -> Dialog
     }
 }
 
-struct DialogAllocations {
-    dev_mode: HGLOBAL,
-    dev_names: HGLOBAL,
+struct SafeGlobalHandle(HGLOBAL);
+
+impl SafeGlobalHandle {
+    const fn new(handle: HGLOBAL) -> Self {
+        Self(handle)
+    }
+
+    fn get(&self) -> HGLOBAL {
+        self.0
+    }
+
+    fn take(&mut self) -> HGLOBAL {
+        let handle = self.0;
+        self.0 = std::ptr::null_mut();
+        handle
+    }
+
+    fn free(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: PrintDlgW/GlobalAlloc returned this movable global-memory handle.
+            // Resetting pointer to null guarantees at-most-once deallocation.
+            let _ = unsafe { GlobalFree(self.0) };
+            self.0 = std::ptr::null_mut();
+        }
+    }
 }
 
-impl Drop for DialogAllocations {
+impl Drop for SafeGlobalHandle {
     fn drop(&mut self) {
-        if !self.dev_mode.is_null() {
-            // SAFETY: PrintDlgW returned this movable global-memory handle to the caller. No lock
-            // or borrowed pointer remains, and this owner frees it exactly once.
-            let _ = unsafe { GlobalFree(self.dev_mode) };
+        self.free();
+    }
+}
+
+struct DialogAllocations {
+    dev_mode: SafeGlobalHandle,
+    dev_names: SafeGlobalHandle,
+}
+
+impl DialogAllocations {
+    const fn new() -> Self {
+        Self {
+            dev_mode: SafeGlobalHandle::new(std::ptr::null_mut()),
+            dev_names: SafeGlobalHandle::new(std::ptr::null_mut()),
         }
-        if !self.dev_names.is_null() {
-            // SAFETY: Same ownership invariant as `dev_mode`; both handles are independent.
-            let _ = unsafe { GlobalFree(self.dev_names) };
+    }
+
+    fn set(&mut self, dev_mode: HGLOBAL, dev_names: HGLOBAL) {
+        // Prevent double free if both point to the same non-null handle
+        if !dev_names.is_null() && dev_names == dev_mode {
+            self.set_distinct(dev_mode, std::ptr::null_mut());
+        } else {
+            self.set_distinct(dev_mode, dev_names);
+        }
+    }
+
+    fn set_distinct(&mut self, dev_mode: HGLOBAL, dev_names: HGLOBAL) {
+        if self.dev_mode.get() != dev_mode {
+            self.dev_mode.free();
+            self.dev_mode = SafeGlobalHandle::new(dev_mode);
+        }
+        if self.dev_names.get() != dev_names {
+            self.dev_names.free();
+            self.dev_names = SafeGlobalHandle::new(dev_names);
         }
     }
 }
@@ -98,6 +146,14 @@ pub(crate) fn show_print_dialog(
             operation: "PrintDlgW size",
             code: 0,
         })?;
+    // SAFETY: `IsWindow` safely inspects a handle value without dereferencing it in Rust.
+    let is_valid_window = !owner.is_null()
+        && unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(owner) } != 0;
+    let owner = if is_valid_window {
+        owner
+    } else {
+        std::ptr::null_mut()
+    };
     dialog.hwndOwner = owner;
     let initial = dialog_initial_values(page_count, options);
     dialog.Flags = PD_NOSELECTION | PD_RETURNDC;
@@ -112,6 +168,8 @@ pub(crate) fn show_print_dialog(
     dialog.nToPage = initial.to_page;
     dialog.nCopies = 1;
 
+    let mut allocations = DialogAllocations::new();
+
     if initial.orientation.is_some() || initial.duplex.is_some() {
         let mut defaults = dialog;
         defaults.Flags = PD_RETURNDEFAULT;
@@ -119,8 +177,9 @@ pub(crate) fn show_print_dialog(
         // SAFETY: The structure is initialized and both required input handles are null. This call
         // does not show UI and returns movable global-memory handles for the default printer.
         if unsafe { PrintDlgW(&raw mut defaults) } != 0 {
-            dialog.hDevMode = defaults.hDevMode;
-            dialog.hDevNames = defaults.hDevNames;
+            allocations.set(defaults.hDevMode, defaults.hDevNames);
+            dialog.hDevMode = allocations.dev_mode.get();
+            dialog.hDevNames = allocations.dev_names.get();
             if let Some(orientation) = initial.orientation {
                 apply_orientation(dialog.hDevMode, orientation);
             }
@@ -130,6 +189,7 @@ pub(crate) fn show_print_dialog(
         } else {
             // A missing default printer is not treated as cancellation here; the visible dialog may
             // still let the user choose a printer. A real common-dialog error still fails closed.
+            // SAFETY: Called immediately after a failed `PrintDlgW` on the same thread.
             let code = unsafe { CommDlgExtendedError() };
             if code != 0 {
                 return Err(PrintError::Dialog(code));
@@ -137,13 +197,16 @@ pub(crate) fn show_print_dialog(
         }
     }
 
+    // Pass any default handles into dialog. Detach from allocations so PrintDlgW has exclusive
+    // control to reallocate/free if the user picks a different printer.
+    dialog.hDevMode = allocations.dev_mode.take();
+    dialog.hDevNames = allocations.dev_names.take();
+
     // SAFETY: `dialog` has the documented size and initialized scalar fields; optional handles and
     // callback/template pointers are null. The owner HWND may be null or a live UI-owned window.
     let accepted = unsafe { PrintDlgW(&raw mut dialog) };
-    let allocations = DialogAllocations {
-        dev_mode: dialog.hDevMode,
-        dev_names: dialog.hDevNames,
-    };
+    allocations.set(dialog.hDevMode, dialog.hDevNames);
+
     if accepted == 0 {
         // SAFETY: Called immediately after failed PrintDlgW on the same thread, before another
         // common-dialog API can overwrite its thread-local extended error.
@@ -190,6 +253,8 @@ fn apply_orientation(dev_mode: HGLOBAL, orientation: PrintOrientation) {
     if pointer.is_null() {
         return;
     }
+    // SAFETY: `pointer` is non-null, locked from `PrintDlgW`'s `DEVMODEW` allocation, and unlocked
+    // immediately after updating the orientation fields.
     unsafe {
         (*pointer).dmFields |= DM_ORIENTATION;
         (*pointer).Anonymous1.Anonymous1.dmOrientation = orientation;
@@ -212,11 +277,18 @@ fn apply_duplex(dev_mode: HGLOBAL, duplex: PrintDuplex) {
     if pointer.is_null() {
         return;
     }
+    // SAFETY: `pointer` is non-null, locked from `PrintDlgW`'s `DEVMODEW` allocation, and unlocked
+    // immediately after updating the duplex fields.
     unsafe {
         (*pointer).dmFields |= DM_DUPLEX;
         (*pointer).dmDuplex = duplex_val;
         let _ = GlobalUnlock(dev_mode);
     }
+}
+
+#[inline]
+pub(crate) fn is_valid_devmode_size(size: i32) -> bool {
+    size > 0 && (size as usize) >= std::mem::size_of::<DEVMODEW>()
 }
 
 pub(crate) fn create_direct_printer_device(
@@ -269,24 +341,25 @@ pub(crate) fn create_direct_printer_device(
             )
         };
 
-        if devmode_size > 0 {
-            let mut buf = vec![0u8; devmode_size as usize];
+        if is_valid_devmode_size(devmode_size) {
+            let u64_len = (devmode_size as usize).div_ceil(std::mem::size_of::<u64>());
+            let mut in_buf = vec![0u64; u64_len];
 
             // Retrieve current devmode
-            // SAFETY: Buffer is allocated with `devmode_size` bytes.
+            // SAFETY: Buffer is allocated with `devmode_size` bytes and 8-byte aligned.
             let get_res = unsafe {
                 DocumentPropertiesW(
                     std::ptr::null_mut(),
                     hprinter,
                     wide_name.as_ptr() as *mut u16,
-                    buf.as_mut_ptr().cast(),
+                    in_buf.as_mut_ptr().cast(),
                     std::ptr::null_mut(),
                     DM_OUT_BUFFER,
                 )
             };
 
             if get_res >= 0 {
-                let devmode = buf.as_mut_ptr().cast::<DEVMODEW>();
+                let devmode = in_buf.as_mut_ptr().cast::<DEVMODEW>();
                 if copies > 0 {
                     // SAFETY: Pointer is within allocated devmode buffer.
                     unsafe {
@@ -325,18 +398,23 @@ pub(crate) fn create_direct_printer_device(
                 }
 
                 // Merge and validate with driver (without displaying any dialog)
-                // SAFETY: In and out buffers point to valid DEVMODEW data.
-                let _ = unsafe {
+                let mut out_buf = vec![0u64; u64_len];
+                // SAFETY: in_buf and out_buf are distinct non-overlapping 8-byte aligned buffers.
+                let merge_res = unsafe {
                     DocumentPropertiesW(
                         std::ptr::null_mut(),
                         hprinter,
                         wide_name.as_ptr() as *mut u16,
-                        buf.as_mut_ptr().cast(),
-                        buf.as_ptr().cast(),
+                        out_buf.as_mut_ptr().cast(),
+                        in_buf.as_ptr().cast(),
                         DM_IN_BUFFER | DM_OUT_BUFFER,
                     )
                 };
-                Some(buf)
+                if merge_res >= 0 {
+                    Some(out_buf)
+                } else {
+                    Some(in_buf)
+                }
             } else {
                 None
             }
@@ -369,9 +447,17 @@ pub(crate) fn create_direct_printer_device(
 
 pub(crate) struct PrinterDevice(HDC);
 
-// SAFETY: This wrapper owns a printer memory DC, never exposes its HDC, and allows only serialized
-// `&mut self` access. GDI printer DCs may be transferred between threads when no concurrent call
-// uses the handle; the creator thread retains no alias after PrintDlgW returns it.
+// SAFETY: `PrinterDevice` owns a Win32 GDI printer device context (`HDC`) created via `PrintDlgW`
+// (`PD_RETURNDC`) or `CreateDCW` and never exposes the raw `HDC` outside this module.
+// GDI `HDC`s are not generally free-threaded: concurrent GDI operations on the same `HDC` from
+// multiple threads are undefined behavior, and while an `HDC` is actively selected into or executing
+// a GDI call on one thread it cannot be used on another. However, Win32 GDI allows a printer `HDC`
+// to be transferred across thread boundaries provided:
+// 1. The creating thread performs no further GDI operations on the `HDC` after creation and retains
+//    no alias to it.
+// 2. Ownership transfer is exclusive (`Send`, not `Sync`), and all subsequent `StartDocW`,
+//    `StartPage`, `StretchDIBits`, `EndPage`, `EndDoc`, `AbortDoc`, and `DeleteDC` calls are
+//    strictly serialized through unique ownership (`self` or `&mut self`).
 unsafe impl Send for PrinterDevice {}
 
 impl PrinterDevice {
@@ -403,8 +489,9 @@ impl PrinterDevice {
 
 impl Drop for PrinterDevice {
     fn drop(&mut self) {
-        // SAFETY: This wrapper exclusively owns the non-null printer HDC returned by PrintDlgW and
-        // calls DeleteDC exactly once after any active print document has ended or been aborted.
+        // SAFETY: This wrapper exclusively owns the non-null printer HDC returned by PrintDlgW or
+        // CreateDCW and calls DeleteDC exactly once after any active print document has ended or
+        // been aborted.
         let _ = unsafe { DeleteDC(self.0) };
     }
 }
@@ -434,14 +521,24 @@ impl PrinterJob {
         // SAFETY: The job exclusively owns a live printer HDC between successful StartDocW and
         // EndDoc/AbortDoc. No Rust pointer crosses this call.
         if unsafe { StartPage(self.device.0) } <= 0 {
-            return Err(last_error("StartPage"));
+            let err = last_error("StartPage");
+            self.abort();
+            return Err(err);
         }
 
-        let (x, y, output_width, output_height) = fitted_page(self.device.0, width, height)?;
+        let (x, y, output_width, output_height) = match fitted_page(self.device.0, width, height) {
+            Ok(dims) => dims,
+            Err(err) => {
+                self.abort();
+                return Err(err);
+            }
+        };
         let bitmap = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
-                biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>())
-                    .map_err(|_| PrintError::InvalidPage)?,
+                biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).map_err(|_| {
+                    self.abort();
+                    PrintError::InvalidPage
+                })?,
                 biWidth: width,
                 biHeight: -height,
                 biPlanes: 1,
@@ -480,13 +577,17 @@ impl PrinterJob {
                 SRCCOPY,
             )
         };
-        if copied == 0 || copied == GDI_ERROR {
-            return Err(last_error("StretchDIBits"));
+        if copied <= 0 || copied == GDI_ERROR {
+            let err = last_error("StretchDIBits");
+            self.abort();
+            return Err(err);
         }
-        // SAFETY: StartPage succeeded for this exclusive active printer job; all raster input has
-        // been consumed synchronously and no borrowed pointer remains.
+        // SAFETY: StartPage and StretchDIBits succeeded for this exclusive active printer job; all
+        // raster input has been consumed synchronously and no borrowed pointer remains.
         if unsafe { EndPage(self.device.0) } <= 0 {
-            return Err(last_error("EndPage"));
+            let err = last_error("EndPage");
+            self.abort();
+            return Err(err);
         }
         Ok(())
     }
@@ -498,7 +599,9 @@ impl PrinterJob {
         // SAFETY: This job exclusively owns an HDC with a successfully started document and no
         // page call in progress. EndDoc consumes the spool document state synchronously.
         if unsafe { EndDoc(self.device.0) } <= 0 {
-            return Err(last_error("EndDoc"));
+            let err = last_error("EndDoc");
+            self.abort();
+            return Err(err);
         }
         self.active = false;
         Ok(())
@@ -507,7 +610,8 @@ impl PrinterJob {
     fn abort(&mut self) {
         if self.active {
             // SAFETY: This job exclusively owns the live HDC and StartDocW succeeded. Any failed or
-            // cancelled page is terminated before PrinterDevice subsequently deletes the DC.
+            // cancelled page is terminated via AbortDoc (without calling EndPage on a broken page)
+            // before PrinterDevice subsequently deletes the DC.
             let _ = unsafe { AbortDoc(self.device.0) };
             self.active = false;
         }
@@ -525,10 +629,10 @@ fn fitted_page(
     source_width: i32,
     source_height: i32,
 ) -> Result<(i32, i32, i32, i32), PrintError> {
-    // SAFETY: Caller exclusively owns this live printer HDC. GetDeviceCaps only reads driver
-    // metadata and writes through no pointers.
     let horizontal_resolution = i32::try_from(HORZRES).map_err(|_| PrintError::InvalidPage)?;
     let vertical_resolution = i32::try_from(VERTRES).map_err(|_| PrintError::InvalidPage)?;
+    // SAFETY: Caller exclusively owns this live printer HDC. GetDeviceCaps only reads driver
+    // metadata and writes through no pointers.
     let destination_width = unsafe { GetDeviceCaps(hdc, horizontal_resolution) };
     // SAFETY: Same HDC and read-only device-capability query as above.
     let destination_height = unsafe { GetDeviceCaps(hdc, vertical_resolution) };
@@ -651,5 +755,68 @@ mod tests {
 
         assert_eq!(values.orientation, Some(PrintOrientation::Portrait));
         assert_eq!(values.duplex, Some(PrintDuplex::TwoSidedShortEdge));
+    }
+
+    #[test]
+    fn devmode_size_validation_enforces_minimum_struct_size() {
+        use super::is_valid_devmode_size;
+        use windows_sys::Win32::Graphics::Gdi::DEVMODEW;
+
+        assert!(!is_valid_devmode_size(-1));
+        assert!(!is_valid_devmode_size(0));
+        assert!(!is_valid_devmode_size(
+            (std::mem::size_of::<DEVMODEW>() - 1) as i32
+        ));
+        assert!(is_valid_devmode_size(std::mem::size_of::<DEVMODEW>() as i32));
+        assert!(is_valid_devmode_size(
+            (std::mem::size_of::<DEVMODEW>() + 128) as i32
+        ));
+    }
+
+    #[test]
+    fn devmode_buffers_are_eight_byte_aligned_and_distinct() {
+        use windows_sys::Win32::Graphics::Gdi::DEVMODEW;
+
+        let devmode_size = (std::mem::size_of::<DEVMODEW>() + 64) as i32;
+        let u64_len = (devmode_size as usize).div_ceil(std::mem::size_of::<u64>());
+        let in_buf = vec![0u64; u64_len];
+        let out_buf = vec![0u64; u64_len];
+
+        assert_eq!(in_buf.as_ptr() as usize % 8, 0);
+        assert_eq!(out_buf.as_ptr() as usize % 8, 0);
+        assert!(std::mem::align_of::<DEVMODEW>() <= 8);
+
+        // Buffers must be completely non-overlapping
+        let in_start = in_buf.as_ptr() as usize;
+        let in_end = in_start + in_buf.len() * 8;
+        let out_start = out_buf.as_ptr() as usize;
+        let out_end = out_start + out_buf.len() * 8;
+
+        assert!(in_end <= out_start || out_end <= in_start);
+    }
+
+    #[test]
+    fn dialog_allocations_handles_null_and_avoids_double_free() {
+        use super::{DialogAllocations, SafeGlobalHandle};
+        use windows_sys::Win32::System::Memory::{GlobalAlloc, GMEM_FIXED};
+
+        // Null handle drop is safe
+        let handle = SafeGlobalHandle::new(std::ptr::null_mut());
+        drop(handle);
+
+        // Real memory allocation through SafeGlobalHandle
+        // SAFETY: `GlobalAlloc` with `GMEM_FIXED` allocates 32 bytes from the process heap.
+        let mem = unsafe { GlobalAlloc(GMEM_FIXED, 32) };
+        assert!(!mem.is_null());
+        let handle = SafeGlobalHandle::new(mem);
+        drop(handle);
+
+        // DialogAllocations with identical handles avoids double free
+        // SAFETY: `GlobalAlloc` with `GMEM_FIXED` allocates 32 bytes from the process heap.
+        let mem2 = unsafe { GlobalAlloc(GMEM_FIXED, 32) };
+        assert!(!mem2.is_null());
+        let mut allocs = DialogAllocations::new();
+        allocs.set(mem2, mem2); // Both point to the same memory
+        drop(allocs); // Must not double-free
     }
 }

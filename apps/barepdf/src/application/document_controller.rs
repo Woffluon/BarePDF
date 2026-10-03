@@ -27,8 +27,8 @@ impl DocumentController {
         if application.tabs.active().and_then(|tab| tab.path.as_ref()) != Some(&path) {
             let _ = application.tabs.open(path.clone(), title);
         }
-        let active = Self::take_active(application);
         if let Some(tab) = application.tabs.active_mut() {
+            let active = Self::take_active_for_tab(tab);
             tab.document = Some(DocumentState::Opening {
                 id,
                 path,
@@ -45,16 +45,28 @@ impl DocumentController {
         raw_page_count: u32,
         max_page_count: u32,
     ) -> OpenTransition {
-        let Some((path, started_at)) = Self::pending(application, id) else {
+        let Some(tab) = Self::find_tab_by_id_mut(application, id) else {
             return OpenTransition::Stale;
+        };
+        let (path, started_at, active) = match tab.document.take() {
+            Some(DocumentState::Opening {
+                path,
+                started_at,
+                active,
+                ..
+            })
+            | Some(DocumentState::PasswordRequired {
+                path,
+                started_at,
+                active,
+                ..
+            }) => (path, started_at, active),
+            _ => return OpenTransition::Stale,
         };
         let Some(page_count) =
             PageCount::new(raw_page_count).filter(|page_count| page_count.get() <= max_page_count)
         else {
-            let active = Self::take_active(application);
-            if let Some(tab) = application.tabs.active_mut() {
-                tab.document = Some(DocumentState::Failed { path, active });
-            }
+            tab.document = Some(DocumentState::Failed { path, active });
             return OpenTransition::InvalidPageCount;
         };
         let ready = ReadyDocument {
@@ -63,48 +75,66 @@ impl DocumentController {
             page_count,
             started_at,
         };
-        if let Some(tab) = application.tabs.active_mut() {
-            tab.document = Some(DocumentState::Ready(ready.clone()));
-        }
+        tab.document = Some(DocumentState::Ready(ready.clone()));
         OpenTransition::Ready(ready)
     }
 
     #[must_use]
     pub(crate) fn require_password(application: &mut Application, id: DocumentId) -> bool {
-        let Some((path, started_at)) = Self::pending(application, id) else {
+        let Some(tab) = Self::find_tab_by_id_mut(application, id) else {
             return false;
         };
-        let active = Self::take_active(application);
-        if let Some(tab) = application.tabs.active_mut() {
-            tab.document = Some(DocumentState::PasswordRequired {
-                id,
+        let (path, started_at, active) = match tab.document.take() {
+            Some(DocumentState::Opening {
                 path,
                 started_at,
                 active,
-            });
-        }
+                ..
+            })
+            | Some(DocumentState::PasswordRequired {
+                path,
+                started_at,
+                active,
+                ..
+            }) => (path, started_at, active),
+            _ => return false,
+        };
+        tab.document = Some(DocumentState::PasswordRequired {
+            id,
+            path,
+            started_at,
+            active,
+        });
         true
     }
 
     #[must_use]
     pub(crate) fn fail(application: &mut Application, id: DocumentId) -> Option<PathBuf> {
-        let (path, _) = Self::pending(application, id)?;
-        let active = Self::take_active(application);
-        if let Some(tab) = application.tabs.active_mut() {
-            tab.document = Some(DocumentState::Failed {
-                path: path.clone(),
-                active,
-            });
-        }
+        let tab = Self::find_tab_by_id_mut(application, id)?;
+        let (path, active) = match tab.document.take() {
+            Some(DocumentState::Opening { path, active, .. })
+            | Some(DocumentState::PasswordRequired { path, active, .. }) => (path, active),
+            _ => return None,
+        };
+        tab.document = Some(DocumentState::Failed {
+            path: path.clone(),
+            active,
+        });
         Some(path)
     }
 
     pub(crate) fn cancel_open(application: &mut Application, id: DocumentId) {
-        if Self::pending(application, id).is_some() {
-            let active = Self::take_active(application).map(DocumentState::Ready);
-            if let Some(tab) = application.tabs.active_mut() {
-                tab.document = active;
-            }
+        if let Some(tab) = Self::find_tab_by_id_mut(application, id) {
+            let active = match tab.document.take() {
+                Some(
+                    DocumentState::Opening { active, .. }
+                    | DocumentState::PasswordRequired { active, .. }
+                    | DocumentState::Failed { active, .. },
+                ) => active,
+                Some(DocumentState::Ready(document)) => Some(document),
+                None => None,
+            };
+            tab.document = active.map(DocumentState::Ready);
         }
     }
 
@@ -142,32 +172,47 @@ impl DocumentController {
         PageIndex::new(raw, application.ready_document()?.page_count())
     }
 
-    fn pending(application: &Application, id: DocumentId) -> Option<(PathBuf, Instant)> {
-        match application.tabs.active()?.document.as_ref() {
-            Some(
-                DocumentState::Opening {
-                    id: pending_id,
-                    path,
-                    started_at,
-                    ..
-                }
-                | DocumentState::PasswordRequired {
-                    id: pending_id,
-                    path,
-                    started_at,
-                    ..
-                },
-            ) if *pending_id == id => Some((path.clone(), *started_at)),
-            _ => None,
-        }
+    fn find_tab_by_id_mut(
+        application: &mut Application,
+        id: DocumentId,
+    ) -> Option<&mut super::tabs::TabState> {
+        application.tabs.tabs_mut().iter_mut().find(|tab| {
+            matches!(
+                tab.document.as_ref(),
+                Some(
+                    DocumentState::Opening { id: pending_id, .. }
+                    | DocumentState::PasswordRequired { id: pending_id, .. }
+                ) if *pending_id == id
+            )
+        })
     }
 
-    fn take_active(application: &mut Application) -> Option<ReadyDocument> {
-        match application
+    fn pending(application: &Application, id: DocumentId) -> Option<(PathBuf, Instant)> {
+        application
             .tabs
-            .active_mut()
-            .and_then(|tab| tab.document.take())
-        {
+            .tabs()
+            .iter()
+            .find_map(|tab| match tab.document.as_ref() {
+                Some(
+                    DocumentState::Opening {
+                        id: pending_id,
+                        path,
+                        started_at,
+                        ..
+                    }
+                    | DocumentState::PasswordRequired {
+                        id: pending_id,
+                        path,
+                        started_at,
+                        ..
+                    },
+                ) if *pending_id == id => Some((path.clone(), *started_at)),
+                _ => None,
+            })
+    }
+
+    fn take_active_for_tab(tab: &mut super::tabs::TabState) -> Option<ReadyDocument> {
+        match tab.document.take() {
             Some(DocumentState::Ready(document)) => Some(document),
             Some(
                 DocumentState::Opening { active, .. }
@@ -312,5 +357,111 @@ mod tests {
             Some(path.as_path())
         );
         assert!(application.ready_document().is_none());
+    }
+
+    #[test]
+    fn background_tab_opening_transitions_to_ready_independently() {
+        let mut application = Application::default();
+        let first_id = DocumentId::new(10);
+        let first_path = PathBuf::from("first.pdf");
+        DocumentController::begin_open(
+            &mut application,
+            first_id,
+            first_path.clone(),
+            Instant::now(),
+        );
+
+        let second_id = DocumentId::new(20);
+        let second_path = PathBuf::from("second.pdf");
+        DocumentController::begin_open(
+            &mut application,
+            second_id,
+            second_path.clone(),
+            Instant::now(),
+        );
+
+        // Second tab is active, first tab is in background
+        assert_eq!(
+            application.tabs.active().and_then(|t| t.path.as_ref()),
+            Some(&second_path)
+        );
+
+        // Background tab finishes loading
+        assert!(matches!(
+            DocumentController::opened(&mut application, first_id, 5, 10_000),
+            OpenTransition::Ready(_)
+        ));
+
+        // First tab is now Ready in background
+        let tab1 = application
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.path.as_ref() == Some(&first_path))
+            .unwrap();
+        assert!(matches!(tab1.document, Some(DocumentState::Ready(_))));
+
+        // Second tab is still in Opening state
+        let tab2 = application
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.path.as_ref() == Some(&second_path))
+            .unwrap();
+        assert!(
+            matches!(tab2.document, Some(DocumentState::Opening { id, .. }) if id == second_id)
+        );
+    }
+
+    #[test]
+    fn background_tab_require_password_and_failure_work_independently() {
+        let mut application = Application::default();
+        let first_id = DocumentId::new(30);
+        let first_path = PathBuf::from("pwd_bg.pdf");
+        DocumentController::begin_open(
+            &mut application,
+            first_id,
+            first_path.clone(),
+            Instant::now(),
+        );
+
+        let second_id = DocumentId::new(40);
+        let second_path = PathBuf::from("active.pdf");
+        DocumentController::begin_open(
+            &mut application,
+            second_id,
+            second_path.clone(),
+            Instant::now(),
+        );
+
+        // Password required for background tab
+        assert!(DocumentController::require_password(
+            &mut application,
+            first_id
+        ));
+        let tab1 = application
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.path.as_ref() == Some(&first_path))
+            .unwrap();
+        assert!(
+            matches!(tab1.document, Some(DocumentState::PasswordRequired { id, .. }) if id == first_id)
+        );
+
+        // Fail background tab
+        assert_eq!(
+            DocumentController::fail(&mut application, first_id),
+            Some(first_path.clone())
+        );
+        let tab1 = application
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.path.as_ref() == Some(&first_path))
+            .unwrap();
+        assert!(
+            matches!(tab1.document, Some(DocumentState::Failed { ref path, .. }) if path == &first_path)
+        );
     }
 }

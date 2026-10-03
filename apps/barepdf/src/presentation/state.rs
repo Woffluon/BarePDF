@@ -1,8 +1,7 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::struct_excessive_bools
+    clippy::cast_sign_loss
 )]
 
 use super::ui::{
@@ -11,22 +10,151 @@ use super::ui::{
 use crate::application::{Application, DocumentController, UpdateController};
 use crate::infrastructure::{ToolJobKey, ToolWorker};
 use barepdf_core::{
-    ContinuousLayout, DocumentId, PageTextGeometry, Rotation, TextSelection, UserPreferences,
-    ViewingMode, WindowMode, ZoomFactor, ZoomMode,
+    ContinuousLayout, DocumentId, PageCount, PageIndex, PageTextGeometry, RequestId, Rotation,
+    TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
 };
 use barepdf_pdf::conversion::CancellationToken;
 use barepdf_pdf::OutlineNode;
 use barepdf_render::RenderKind;
 use lru::LruCache;
 use slint::{Image, Rgba8Pixel, Timer};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MAX_TEXT_GEOMETRIES: usize = 32;
+
+pub(crate) const PRINT_PREVIEW_REQUEST_MASK: u64 = 1 << 63;
+pub(crate) const PRINT_PREVIEW_MAX_EDGE: u32 = 960;
+static PRINT_PREVIEW_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[must_use]
+pub(crate) fn next_print_preview_request_id() -> RequestId {
+    let sequence = PRINT_PREVIEW_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    RequestId::new(PRINT_PREVIEW_REQUEST_MASK | (sequence & !PRINT_PREVIEW_REQUEST_MASK).max(1))
+}
+
+fn default_print_preview_range(page_count: PageCount) -> String {
+    if page_count.get() == 1 {
+        "1".into()
+    } else {
+        format!("1-{}", page_count.get())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingPreviewRender {
+    pub(crate) request_id: RequestId,
+    pub(crate) page_index: PageIndex,
+}
+
+#[derive(Debug)]
+pub(crate) struct PrintPreviewState {
+    pub(crate) open: bool,
+    pub(crate) document_id: Option<DocumentId>,
+    pub(crate) generation: u64,
+    pub(crate) page_count: PageCount,
+    pub(crate) page_index: PageIndex,
+    pub(crate) orientation: i32,
+    pub(crate) duplex: i32,
+    pub(crate) range: String,
+    pub(crate) pending: Option<PendingPreviewRender>,
+}
+
+impl Default for PrintPreviewState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            document_id: None,
+            generation: 0,
+            page_count: PageCount::new(1).expect("valid default count"),
+            page_index: PageIndex::zero(),
+            orientation: 0,
+            duplex: 0,
+            range: "1".into(),
+            pending: None,
+        }
+    }
+}
+
+impl PrintPreviewState {
+    pub(crate) fn open(
+        &mut self,
+        document_id: DocumentId,
+        generation: u64,
+        page_count: PageCount,
+        page_index: PageIndex,
+    ) {
+        self.open = true;
+        self.document_id = Some(document_id);
+        self.generation = generation;
+        self.page_count = page_count;
+        self.page_index = PageIndex::from_raw(page_index.get().min(page_count.get() - 1));
+        self.orientation = 0;
+        self.duplex = 0;
+        self.range = default_print_preview_range(page_count);
+        self.pending = None;
+    }
+
+    pub(crate) fn expect_render(&mut self, request_id: RequestId, page_index: PageIndex) {
+        self.pending = Some(PendingPreviewRender {
+            request_id,
+            page_index,
+        });
+    }
+
+    pub(crate) fn accept_render(
+        &mut self,
+        request_id: RequestId,
+        document_id: DocumentId,
+        generation: u64,
+        page_index: PageIndex,
+    ) -> bool {
+        let matches = self.open
+            && self.document_id == Some(document_id)
+            && self.generation == generation
+            && self.pending.is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.page_index == page_index
+                    && self.page_index == page_index
+            });
+        if matches {
+            self.pending = None;
+        }
+        matches
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.open = false;
+        self.pending = None;
+    }
+
+    pub(crate) fn set_page(&mut self, page: i32) -> PageIndex {
+        let maximum = self.page_count.get().saturating_sub(1);
+        let page = u32::try_from(page).unwrap_or(0).min(maximum);
+        self.page_index = PageIndex::from_raw(page);
+        self.page_index
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DocumentStatus {
+    pub(crate) first_page_ready: bool,
+    pub(crate) profile_recorded: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InFlightFlags {
+    pub(crate) dimensions_request: bool,
+    pub(crate) outline_requested: bool,
+    pub(crate) printer_enum: bool,
+    pub(crate) annotation_save: bool,
+}
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct LayoutKey {
@@ -56,40 +184,37 @@ pub(crate) struct UiImageCache {
 }
 
 struct CachedTextGeometry {
-    geometry: PageTextGeometry,
+    geometry: Arc<PageTextGeometry>,
     bytes: usize,
 }
 
 pub(crate) struct TextGeometryCache {
-    entries: HashMap<(DocumentId, u32), CachedTextGeometry>,
-    insertion_order: VecDeque<(DocumentId, u32)>,
+    entries: LruCache<(DocumentId, u32), CachedTextGeometry>,
     bytes: usize,
 }
 
 impl TextGeometryCache {
     pub(crate) fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            insertion_order: VecDeque::new(),
+            entries: LruCache::new(
+                NonZeroUsize::new(MAX_TEXT_GEOMETRIES).unwrap_or(NonZeroUsize::MIN),
+            ),
             bytes: 0,
         }
     }
 
     pub(crate) fn contains_key(&self, document: DocumentId, page_index: u32) -> bool {
-        self.entries.contains_key(&(document, page_index))
+        self.entries.peek(&(document, page_index)).is_some()
     }
 
     pub(crate) fn get(
         &mut self,
         document: DocumentId,
         page_index: u32,
-    ) -> Option<&PageTextGeometry> {
-        let key = (document, page_index);
-        if self.entries.contains_key(&key) {
-            self.insertion_order.retain(|entry| *entry != key);
-            self.insertion_order.push_back(key);
-        }
-        self.entries.get(&key).map(|entry| &entry.geometry)
+    ) -> Option<Arc<PageTextGeometry>> {
+        self.entries
+            .get(&(document, page_index))
+            .map(|entry| Arc::clone(&entry.geometry))
     }
 
     pub(crate) fn insert(
@@ -116,49 +241,49 @@ impl TextGeometryCache {
             return;
         }
 
-        if let Some(previous) = self.entries.remove(&key) {
+        if let Some(previous) = self.entries.pop(&key) {
             self.bytes = self.bytes.saturating_sub(previous.bytes);
-            self.insertion_order.retain(|entry| *entry != key);
         }
         while self.entries.len() >= MAX_TEXT_GEOMETRIES
             || self.bytes.saturating_add(bytes) > TEXT_GEOMETRY_BUDGET
         {
-            let Some(oldest) = self.insertion_order.pop_front() else {
+            let Some((_oldest, previous)) = self.entries.pop_lru() else {
                 break;
             };
-            if let Some(previous) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(previous.bytes);
-            }
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
         }
 
         self.bytes = self.bytes.saturating_add(bytes);
-        self.insertion_order.push_back(key);
-        self.entries
-            .insert(key, CachedTextGeometry { geometry, bytes });
+        self.entries.put(
+            key,
+            CachedTextGeometry {
+                geometry: Arc::new(geometry),
+                bytes,
+            },
+        );
     }
 
     pub(crate) fn remove_document(&mut self, document: DocumentId) {
-        let keys = self
+        let keys: Vec<(DocumentId, u32)> = self
             .entries
-            .keys()
-            .filter(|(entry_document, _)| *entry_document == document)
-            .copied()
-            .collect::<Vec<_>>();
+            .iter()
+            .filter_map(|(&(entry_document, page), _)| {
+                (entry_document == document).then_some((entry_document, page))
+            })
+            .collect();
         for key in keys {
-            if let Some(previous) = self.entries.remove(&key) {
+            if let Some(previous) = self.entries.pop(&key) {
                 self.bytes = self.bytes.saturating_sub(previous.bytes);
             }
-            self.insertion_order.retain(|entry| *entry != key);
         }
     }
 
-    pub(crate) fn in_page_order(&self, document: DocumentId) -> Vec<&PageTextGeometry> {
+    pub(crate) fn in_page_order(&self, document: DocumentId) -> Vec<Arc<PageTextGeometry>> {
         let mut geometries = self
             .entries
             .iter()
-            .filter_map(|((entry_document, _), entry)| {
-                (*entry_document == document).then_some(&entry.geometry)
-            })
+            .filter(|(&(entry_document, _), _)| entry_document == document)
+            .map(|(_, entry)| Arc::clone(&entry.geometry))
             .collect::<Vec<_>>();
         geometries.sort_unstable_by_key(|geometry| geometry.page_index);
         geometries
@@ -275,16 +400,15 @@ pub(crate) struct AppState {
     pub(crate) zoom_factor: ZoomFactor,
     pub(crate) rotation: Rotation,
     pub(crate) first_page_dimensions: (f32, f32),
-    pub(crate) page_dimensions: Vec<(f32, f32)>,
+    pub(crate) page_dimensions: Arc<Vec<(f32, f32)>>,
     pub(crate) dimensions_revision: u64,
     pub(crate) next_dimensions_start: u32,
-    pub(crate) dimensions_request_pending: bool,
+    pub(crate) in_flight: InFlightFlags,
     pub(crate) layout: ContinuousLayout,
     pub(crate) layout_key: Option<LayoutKey>,
     pub(crate) visible_page_indices: Vec<u32>,
     pub(crate) generation: u64,
-    pub(crate) first_page_ready: bool,
-    pub(crate) profile_recorded: bool,
+    pub(crate) status: DocumentStatus,
     pub(crate) open_started_at: Option<Instant>,
     pub(crate) window_mode: WindowMode,
     pub(crate) preferences: UserPreferences,
@@ -300,12 +424,12 @@ pub(crate) struct AppState {
     pub(crate) viewport_height: u32,
     pub(crate) scale_factor: f32,
     pub(crate) resize_changed_at: Option<Instant>,
-    pub(crate) outline: Vec<OutlineNode>,
-    pub(crate) outline_requested: bool,
+    pub(crate) outline: Arc<Vec<OutlineNode>>,
     pub(crate) expanded_outline: HashSet<Vec<usize>>,
     pub(crate) flat_outline: Vec<FlatOutlineEntry>,
     pub(crate) page_images: UiImageCache,
     pub(crate) thumbnail_images: UiImageCache,
+    pub(crate) failed_pages: HashSet<(DocumentId, u32)>,
     pub(crate) update: UpdateController,
     pub(crate) tools_merge_files: Vec<PathBuf>,
     pub(crate) tools_source_path: Option<PathBuf>,
@@ -314,7 +438,11 @@ pub(crate) struct AppState {
     pub(crate) next_tool_job_id: u64,
     pub(crate) active_tool_job: Option<ActiveToolJob>,
     pub(crate) tool_worker: Option<ToolWorker>,
-    pub(crate) tool_event_timer: Option<Rc<Timer>>,
+    pub(crate) cached_printers: Vec<barepdf_platform_windows::InstalledPrinter>,
+    pub(crate) print_preview: PrintPreviewState,
+    background_io_sender: std::sync::mpsc::Sender<BackgroundUiEvent>,
+    background_io_receiver: std::sync::mpsc::Receiver<BackgroundUiEvent>,
+    background_io_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) search_query: Option<barepdf_core::search::SearchQuery>,
     pub(crate) search_matches: Vec<barepdf_core::search::SearchMatch>,
     pub(crate) active_search_match: usize,
@@ -337,6 +465,7 @@ impl AppState {
             ZoomMode::Custom(factor) => factor,
             _ => ZoomFactor::default(),
         };
+        let (background_io_sender, background_io_receiver) = std::sync::mpsc::channel();
         Self {
             application: Application::default(),
             current_page: 0,
@@ -345,16 +474,15 @@ impl AppState {
             zoom_factor: initial_zoom,
             rotation: Rotation::Degrees0,
             first_page_dimensions: (612.0, 792.0),
-            page_dimensions: Vec::new(),
+            page_dimensions: Arc::new(Vec::new()),
             dimensions_revision: 0,
             next_dimensions_start: 1,
-            dimensions_request_pending: false,
+            in_flight: InFlightFlags::default(),
             layout: ContinuousLayout::default(),
             layout_key: None,
             visible_page_indices: Vec::new(),
             generation: 1,
-            first_page_ready: false,
-            profile_recorded: false,
+            status: DocumentStatus::default(),
             open_started_at: None,
             window_mode: WindowMode::Normal,
             preferences,
@@ -370,12 +498,12 @@ impl AppState {
             viewport_height: 700,
             scale_factor: 1.0,
             resize_changed_at: None,
-            outline: Vec::new(),
-            outline_requested: false,
+            outline: Arc::new(Vec::new()),
             expanded_outline: HashSet::new(),
             flat_outline: Vec::new(),
             page_images: UiImageCache::new(adaptive_cache_budget(initial_zoom)),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
+            failed_pages: HashSet::new(),
             update: UpdateController::default(),
             tools_merge_files: Vec::new(),
             tools_source_path: None,
@@ -384,7 +512,11 @@ impl AppState {
             next_tool_job_id: 1,
             active_tool_job: None,
             tool_worker: None,
-            tool_event_timer: None,
+            cached_printers: Vec::new(),
+            print_preview: PrintPreviewState::default(),
+            background_io_sender,
+            background_io_receiver,
+            background_io_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             search_query: None,
             search_matches: Vec::new(),
             active_search_match: 0,
@@ -399,6 +531,24 @@ impl AppState {
             pump_timer: None,
             pump_active_until: None,
         }
+    }
+
+    pub(crate) fn spawn_background_io<F>(&mut self, task: F)
+    where
+        F: FnOnce() -> BackgroundUiEvent + Send + 'static,
+    {
+        let sender = self.background_io_sender.clone();
+        let in_flight = self.background_io_in_flight.clone();
+        in_flight.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.wake_pump();
+        std::thread::spawn(move || {
+            let _guard = BackgroundIoGuard(in_flight);
+            let _ = sender.send(task());
+        });
+    }
+
+    pub(crate) fn try_recv_background_io(&self) -> Option<BackgroundUiEvent> {
+        self.background_io_receiver.try_recv().ok()
     }
 
     pub(crate) fn active_document(&self) -> Option<DocumentId> {
@@ -430,13 +580,19 @@ impl AppState {
 
     pub(crate) fn pump_requires_active(&self, now: Instant) -> bool {
         self.update.is_busy()
-            || self.dimensions_request_pending
+            || self.active_tool_job.is_some()
+            || self
+                .background_io_in_flight
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 0
+            || self.in_flight.dimensions_request
             || self.resize_changed_at.is_some()
             || self.active_document().is_some_and(|document| {
                 self.visible_page_indices.iter().any(|page| {
                     !self
                         .page_images
                         .contains_key(document, *page, RenderKind::Page)
+                        && !self.failed_pages.contains(&(document, *page))
                 })
             })
             || DocumentController::pending_path(&self.application).is_some()
@@ -476,11 +632,11 @@ impl AppState {
 
     pub(crate) fn snapshot_active_tab_layout(&mut self) {
         let layout = crate::application::TabDocumentLayout {
-            page_dimensions: self.page_dimensions.clone(),
+            page_dimensions: Arc::clone(&self.page_dimensions),
             first_page_dimensions: self.first_page_dimensions,
             dimensions_revision: self.dimensions_revision,
             next_dimensions_start: self.next_dimensions_start,
-            outline: self.outline.clone(),
+            outline: Arc::clone(&self.outline),
         };
         if let Some(tab) = self.application.tabs.active_mut() {
             tab.layout = layout;
@@ -491,13 +647,12 @@ impl AppState {
         let Some(tab) = self.application.tabs.active() else {
             return;
         };
-        let layout = tab.layout.clone();
-        self.page_dimensions = layout.page_dimensions;
-        self.first_page_dimensions = layout.first_page_dimensions;
-        self.dimensions_revision = layout.dimensions_revision;
-        self.next_dimensions_start = layout.next_dimensions_start;
-        self.outline = layout.outline;
-        self.outline_requested = !self.outline.is_empty();
+        self.page_dimensions = Arc::clone(&tab.layout.page_dimensions);
+        self.first_page_dimensions = tab.layout.first_page_dimensions;
+        self.dimensions_revision = tab.layout.dimensions_revision;
+        self.next_dimensions_start = tab.layout.next_dimensions_start;
+        self.outline = Arc::clone(&tab.layout.outline);
+        self.in_flight.outline_requested = !self.outline.is_empty();
         self.expanded_outline.clear();
         for index in 0..self.outline.len() {
             if !self.outline[index].children.is_empty() {
@@ -516,6 +671,27 @@ pub(crate) fn adaptive_cache_budget(zoom: ZoomFactor) -> usize {
         64 * 1024 * 1024
     } else {
         UI_IMAGE_CACHE_BUDGET
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum BackgroundUiEvent {
+    PrintersEnumerated(Vec<barepdf_platform_windows::InstalledPrinter>),
+    AnnotationsSaved {
+        doc_id: DocumentId,
+        output_path: PathBuf,
+        result: Result<(), String>,
+    },
+    SignatureImageDecoded {
+        result: Result<(u32, u32, Vec<u8>), String>,
+    },
+}
+
+struct BackgroundIoGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for BackgroundIoGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -593,6 +769,43 @@ mod tests {
         app.visible_page_indices.push(0);
 
         assert!(app.pump_requires_active(Instant::now()));
+    }
+
+    #[test]
+    fn active_tool_job_and_background_io_keep_unified_pump_active_without_250ms_lag() {
+        let mut app = AppState::new(UserPreferences::default());
+        let now = Instant::now();
+        assert!(!app.pump_requires_active(now));
+
+        app.active_tool_job = Some(ActiveToolJob {
+            key: ToolJobKey::new(1, 1, 1),
+            cancellation: CancellationToken::new(),
+        });
+        assert!(app.pump_requires_active(now));
+        app.active_tool_job = None;
+        assert!(!app.pump_requires_active(now));
+    }
+
+    #[test]
+    fn failed_visible_page_does_not_cause_infinite_60hz_pump_polling() {
+        let mut app = AppState::new(UserPreferences::default());
+        let document_id = DocumentId::new(1);
+        DocumentController::begin_open(
+            &mut app.application,
+            document_id,
+            PathBuf::from("fixture.pdf"),
+            Instant::now(),
+        );
+        assert!(matches!(
+            DocumentController::opened(&mut app.application, document_id, 1, 10_000),
+            crate::application::OpenTransition::Ready(_)
+        ));
+        app.visible_page_indices.push(0);
+        assert!(app.pump_requires_active(Instant::now()));
+
+        // When page render fails, marking the page in failed_pages stops infinite 60Hz polling
+        app.failed_pages.insert((document_id, 0));
+        assert!(!app.pump_requires_active(Instant::now()));
     }
 
     #[test]
@@ -761,24 +974,24 @@ mod tests {
             Instant::now(),
         );
         let _ = DocumentController::opened(&mut app.application, doc1, 50, 10_000);
-        app.page_dimensions = vec![(595.0, 842.0); 50];
+        app.page_dimensions = Arc::new(vec![(595.0, 842.0); 50]);
         app.first_page_dimensions = (595.0, 842.0);
         app.dimensions_revision = 5;
         app.next_dimensions_start = 51;
-        app.outline = vec![OutlineNode {
+        app.outline = Arc::new(vec![OutlineNode {
             title: "Intro".into(),
             page_index: Some(0),
             children: Vec::new(),
-        }];
+        }]);
 
         let tab1_id = app.application.tabs.active_id().unwrap();
         if let Some(tab) = app.application.tabs.active_mut() {
             tab.layout = crate::application::TabDocumentLayout {
-                page_dimensions: app.page_dimensions.clone(),
+                page_dimensions: Arc::clone(&app.page_dimensions),
                 first_page_dimensions: app.first_page_dimensions,
                 dimensions_revision: app.dimensions_revision,
                 next_dimensions_start: app.next_dimensions_start,
-                outline: app.outline.clone(),
+                outline: Arc::clone(&app.outline),
             };
         }
 
@@ -796,19 +1009,19 @@ mod tests {
             Instant::now(),
         );
         let _ = DocumentController::opened(&mut app.application, doc2, 10, 10_000);
-        app.page_dimensions = vec![(612.0, 792.0); 10];
+        app.page_dimensions = Arc::new(vec![(612.0, 792.0); 10]);
         app.first_page_dimensions = (612.0, 792.0);
         app.dimensions_revision = 1;
         app.next_dimensions_start = 11;
-        app.outline.clear();
+        app.outline = Arc::new(Vec::new());
 
         if let Some(tab) = app.application.tabs.active_mut() {
             tab.layout = crate::application::TabDocumentLayout {
-                page_dimensions: app.page_dimensions.clone(),
+                page_dimensions: Arc::clone(&app.page_dimensions),
                 first_page_dimensions: app.first_page_dimensions,
                 dimensions_revision: app.dimensions_revision,
                 next_dimensions_start: app.next_dimensions_start,
-                outline: app.outline.clone(),
+                outline: Arc::clone(&app.outline),
             };
         }
 
@@ -887,15 +1100,15 @@ mod tests {
         let _ = DocumentController::opened(&mut app.application, doc1, 50, 10_000);
         let tab1_id = app.application.tabs.active_id().unwrap();
 
-        app.page_dimensions = vec![(595.0, 842.0); 50];
+        app.page_dimensions = Arc::new(vec![(595.0, 842.0); 50]);
         app.first_page_dimensions = (595.0, 842.0);
         app.dimensions_revision = 3;
         app.next_dimensions_start = 51;
-        app.outline = vec![OutlineNode {
+        app.outline = Arc::new(vec![OutlineNode {
             title: "Doc 1 Intro".into(),
             page_index: Some(0),
             children: Vec::new(),
-        }];
+        }]);
         app.snapshot_active_tab_layout();
 
         // Setup Tab 2: 10 pages Letter
@@ -915,11 +1128,11 @@ mod tests {
         );
         let _ = DocumentController::opened(&mut app.application, doc2, 10, 10_000);
 
-        app.page_dimensions = vec![(612.0, 792.0); 10];
+        app.page_dimensions = Arc::new(vec![(612.0, 792.0); 10]);
         app.first_page_dimensions = (612.0, 792.0);
         app.dimensions_revision = 1;
         app.next_dimensions_start = 11;
-        app.outline = vec![
+        app.outline = Arc::new(vec![
             OutlineNode {
                 title: "Chapter 1".into(),
                 page_index: Some(0),
@@ -930,7 +1143,7 @@ mod tests {
                 page_index: Some(4),
                 children: Vec::new(),
             },
-        ];
+        ]);
         app.snapshot_active_tab_layout();
 
         // Switch to Tab 1

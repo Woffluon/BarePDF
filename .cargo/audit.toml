@@ -1,11 +1,36 @@
-# Keep `cargo audit --deny warnings` strict while documenting the only current
-# upstream-only exceptions. Revisit these whenever Slint is upgraded.
+# Keep `cargo audit --deny warnings` strict across the workspace.
+# Only informational ("unmaintained") advisories from transitive dependencies of
+# Slint 1.17.1 (`i-slint-core` / `i-slint-renderer-femtovg` / `fontdb`) are listed
+# below. None of these advisories represent an exploitable CVE or memory-safety
+# vulnerability, and BarePDF does not depend on any of these crates directly.
+#
+# Re-evaluation criteria:
+# 1. Whenever `slint` is upgraded in the root `Cargo.toml` / `Cargo.lock`.
+# 2. Whenever upstream Slint / femtovg / fontdb completes migration to maintained
+#    replacements (`postcard`/`wincode`, `skrifa`, `harfrust`).
+# 3. Immediately if a security vulnerability (CVE / soundness flaw) is reported
+#    against any of these transitive crates.
 [advisories]
 ignore = [
-    # RUSTSEC-2025-0141: bincode is transitive through Slint 1.17.1; no fixed version exists.
+    # RUSTSEC-2025-0141 (Informational: unmaintained): `bincode` 1.3.3
+    # - Dependency path: Transitive via `slint` 1.17.1 (`i-slint-compiler` / cache serialization).
+    # - Impact analysis: Informational maintenance notice only; no known security vulnerability.
+    #   BarePDF never deserializes untrusted user PDFs or network payloads with `bincode`.
+    # - Re-evaluate when: Upgrading `slint` to a release that removes `bincode` 1.x.
     "RUSTSEC-2025-0141",
-    # RUSTSEC-2026-0192: ttf-parser is transitive through Slint 1.17.1; no fixed version exists.
+
+    # RUSTSEC-2026-0192 (Informational: unmaintained): `ttf-parser`
+    # - Dependency path: Transitive via `slint` 1.17.1 (`i-slint-core`, `fontdb`, `femtovg`, `rustybuzz`).
+    # - Impact analysis: Informational maintenance notice only; no known CVE. Used by Slint for UI
+    #   font metrics/glyph shaping on system and bundled UI fonts, while PDF document fonts are
+    #   rendered in-process by PDFium (`pdfium.dll`), not `ttf-parser`.
+    # - Re-evaluate when: Upgrading `slint` to a version that migrates font parsing to `skrifa` (`fontations`).
     "RUSTSEC-2026-0192",
-    # RUSTSEC-2026-0206: rustybuzz is transitive through Slint 1.17.1; no fixed version exists.
+
+    # RUSTSEC-2026-0206 (Informational: unmaintained): `rustybuzz`
+    # - Dependency path: Transitive via `slint` 1.17.1 (`i-slint-core` text shaping).
+    # - Impact analysis: Informational maintenance notice only; no known CVE. Used only for Slint
+    #   UI chrome text shaping, not for untrusted PDF content streams (which are rendered by PDFium).
+    # - Re-evaluate when: Upgrading `slint` to a version that migrates text shaping to `harfrust`.
     "RUSTSEC-2026-0206",
 ]

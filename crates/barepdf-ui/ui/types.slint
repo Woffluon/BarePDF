@@ -1,0 +1,55 @@
+export struct SelectionBox {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
+export struct OverlayRectData {
+    x_ratio: float,
+    y_ratio: float,
+    width_ratio: float,
+    height_ratio: float,
+    color: color,
+}
+
+export struct BookmarkItem {
+    title: string,
+    page_index: int,
+    page_number: string,
+}
+
+export struct PageItem {
+    page_index: int,
+    page_number: string,
+    width: length,
+    height: length,
+    y_offset: length,
+    bitmap: image,
+    has_bitmap: bool,
+    selection_boxes: [SelectionBox],
+    search_highlights: [SelectionBox],
+}
+
+export struct ThumbnailItem {
+    page_index: int,
+    page_number: string,
+    width: length,
+    height: length,
+    bitmap: image,
+    has_bitmap: bool,
+    is_selected: bool,
+}
+
+export struct OutlineItem {
+    title: string,
+    page_index: int,
+    depth: int,
+    has_children: bool,
+    expanded: bool,
+}
+
+export struct RecentFileItem {
+    name: string,
+    path: string,
+}

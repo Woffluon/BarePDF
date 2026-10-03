@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.15.1"
+version = "1.15.2"
 edition = "2021"
 rust-version = "1.92"
 authors = ["BarePDF Contributors"]
@@ -21,17 +21,37 @@ license = "MIT"
 repository = "https://github.com/Woffluon/BarePDF"
 
 [workspace.dependencies]
+arboard = { version = "3.4", default-features = false }
 crossbeam-channel = "0.5"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
 lru = "0.18.2"
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
 raw-window-handle = "0.6"
+rfd = "0.15"
+semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 slint = { version = "1.9", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "accessibility", "compat-1-2"] }
+tempfile = "3.27"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+ureq = { version = "3.3", default-features = false, features = ["platform-verifier", "rustls", "win-system-proxy"] }
+windows = { version = "0.58" }
+windows-core = "0.58"
+windows-sys = { version = "0.59" }
+winres = "0.1"
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
+
+[workspace.lints.rust]
+non_ascii_idents = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 opt-level = 3
@@ -43,3 +63,4 @@ strip = "symbols"
 [profile.release-unwind]
 inherits = "release"
 panic = "unwind"
+

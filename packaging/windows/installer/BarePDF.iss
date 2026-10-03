@@ -50,6 +50,7 @@ Source: "..\..\..\target\release\staged\BarePDF.Thumbnail.dll"; DestDir: "{app}"
 Source: "..\..\..\target\release\staged\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\target\release\staged\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\target\release\staged\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

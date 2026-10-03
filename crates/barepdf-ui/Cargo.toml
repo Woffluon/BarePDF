@@ -10,3 +10,6 @@ description = "Slint desktop interface views, themes, and view-models for BarePD
 
 [dependencies]
 slint.workspace = true
+
+[lints]
+workspace = true

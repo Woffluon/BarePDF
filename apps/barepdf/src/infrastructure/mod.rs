@@ -3,8 +3,10 @@ mod print_worker;
 mod tool_worker;
 mod update;
 
+#[allow(unused_imports)]
 pub(crate) use preferences_store::{
-    default_config_path, save_to_file, try_load_from_file, PreferencesLoadError,
+    default_config_path, load, save_to_file, try_load_from_file, try_save_to_file,
+    PreferencesLoadError,
 };
 pub(crate) use print_worker::{PrintEvent, PrintRequest, PrintWorker, PrintWorkerError};
 pub(crate) use tool_worker::{

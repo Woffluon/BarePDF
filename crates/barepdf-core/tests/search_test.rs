@@ -31,7 +31,7 @@ fn test_find_in_geometry() {
     let mut glyphs = Vec::new();
     for (i, ch) in text.chars().enumerate() {
         glyphs.push(GlyphRect {
-            x: i as f32,
+            x: f32::from(u16::try_from(i).unwrap_or(u16::MAX)),
             y: 0.0,
             width: 1.0,
             height: 1.0,

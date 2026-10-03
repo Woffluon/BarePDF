@@ -112,21 +112,11 @@ pub fn create_32bit_dib_section(width: u32, height: u32, rgba_pixels: &[u8]) -> 
         return None;
     }
 
-    // SAFETY: Copy RGBA to BGRA in DIB section memory buffer.
-    unsafe {
-        let dest = std::slice::from_raw_parts_mut(bits_ptr.cast::<u8>(), expected_len);
-        for i in 0..pixel_count {
-            let src_idx = i * 4;
-            let r = rgba_pixels[src_idx];
-            let g = rgba_pixels[src_idx + 1];
-            let b = rgba_pixels[src_idx + 2];
-            let a = rgba_pixels[src_idx + 3];
-
-            dest[src_idx] = b;
-            dest[src_idx + 1] = g;
-            dest[src_idx + 2] = r;
-            dest[src_idx + 3] = a;
-        }
+    // SAFETY: `CreateDIBSection` succeeded and returned a non-null `bits_ptr` pointing to a
+    // writable buffer of at least `expected_len` bytes owned exclusively by `hbitmap`.
+    let dest = unsafe { std::slice::from_raw_parts_mut(bits_ptr.cast::<u8>(), expected_len) };
+    for (rgba, bgra) in rgba_pixels.chunks_exact(4).zip(dest.chunks_exact_mut(4)) {
+        bgra.copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
     }
 
     Some(hbitmap.into_raw())
@@ -155,5 +145,35 @@ mod tests {
         let (w, h) = calculate_thumbnail_dimensions(500.0, 500.0, 256);
         assert_eq!(w, 256);
         assert_eq!(h, 256);
+    }
+
+    #[test]
+    fn test_create_32bit_dib_section_bounds_and_overflow_checks() {
+        // Zero dimensions rejected
+        assert!(create_32bit_dib_section(0, 10, &[0u8; 40]).is_none());
+        assert!(create_32bit_dib_section(10, 0, &[0u8; 40]).is_none());
+
+        // Dimension exceeding i32::MAX or overflowing multiplication rejected
+        assert!(create_32bit_dib_section(u32::MAX, 1, &[0u8; 4]).is_none());
+        assert!(create_32bit_dib_section(1, u32::MAX, &[0u8; 4]).is_none());
+        assert!(create_32bit_dib_section(65_536, 65_536, &[]).is_none());
+
+        // Buffer length mismatch rejected (too short / too long)
+        assert!(create_32bit_dib_section(2, 2, &[0u8; 15]).is_none());
+        assert!(create_32bit_dib_section(2, 2, &[0u8; 17]).is_none());
+    }
+
+    #[test]
+    fn test_create_32bit_dib_section_valid_rgba_to_bgra() {
+        let rgba = [
+            10, 20, 30, 255, // pixel 0
+            40, 50, 60, 128, // pixel 1
+        ];
+        let hbmp = create_32bit_dib_section(2, 1, &rgba).expect("valid DIB section created");
+        assert!(!hbmp.is_invalid());
+        // SAFETY: `hbmp` was just created by `create_32bit_dib_section` and is owned by this test.
+        unsafe {
+            let _ = DeleteObject(hbmp);
+        }
     }
 }

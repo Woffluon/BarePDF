@@ -14,6 +14,7 @@ if ([string]::IsNullOrWhiteSpace($Destination)) {
 $PdfiumVersion = "chromium/7988"
 $PdfiumUrl = "https://github.com/bblanchon/pdfium-binaries/releases/download/$PdfiumVersion/pdfium-win-x64.tgz"
 $ExpectedSha256 = "654daf488d9357d2787cec439d0dbdb93d7e180e2cb28e5f1d41c66d2645daec"
+$ExpectedDllSha256 = "03cc8de22238ea9ffbbf41703f8ef8aae77faeab735583815481f5c2c70a63c7"
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("barepdf-pdfium-" + [System.Guid]::NewGuid())
 $ArchivePath = Join-Path $TempDirectory "pdfium-win-x64.tgz"
 $ExtractDirectory = Join-Path $TempDirectory "extracted"
@@ -34,7 +35,12 @@ try {
 
     $SourceDll = Join-Path $ExtractDirectory "bin\pdfium.dll"
     if (-not (Test-Path $SourceDll -PathType Leaf)) {
-        throw "Verified PDFium archive does not contain bin\\pdfium.dll."
+        throw "Verified PDFium archive does not contain bin\pdfium.dll."
+    }
+
+    $ActualDllSha256 = (Get-FileHash -LiteralPath $SourceDll -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ActualDllSha256 -ne $ExpectedDllSha256) {
+        throw "Extracted pdfium.dll SHA-256 mismatch. Expected $ExpectedDllSha256, got $ActualDllSha256."
     }
 
     $DestinationDirectory = Split-Path -Parent $Destination

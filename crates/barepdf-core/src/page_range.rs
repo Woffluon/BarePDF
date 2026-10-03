@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use thiserror::Error;
 
 use crate::types::{PageCount, PageIndex};
@@ -28,6 +27,11 @@ pub struct PageRangeSelection;
 
 impl PageRangeSelection {
     /// Parses a page range string (e.g. "1", "1-5", "1, 3, 5-8") into sorted, deduplicated `PageIndex`es.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PageRangeError`] if the input is empty, contains invalid range syntax, references
+    /// page 0, specifies a descending range (`start > end`), or requests a page exceeding `total_pages`.
     pub fn parse(input: &str, total_pages: PageCount) -> Result<Vec<PageIndex>, PageRangeError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
@@ -35,7 +39,7 @@ impl PageRangeSelection {
         }
 
         let max_pages = total_pages.get();
-        let mut page_indices = BTreeSet::new();
+        let mut page_indices = Vec::new();
 
         for segment in trimmed.split(',') {
             let seg = segment.trim();
@@ -45,39 +49,35 @@ impl PageRangeSelection {
                 ));
             }
 
-            let dash_count = seg.chars().filter(|&c| c == '-').count();
-            match dash_count {
-                0 => {
-                    let page_num = parse_page_number(seg, max_pages)?;
-                    page_indices.insert(PageIndex::from_raw(page_num - 1));
-                }
-                1 => {
-                    let mut parts = seg.split('-');
-                    let start_str = parts.next().unwrap_or("").trim();
-                    let end_str = parts.next().unwrap_or("").trim();
-
-                    if start_str.is_empty() || end_str.is_empty() {
-                        return Err(PageRangeError::InvalidSyntax(seg.to_string()));
-                    }
-
-                    let start = parse_page_number(start_str, max_pages)?;
-                    let end = parse_page_number(end_str, max_pages)?;
-
-                    if start > end {
-                        return Err(PageRangeError::InvalidRangeOrder { start, end });
-                    }
-
-                    for page_num in start..=end {
-                        page_indices.insert(PageIndex::from_raw(page_num - 1));
-                    }
-                }
-                _ => {
+            if let Some((start_raw, end_raw)) = seg.split_once('-') {
+                if end_raw.contains('-') {
                     return Err(PageRangeError::InvalidSyntax(seg.to_string()));
                 }
+                let start_str = start_raw.trim();
+                let end_str = end_raw.trim();
+
+                if start_str.is_empty() || end_str.is_empty() {
+                    return Err(PageRangeError::InvalidSyntax(seg.to_string()));
+                }
+
+                let start = parse_page_number(start_str, max_pages)?;
+                let end = parse_page_number(end_str, max_pages)?;
+
+                if start > end {
+                    return Err(PageRangeError::InvalidRangeOrder { start, end });
+                }
+
+                page_indices
+                    .extend((start..=end).map(|page_num| PageIndex::from_raw(page_num - 1)));
+            } else {
+                let page_num = parse_page_number(seg, max_pages)?;
+                page_indices.push(PageIndex::from_raw(page_num - 1));
             }
         }
 
-        Ok(page_indices.into_iter().collect())
+        page_indices.sort_unstable();
+        page_indices.dedup();
+        Ok(page_indices)
     }
 }
 
@@ -86,14 +86,11 @@ fn parse_page_number(s: &str, max_pages: u32) -> Result<u32, PageRangeError> {
         return Err(PageRangeError::InvalidSyntax(s.to_string()));
     }
 
-    let n: u32 = match s.parse() {
-        Ok(val) => val,
-        Err(_) => {
-            return Err(PageRangeError::PageOutOfRange {
-                requested: u32::MAX,
-                max_pages,
-            });
-        }
+    let Ok(n) = s.parse::<u32>() else {
+        return Err(PageRangeError::PageOutOfRange {
+            requested: u32::MAX,
+            max_pages,
+        });
     };
 
     if n == 0 {
@@ -111,6 +108,11 @@ fn parse_page_number(s: &str, max_pages: u32) -> Result<u32, PageRangeError> {
 }
 
 /// Validates that a list of page indices are non-empty and within bounds for `total_pages`.
+///
+/// # Errors
+///
+/// Returns [`PageRangeError::EmptyInput`] if `indices` is empty, or
+/// [`PageRangeError::PageOutOfRange`] if any page index is greater than or equal to `total_pages`.
 pub fn validate_page_selection(
     indices: &[PageIndex],
     total_pages: PageCount,
@@ -133,32 +135,43 @@ pub fn validate_page_selection(
 }
 
 /// Calculates remaining pages after removing `pages_to_remove`.
-/// Returns `Err(PageRangeError::CannotDeleteAllPages)` if all pages would be removed.
+///
+/// # Errors
+///
+/// Returns [`PageRangeError::PageOutOfRange`] if any page in `pages_to_remove` is out of bounds,
+/// or [`PageRangeError::CannotDeleteAllPages`] if all pages in the document would be removed.
 pub fn pages_to_remove_to_retained_pages(
     total_pages: PageCount,
     pages_to_remove: &[PageIndex],
 ) -> Result<Vec<PageIndex>, PageRangeError> {
     let max_pages = total_pages.get();
-    let mut remove_set = BTreeSet::new();
+    let mut removed = vec![false; max_pages as usize];
+    let mut unique_removed = 0usize;
 
     for &page in pages_to_remove {
-        if page.get() >= max_pages {
+        let idx = page.get();
+        if idx >= max_pages {
             return Err(PageRangeError::PageOutOfRange {
-                requested: page.get() + 1,
+                requested: idx + 1,
                 max_pages,
             });
         }
-        remove_set.insert(page.get());
+        let slot = &mut removed[idx as usize];
+        if !*slot {
+            *slot = true;
+            unique_removed += 1;
+        }
     }
 
-    if remove_set.len() == max_pages as usize {
+    if unique_removed == max_pages as usize {
         return Err(PageRangeError::CannotDeleteAllPages);
     }
 
-    let mut retained = Vec::with_capacity((max_pages as usize).saturating_sub(remove_set.len()));
-    for i in 0..max_pages {
-        if !remove_set.contains(&i) {
-            retained.push(PageIndex::from_raw(i));
+    let mut retained = Vec::with_capacity((max_pages as usize).saturating_sub(unique_removed));
+    for (i, &is_removed) in removed.iter().enumerate() {
+        if !is_removed {
+            let page_idx = u32::try_from(i).unwrap_or(u32::MAX);
+            retained.push(PageIndex::from_raw(page_idx));
         }
     }
 

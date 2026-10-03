@@ -31,19 +31,19 @@ The installer runs in x64-compatible 64-bit mode so native Explorer resolves the
 
 Windows Shell automatically overlays the BarePDF application icon in the lower-right corner of the thumbnail preview. The icon is **not** manually composited or painted into the PDF page bitmap by BarePDF.
 
-## Safety & Crash Isolation
+## Safety, Build Policy & Crash Isolation
 
-- The staged thumbnail DLL uses Cargo's `release-unwind` profile. COM vtable calls and exports
-  convert unwind-capable Rust panics to `E_UNEXPECTED`; native access violations and OOM aborts
-  remain process-fatal and are not recoverable by `catch_unwind`.
+- **COM FFI `catch_unwind` Guard**: Every exported COM entry point (`DllGetClassObject`, `DllCanUnloadNow`) and vtable method (`IClassFactory::CreateInstance`, `IClassFactory::LockServer`, `IInitializeWithStream::Initialize`, `IThumbnailProvider::GetThumbnail`) wraps its body in `std::panic::catch_unwind` so Rust panics are converted into `E_UNEXPECTED` (or `S_FALSE` in `DllCanUnloadNow`) instead of unwinding across the `extern "system"` COM FFI boundary (which would be Undefined Behavior).
+- **Release Profile & Panic Strategy (`panic = "abort"` vs. `panic = "unwind"`)**: Standard unified release builds (`cargo build --release -p barepdf -p barepdf-thumbnail --locked`) compile with `[profile.release]` (`panic = "abort"`). Under `panic = "abort"`, any panic terminates the process immediately rather than unwinding—because Windows Explorer hosts `IInitializeWithStream` thumbnail providers out-of-process inside `dllhost.exe` (`DllSurrogate`), an abort or native PDFium fault is isolated to the surrogate process without crashing `explorer.exe`. When unwind recovery inside the COM server is explicitly needed, Cargo's `[profile.release-unwind]` (`panic = "unwind"`) enables `catch_unwind` to intercept unwinding Rust panics at the FFI boundary; native access violations and OOM aborts remain process-fatal in all profiles.
+- **PE `VERSIONINFO` Metadata**: `crates/barepdf-thumbnail/build.rs` embeds Windows PE `VERSIONINFO` metadata into `barepdf_thumbnail.dll` (`BarePDF.Thumbnail.dll`) via `winres` and watches `CARGO_PKG_VERSION` so file and product versions always match `[workspace.package].version`.
 - Invalid, missing, or password-protected PDFs return `E_FAIL` without UI popups, allowing Windows Explorer to fallback gracefully to the standard document icon.
 - `pdfium.dll` path is deterministically resolved relative to `BarePDF.Thumbnail.dll` module directory, avoiding DLL search path vulnerabilities.
 
 ## Verification & Testing
 
 ### Development Verification
-1. Run `cargo test --workspace --all-features`.
-2. Build release workspace: `cargo build --workspace --release`.
+1. Run `cargo test --workspace --all-features --locked`.
+2. Build release binaries: `cargo build --release -p barepdf -p barepdf-thumbnail --locked`.
 3. Run release staging script: `powershell -File packaging/windows/scripts/stage-release.ps1`.
 4. Compile Inno Setup installer: `powershell -File packaging/windows/scripts/build-installer.ps1`.
 5. On an account with existing BarePDF registration, install-directory, or shortcut state, compile the isolated test package without changing user installation state: `powershell -File packaging/windows/scripts/validate-installer.ps1 -CompileOnly`.

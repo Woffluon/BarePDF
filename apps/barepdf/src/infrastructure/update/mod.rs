@@ -5,7 +5,7 @@ mod transport;
 use barepdf_platform_windows::launch_installer;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -15,7 +15,10 @@ pub(crate) use manifest::VerifiedUpdate;
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const AUTO_CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
+const EVENT_CAPACITY: usize = 16;
+const COMPLETION_CAPACITY: usize = 1;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_RETRY_TIMEOUT: Duration = Duration::from_millis(750);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum UpdateFailure {
@@ -84,6 +87,7 @@ pub(crate) struct UpdateWorker {
     check_canceller: UpdateCheckCanceller,
     completed: Receiver<()>,
     worker: Option<JoinHandle<()>>,
+    shutdown_timed_out: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -94,7 +98,7 @@ pub(crate) enum UpdateShutdownError {
     Panicked,
 }
 
-struct CompletionSignal(Option<Sender<()>>);
+struct CompletionSignal(Option<SyncSender<()>>);
 
 #[derive(Clone, Default)]
 pub(crate) struct UpdateCheckCanceller {
@@ -125,7 +129,7 @@ fn lock_recovering_poison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Drop for CompletionSignal {
     fn drop(&mut self) {
         if let Some(sender) = self.0.take() {
-            let _ = sender.send(());
+            let _ = sender.try_send(());
         }
     }
 }
@@ -146,9 +150,17 @@ impl UpdateWorker {
         if self.worker.is_none() {
             return Ok(());
         }
-        match self.completed.recv_timeout(SHUTDOWN_JOIN_TIMEOUT) {
+        let timeout = if self.shutdown_timed_out {
+            SHUTDOWN_RETRY_TIMEOUT
+        } else {
+            SHUTDOWN_JOIN_TIMEOUT
+        };
+        match self.completed.recv_timeout(timeout) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => {}
-            Err(RecvTimeoutError::Timeout) => return Err(UpdateShutdownError::TimedOut),
+            Err(RecvTimeoutError::Timeout) => {
+                self.shutdown_timed_out = true;
+                return Err(UpdateShutdownError::TimedOut);
+            }
         }
         let Some(worker) = self.worker.take() else {
             return Ok(());
@@ -160,13 +172,19 @@ impl UpdateWorker {
 impl Drop for UpdateWorker {
     fn drop(&mut self) {
         let _ = self.shutdown();
+        if let Some(worker) = self.worker.take() {
+            self.cancelled.store(true, Ordering::Release);
+            self.check_canceller.cancel_pending_check();
+            let _ = self.completed.recv_timeout(SHUTDOWN_RETRY_TIMEOUT);
+            let _ = worker.join();
+        }
     }
 }
 
 pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
     let (command_sender, command_receiver) = mpsc::channel();
-    let (event_sender, event_receiver) = mpsc::channel();
-    let (completed_sender, completed_receiver) = mpsc::channel();
+    let (event_sender, event_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
+    let (completed_sender, completed_receiver) = mpsc::sync_channel(COMPLETION_CAPACITY);
     let cancelled = Arc::new(AtomicBool::new(false));
     let check_canceller = UpdateCheckCanceller::default();
     let worker_cancelled = cancelled.clone();
@@ -181,6 +199,7 @@ pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
             check_canceller,
             completed: completed_receiver,
             worker: Some(worker),
+            shutdown_timed_out: false,
         },
         event_receiver,
     )
@@ -188,11 +207,17 @@ pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
 
 fn run_worker(
     commands: &Receiver<UpdateCommand>,
-    events: &Sender<UpdateEvent>,
+    events: &SyncSender<UpdateEvent>,
     cancelled: &AtomicBool,
 ) {
     let agent = transport::new_agent();
     while let Ok(command) = commands.recv() {
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+        if matches!(command, UpdateCommand::Shutdown) {
+            break;
+        }
         let event = match command {
             UpdateCommand::Check(check_cancelled) => {
                 match manifest::check_for_update(&agent, &check_cancelled) {
@@ -221,8 +246,43 @@ fn run_worker(
             }
             UpdateCommand::Shutdown => break,
         };
-        if cancelled.load(Ordering::Acquire) || events.send(event).is_err() {
+        if cancelled.load(Ordering::Acquire) {
             break;
+        }
+        if send_event_with_backpressure(events, event, cancelled).is_err() {
+            break;
+        }
+    }
+}
+
+fn send_event_with_backpressure(
+    events: &SyncSender<UpdateEvent>,
+    mut event: UpdateEvent,
+    cancelled: &AtomicBool,
+) -> Result<(), ()> {
+    if cancelled.load(Ordering::Acquire) {
+        let _ = events.try_send(event);
+        return Ok(());
+    }
+    match events.try_send(event) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Disconnected(_)) => Err(()),
+        Err(TrySendError::Full(returned)) => {
+            event = returned;
+            loop {
+                if cancelled.load(Ordering::Acquire) {
+                    let _ = events.try_send(event);
+                    return Ok(());
+                }
+                match events.try_send(event) {
+                    Ok(()) => return Ok(()),
+                    Err(TrySendError::Disconnected(_)) => return Err(()),
+                    Err(TrySendError::Full(returned)) => {
+                        event = returned;
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
         }
     }
 }
@@ -271,7 +331,7 @@ mod tests {
     fn worker_shutdown_retains_active_work_and_joins_on_retry() {
         let (commands, _command_receiver) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (completed_sender, completed) = mpsc::channel();
+        let (completed_sender, completed) = mpsc::sync_channel(COMPLETION_CAPACITY);
         let (release_sender, release_receiver) = mpsc::channel();
         let worker_thread = std::thread::spawn(move || {
             let _completion = CompletionSignal(Some(completed_sender));
@@ -283,6 +343,7 @@ mod tests {
             check_canceller: UpdateCheckCanceller::default(),
             completed,
             worker: Some(worker_thread),
+            shutdown_timed_out: false,
         };
 
         let started = Instant::now();
@@ -301,7 +362,7 @@ mod tests {
     fn worker_panic_after_timeout_is_reported_on_retry() {
         let (commands, _command_receiver) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (completed_sender, completed) = mpsc::channel();
+        let (completed_sender, completed) = mpsc::sync_channel(COMPLETION_CAPACITY);
         let (release_sender, release_receiver) = mpsc::channel();
         let worker_thread = std::thread::spawn(move || {
             let _completion = CompletionSignal(Some(completed_sender));
@@ -314,6 +375,7 @@ mod tests {
             check_canceller: UpdateCheckCanceller::default(),
             completed,
             worker: Some(worker_thread),
+            shutdown_timed_out: false,
         };
 
         assert!(matches!(
@@ -346,7 +408,7 @@ mod tests {
     #[test]
     fn queued_cancelled_check_is_reported_without_starting_a_request() {
         let (command_sender, command_receiver) = mpsc::channel();
-        let (event_sender, event_receiver) = mpsc::channel();
+        let (event_sender, event_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
         let cancelled = Arc::new(AtomicBool::new(false));
         let check_cancelled = Arc::new(AtomicBool::new(true));
         assert!(command_sender
@@ -362,5 +424,34 @@ mod tests {
             Ok(UpdateEvent::Error(UpdateFailure::Cancelled))
         ));
         assert!(worker.join().is_ok());
+    }
+
+    #[test]
+    fn worker_drop_without_explicit_shutdown_joins_thread_cleanly() {
+        let (worker, _events) = start_worker();
+        // Dropping worker must coordinate shutdown and join thread without leaving it orphaned
+        drop(worker);
+    }
+
+    #[test]
+    fn bounded_channel_backpressure_does_not_deadlock_on_cancel() {
+        let (event_sender, _event_receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        // Fill channel to capacity
+        assert!(event_sender.try_send(UpdateEvent::UpToDate).is_ok());
+
+        // Worker attempts to send next event in thread while channel is full
+        let sender_cancelled = cancelled.clone();
+        let handle = std::thread::spawn(move || {
+            send_event_with_backpressure(&event_sender, UpdateEvent::UpToDate, &sender_cancelled)
+        });
+
+        // Cancel while sender is waiting on full channel
+        std::thread::sleep(Duration::from_millis(20));
+        cancelled.store(true, Ordering::Release);
+
+        // Sender must unblock due to cancellation without deadlocking
+        assert!(handle.join().is_ok());
     }
 }

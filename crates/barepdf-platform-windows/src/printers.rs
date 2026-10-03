@@ -33,15 +33,17 @@ pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
         return printers;
     }
 
-    let mut buffer = vec![0u8; bytes_needed as usize];
+    let word_len = (bytes_needed as usize).div_ceil(std::mem::size_of::<usize>());
+    let mut buffer = vec![0usize; word_len];
+    let buffer_bytes = buffer.len() * std::mem::size_of::<usize>();
 
-    // SAFETY: Buffer is appropriately sized according to `bytes_needed`.
+    // SAFETY: Buffer is appropriately sized according to `bytes_needed` and aligned to `usize`.
     let success = unsafe {
         EnumPrintersW(
             flags,
             std::ptr::null_mut(),
             4,
-            buffer.as_mut_ptr(),
+            buffer.as_mut_ptr().cast::<u8>(),
             bytes_needed,
             &raw mut bytes_needed,
             &raw mut count,
@@ -52,11 +54,14 @@ pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
         return printers;
     }
 
+    let valid_count = (count as usize).min(buffer_bytes / std::mem::size_of::<PRINTER_INFO_4W>());
     let info_ptr = buffer.as_ptr().cast::<PRINTER_INFO_4W>();
-    for i in 0..count {
-        // SAFETY: `info_ptr` is valid for `count` items of PRINTER_INFO_4W.
-        let info = unsafe { &*info_ptr.add(i as usize) };
+    for i in 0..valid_count {
+        // SAFETY: `info_ptr` is valid for `valid_count` items of PRINTER_INFO_4W.
+        let info = unsafe { &*info_ptr.add(i) };
         if !info.pPrinterName.is_null() {
+            // SAFETY: `info.pPrinterName` points into `buffer` populated by `EnumPrintersW` and
+            // remains valid while `buffer` is alive.
             let name = unsafe { wide_ptr_to_string(info.pPrinterName) };
             if !name.is_empty() {
                 let is_default = default_name.as_deref() == Some(&name);
@@ -91,13 +96,19 @@ fn get_default_printer_name() -> Option<String> {
 }
 
 unsafe fn wide_ptr_to_string(ptr: *const u16) -> String {
-    if ptr.is_null() {
+    if ptr.is_null() || !ptr.is_aligned() {
         return String::new();
     }
     let mut len = 0;
-    while unsafe { *ptr.add(len) } != 0 {
+    while len < 1024 {
+        // SAFETY: Caller guarantees `ptr` points to a readable wide string (or buffer of at least
+        // 1024 `u16` elements if untrusted); `ptr` is non-null and aligned.
+        if unsafe { *ptr.add(len) } == 0 {
+            break;
+        }
         len += 1;
     }
+    // SAFETY: `ptr` is non-null, aligned, and verified readable for `len` contiguous `u16` units.
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     OsString::from_wide(slice).to_string_lossy().into_owned()
 }
@@ -134,5 +145,41 @@ mod tests {
         assert_eq!(test_printer.clone(), test_printer);
         assert_eq!(test_printer.name, "Test Printer");
         assert!(test_printer.is_default);
+    }
+
+    #[test]
+    fn wide_ptr_to_string_rejects_null_and_unaligned_pointers() {
+        // SAFETY: `wide_ptr_to_string` explicitly checks for null before dereferencing.
+        assert_eq!(unsafe { wide_ptr_to_string(std::ptr::null()) }, "");
+
+        let buffer = [0x41u8, 0x00, 0x42u8, 0x00, 0x00, 0x00];
+        // SAFETY: Offsetting by 1 byte stays within `buffer`; pointer is not dereferenced when unaligned.
+        let unaligned_ptr = unsafe { buffer.as_ptr().add(1).cast::<u16>() };
+        assert!(!unaligned_ptr.is_aligned());
+        // SAFETY: `wide_ptr_to_string` explicitly checks alignment before dereferencing.
+        assert_eq!(unsafe { wide_ptr_to_string(unaligned_ptr) }, "");
+    }
+
+    #[test]
+    fn wide_ptr_to_string_limits_reading_to_1024_chars() {
+        let non_terminated = vec![0x0041u16; 2048];
+        // SAFETY: `non_terminated` is a valid aligned slice of 2048 `u16` elements (>= 1024 cap).
+        let result = unsafe { wide_ptr_to_string(non_terminated.as_ptr()) };
+        assert_eq!(result.len(), 1024);
+    }
+
+    #[test]
+    fn buffer_allocation_and_valid_count_guard() {
+        let bytes_needed = 100u32;
+        let word_len = (bytes_needed as usize).div_ceil(std::mem::size_of::<usize>());
+        let buffer = vec![0usize; word_len];
+        assert_eq!(buffer.as_ptr() as usize % std::mem::align_of::<usize>(), 0);
+        assert!(std::mem::align_of::<PRINTER_INFO_4W>() <= std::mem::align_of::<usize>());
+
+        let buffer_bytes = buffer.len() * std::mem::size_of::<usize>();
+        let reported_excessive_count = 10_000u32;
+        let valid_count = (reported_excessive_count as usize)
+            .min(buffer_bytes / std::mem::size_of::<PRINTER_INFO_4W>());
+        assert!(valid_count <= buffer_bytes / std::mem::size_of::<PRINTER_INFO_4W>());
     }
 }

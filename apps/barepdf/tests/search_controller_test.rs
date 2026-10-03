@@ -1,12 +1,9 @@
-#[path = "../src/controllers/search_controller.rs"]
-mod search_controller;
-
 use std::collections::HashMap;
 
+use barepdf::controllers::search_controller::SearchController;
 use barepdf_core::layout::{ContinuousLayout, PageLayoutBox};
 use barepdf_core::search::{SearchMatch, SearchQuery};
 use barepdf_core::types::{GlyphRect, PageIndex, PageTextGeometry};
-use search_controller::SearchController;
 
 #[test]
 fn execute_search_finds_matches_across_pages() {

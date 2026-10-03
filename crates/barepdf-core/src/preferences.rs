@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::types::{ReadingDirection, ViewingMode, ZoomMode};
-use crate::MAX_RECENT_FILES;
+use crate::{MAX_OPEN_TABS, MAX_RECENT_FILES};
 use serde::{Deserialize, Serialize};
 
 use barepdf_i18n::Language;
@@ -33,6 +33,7 @@ pub enum ThemeMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // Persisted user preference flags map 1:1 to JSON configuration keys.
 pub struct UserPreferences {
     pub language: Language,
     pub theme: ThemeMode,
@@ -50,6 +51,7 @@ pub struct UserPreferences {
     pub update_checks_enabled: Option<bool>,
     pub last_update_check_unix: Option<u64>,
     pub active_tab_index: usize,
+    #[serde(deserialize_with = "deserialize_open_tabs")]
     pub open_tabs: Vec<DocumentSession>,
     pub paper_tint: u8,
     pub invert_colors: bool,
@@ -92,6 +94,19 @@ impl UserPreferences {
             self.recent_files.truncate(self.max_recent_files);
         }
     }
+
+    /// Clamps persisted collections (`recent_files`, `open_tabs`) and indices (`max_recent_files`,
+    /// `active_tab_index`) to product resource limits.
+    pub fn sanitize_bounds(&mut self) {
+        self.max_recent_files = self.max_recent_files.min(MAX_RECENT_FILES);
+        self.recent_files.truncate(self.max_recent_files);
+        self.open_tabs.truncate(MAX_OPEN_TABS);
+        if self.open_tabs.is_empty() {
+            self.active_tab_index = 0;
+        } else if self.active_tab_index >= self.open_tabs.len() {
+            self.active_tab_index = self.open_tabs.len() - 1;
+        }
+    }
 }
 
 fn deserialize_max_recent_files<'de, D>(deserializer: D) -> Result<usize, D::Error>
@@ -110,6 +125,15 @@ where
     Ok(recent_files)
 }
 
+fn deserialize_open_tabs<'de, D>(deserializer: D) -> Result<Vec<DocumentSession>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut open_tabs = Vec::<DocumentSession>::deserialize(deserializer)?;
+    open_tabs.truncate(MAX_OPEN_TABS);
+    Ok(open_tabs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +149,38 @@ mod tests {
         preferences.add_recent_file("one.pdf".into());
         preferences.add_recent_file("three.pdf".into());
         assert_eq!(preferences.recent_files, vec!["three.pdf", "one.pdf"]);
+    }
+
+    #[test]
+    fn sanitize_bounds_truncates_collections_and_clamps_active_tab_index() {
+        let session = DocumentSession {
+            path: PathBuf::from("doc.pdf"),
+            page_index: 0,
+            scroll_y: 0.0,
+            zoom_mode: ZoomMode::FitWidth,
+            bookmarks: Vec::new(),
+        };
+        let mut preferences = UserPreferences {
+            max_recent_files: MAX_RECENT_FILES + 50,
+            recent_files: (0..(MAX_RECENT_FILES + 5))
+                .map(|i| format!("file_{i}.pdf"))
+                .collect(),
+            open_tabs: vec![session; MAX_OPEN_TABS + 5],
+            active_tab_index: MAX_OPEN_TABS + 10,
+            ..UserPreferences::default()
+        };
+
+        preferences.sanitize_bounds();
+
+        assert_eq!(preferences.max_recent_files, MAX_RECENT_FILES);
+        assert_eq!(preferences.recent_files.len(), MAX_RECENT_FILES);
+        assert_eq!(preferences.open_tabs.len(), MAX_OPEN_TABS);
+        assert_eq!(preferences.active_tab_index, MAX_OPEN_TABS - 1);
+
+        preferences.open_tabs.clear();
+        preferences.active_tab_index = 5;
+        preferences.sanitize_bounds();
+        assert_eq!(preferences.active_tab_index, 0);
     }
 
     #[test]

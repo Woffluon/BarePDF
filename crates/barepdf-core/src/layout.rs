@@ -139,9 +139,11 @@ pub struct ScrollAnchor {
     pub relative_y_ratio: f32,
 }
 
+pub type DocumentLayout = ContinuousLayout;
+
 impl ContinuousLayout {
     #[must_use]
-    #[allow(clippy::cast_precision_loss)] // Layout coordinates use f32 throughout.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // y-coordinates are accumulated in f64 and narrowed to f32 for UI layout.
     pub fn compute(
         page_dimensions: &[(f32, f32)],
         viewport_width: u32,
@@ -155,7 +157,8 @@ impl ContinuousLayout {
         }
 
         let mut pages = Vec::with_capacity(page_dimensions.len());
-        let mut current_y = gap;
+        let gap_f64 = f64::from(gap);
+        let mut current_y = gap_f64;
         let mut max_w = 0u32;
 
         for (idx, &(pw, ph)) in page_dimensions.iter().enumerate() {
@@ -173,12 +176,12 @@ impl ContinuousLayout {
 
             pages.push(PageLayoutBox {
                 page_index: PageIndex::from_raw(page_index),
-                y_offset: current_y,
+                y_offset: current_y as f32,
                 width: dims.width,
                 height: dims.height,
             });
 
-            current_y += dims.height as f32 + gap;
+            current_y += f64::from(dims.height) + gap_f64;
             if dims.width > max_w {
                 max_w = dims.width;
             }
@@ -186,7 +189,7 @@ impl ContinuousLayout {
 
         Self {
             pages,
-            total_height: current_y,
+            total_height: current_y as f32,
             max_width: max_w,
         }
     }
@@ -331,5 +334,26 @@ mod tests {
                 right: Some(PageIndex::from_raw(0))
             }
         );
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+    fn continuous_layout_f64_accumulation_avoids_drift_across_many_pages() {
+        let page_count = 8_000u32;
+        let dims = vec![(612.0f32, 792.0f32); page_count as usize];
+        let gap = 12.1f32;
+        let layout = DocumentLayout::compute(&dims, 800, 1000, ZoomMode::ActualSize, 3.0, gap);
+        assert_eq!(layout.pages.len(), page_count as usize);
+
+        let page_h = f64::from(layout.pages[0].height);
+        let gap_f64 = f64::from(gap);
+        let expected_last_y = (gap_f64 + (f64::from(page_count) - 1.0) * (page_h + gap_f64)) as f32;
+        let expected_total = (gap_f64 + f64::from(page_count) * (page_h + gap_f64)) as f32;
+
+        assert_eq!(
+            layout.pages[(page_count - 1) as usize].y_offset,
+            expected_last_y
+        );
+        assert_eq!(layout.total_height, expected_total);
     }
 }

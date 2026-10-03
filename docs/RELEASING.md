@@ -15,8 +15,9 @@ This document provides a manual test verification checklist for BarePDF releases
   cargo fmt --all --check
   cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   cargo test --workspace --all-features --locked
-  cargo build --workspace --release --locked
+  cargo build --release -p barepdf -p barepdf-thumbnail --locked
   ```
+  > **Build & COM FFI Panic Policy**: `barepdf-thumbnail` implements Windows Shell COM interfaces (`DllGetClassObject`, `DllCanUnloadNow`, `IClassFactory`, `IInitializeWithStream`, `IThumbnailProvider`) that wrap every FFI entry point in `std::panic::catch_unwind` to convert Rust panics into COM error `HRESULT`s (`E_UNEXPECTED` / `S_FALSE`) without crossing the C ABI boundary. Notice that `[profile.release]` configures `panic = "abort"` (under which `catch_unwind` is a no-op and any panic aborts the host process, typically Explorer's isolated `dllhost.exe` surrogate), whereas `[profile.release-unwind]` inherits from `release` with `panic = "unwind"` for unwind-capable builds. Both `barepdf.exe` and `barepdf_thumbnail.dll` embed Windows PE `VERSIONINFO` resources derived from `[workspace.package].version` via `winres` (`build.rs` tracks `CARGO_PKG_VERSION`).
 - [ ] Execute release packaging pipeline:
   ```powershell
   powershell -File packaging/windows/scripts/stage-release.ps1

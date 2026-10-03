@@ -57,31 +57,38 @@ impl SearchQuery {
             return matches;
         }
 
-        let mut haystack = String::new();
-        let mut byte_to_glyph = Vec::new();
+        let mut haystack = String::with_capacity(geom.glyphs.len());
+        let mut byte_to_glyph = Vec::with_capacity(geom.glyphs.len() + 1);
+        let mut encode_buf = [0u8; 4];
 
         for (i, glyph) in geom.glyphs.iter().enumerate() {
-            let ch_str = if self.match_case {
-                glyph.ch.to_string()
+            let glyph_idx = u32::try_from(i).unwrap_or(u32::MAX);
+            if self.match_case {
+                let encoded = glyph.ch.encode_utf8(&mut encode_buf);
+                byte_to_glyph.extend(std::iter::repeat_n(glyph_idx, encoded.len()));
+                haystack.push_str(encoded);
             } else {
-                char_to_lower(glyph.ch)
-            };
-
-            for _ in 0..ch_str.len() {
-                byte_to_glyph.push(i as u32);
+                let start_len = haystack.len();
+                push_lower_char(&mut haystack, glyph.ch, &mut encode_buf);
+                let added_bytes = haystack.len() - start_len;
+                byte_to_glyph.extend(std::iter::repeat_n(glyph_idx, added_bytes));
             }
-            haystack.push_str(&ch_str);
         }
-        byte_to_glyph.push(geom.glyphs.len() as u32);
+        byte_to_glyph.push(u32::try_from(geom.glyphs.len()).unwrap_or(u32::MAX));
 
-        let needle = if self.match_case {
-            self.text.clone()
+        let mut needle_buf = String::new();
+        let needle: &str = if self.match_case {
+            &self.text
         } else {
-            self.text.chars().map(char_to_lower).collect::<String>()
+            needle_buf.reserve(self.text.len());
+            for ch in self.text.chars() {
+                push_lower_char(&mut needle_buf, ch, &mut encode_buf);
+            }
+            &needle_buf
         };
 
         let mut start_idx = 0;
-        while let Some(match_idx) = haystack[start_idx..].find(&needle) {
+        while let Some(match_idx) = haystack[start_idx..].find(needle) {
             let absolute_match_idx = start_idx + match_idx;
             let end_match_idx = absolute_match_idx + needle.len();
 
@@ -111,7 +118,7 @@ impl SearchQuery {
                 matches.push(glyph_start..glyph_end);
             }
 
-            start_idx = absolute_match_idx + needle.chars().next().map_or(1, |c| c.len_utf8());
+            start_idx = absolute_match_idx + needle.chars().next().map_or(1, char::len_utf8);
         }
 
         matches
@@ -126,10 +133,46 @@ pub struct SearchMatch {
     pub glyph_boxes: Vec<GlyphRect>,
 }
 
-fn char_to_lower(c: char) -> String {
+fn push_lower_char(out: &mut String, c: char, buf: &mut [u8; 4]) {
     match c {
-        'I' => "ı".to_string(),
-        'İ' => "i".to_string(),
-        c => c.to_lowercase().collect(),
+        'I' => out.push('ı'),
+        'İ' => out.push('i'),
+        c => {
+            for lower in c.to_lowercase() {
+                out.push_str(lower.encode_utf8(buf));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_in_geometry_handles_turkish_and_unicode_without_glyph_string_allocations() {
+        let text = "İstanbul Iğdır Straße";
+        let glyphs = text
+            .chars()
+            .enumerate()
+            .map(|(i, ch)| GlyphRect {
+                x: f32::from(u16::try_from(i).unwrap_or(u16::MAX)),
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                ch,
+            })
+            .collect();
+        let geom = PageTextGeometry {
+            page_index: PageIndex::zero(),
+            glyphs,
+            links: Vec::new(),
+        };
+
+        let q_tr = SearchQuery::new("ığdır".to_string(), false, true).unwrap();
+        assert_eq!(q_tr.find_in_geometry(&geom), vec![9..14]);
+
+        let q_ist = SearchQuery::new("istanbul".to_string(), false, true).unwrap();
+        assert_eq!(q_ist.find_in_geometry(&geom), vec![0..8]);
     }
 }

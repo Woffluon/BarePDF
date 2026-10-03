@@ -42,7 +42,7 @@ impl SelectionEngine {
     /// Returns the 0-based character index closest to the point.
     #[must_use]
     pub fn hit_test(geom: &PageTextGeometry, x: f32, y: f32) -> u32 {
-        if geom.glyphs.is_empty() {
+        if geom.glyphs.is_empty() || !x.is_finite() || !y.is_finite() {
             return 0;
         }
 
@@ -230,6 +230,15 @@ mod tests {
         let geom = sample_geometry();
         let idx = SelectionEngine::hit_test(&geom, 12.0, 102.0);
         assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn hit_test_guards_against_non_finite_coordinates() {
+        let geom = sample_geometry();
+        assert_eq!(SelectionEngine::hit_test(&geom, f32::NAN, 102.0), 0);
+        assert_eq!(SelectionEngine::hit_test(&geom, 12.0, f32::NAN), 0);
+        assert_eq!(SelectionEngine::hit_test(&geom, f32::INFINITY, 102.0), 0);
+        assert_eq!(SelectionEngine::hit_test(&geom, 12.0, f32::NEG_INFINITY), 0);
     }
 
     #[test]

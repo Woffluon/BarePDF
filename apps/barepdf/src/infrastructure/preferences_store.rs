@@ -3,12 +3,16 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+const MAX_PREFERENCES_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB limit
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PreferencesLoadError {
     #[error("failed to read preferences: {0}")]
     Read(#[from] std::io::Error),
     #[error("failed to parse preferences: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("preferences file size {size} bytes exceeds 1 MiB limit")]
+    Oversized { size: u64 },
 }
 
 #[must_use]
@@ -19,22 +23,52 @@ pub(crate) fn default_config_path() -> PathBuf {
     )
 }
 
-/// Reads preferences while preserving I/O and JSON errors for callers that can report them.
+/// Reads preferences while enforcing size bounds and sanitizing values.
 ///
 /// # Errors
 ///
-/// Returns an error when the preference file cannot be read or parsed.
+/// Returns an error when the preference file cannot be read, exceeds size limits, or cannot be parsed.
 pub(crate) fn try_load_from_file(path: &Path) -> Result<UserPreferences, PreferencesLoadError> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > MAX_PREFERENCES_FILE_BYTES {
+        return Err(PreferencesLoadError::Oversized {
+            size: metadata.len(),
+        });
+    }
     let content = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&content)?)
+    let mut prefs: UserPreferences = serde_json::from_str(&content)?;
+    prefs.sanitize_bounds();
+    Ok(prefs)
 }
 
-/// Atomically replaces the preference file after flushing its contents.
+/// Self-healing loader: loads preferences if valid; on corruption, backs up the bad file
+/// to `.json.corrupt`, logs a redacted diagnostic warning, and returns `UserPreferences::default()`.
+pub(crate) fn load(path: &Path) -> UserPreferences {
+    match try_load_from_file(path) {
+        Ok(prefs) => prefs,
+        Err(PreferencesLoadError::Read(ref error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            UserPreferences::default()
+        }
+        Err(error) => {
+            let corrupt_path = path.with_extension("json.corrupt");
+            let _ = fs::rename(path, &corrupt_path);
+            crate::diagnostics::warn_redacted(
+                crate::diagnostics::DiagnosticEvent::PreferencesLoad,
+                &error,
+            );
+            UserPreferences::default()
+        }
+    }
+}
+
+/// Atomically replaces the preference file using a unique named temporary file in the target directory.
 ///
 /// # Errors
 ///
 /// Returns an error when the preference file cannot be serialized, created, written, or replaced.
-pub(crate) fn save_to_file(
+pub(crate) fn try_save_to_file(
     preferences: &UserPreferences,
     path: &Path,
 ) -> Result<(), std::io::Error> {
@@ -45,13 +79,18 @@ pub(crate) fn save_to_file(
     fs::create_dir_all(parent)?;
 
     let json = serde_json::to_string_pretty(preferences)?;
-    let mut file = tempfile::Builder::new()
-        .prefix(".barepdf-config-")
-        .tempfile_in(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(json.as_bytes())?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
     Ok(())
+}
+
+pub(crate) fn save_to_file(
+    preferences: &UserPreferences,
+    path: &Path,
+) -> Result<(), std::io::Error> {
+    try_save_to_file(preferences, path)
 }
 
 #[cfg(test)]
@@ -173,5 +212,47 @@ mod tests {
         let preferences = try_load_from_file(&path).expect("load legacy preferences");
 
         assert!(!preferences.enhanced_ui);
+    }
+
+    #[test]
+    fn oversized_preferences_file_is_rejected() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let path = directory.path().join("oversized.json");
+        let file = fs::File::create(&path).expect("create file");
+        file.set_len(MAX_PREFERENCES_FILE_BYTES + 10)
+            .expect("set len");
+
+        let err = try_load_from_file(&path).expect_err("should reject oversized file");
+        assert!(matches!(err, PreferencesLoadError::Oversized { .. }));
+    }
+
+    #[test]
+    fn corrupt_preferences_file_is_backed_up_and_recovers_defaults() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let path = directory.path().join("config.json");
+        fs::write(&path, "invalid { json content").expect("write corrupt config");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.theme, ThemeMode::System);
+
+        let corrupt_path = path.with_extension("json.corrupt");
+        assert!(corrupt_path.exists());
+        assert_eq!(
+            fs::read_to_string(&corrupt_path).unwrap(),
+            "invalid { json content"
+        );
+    }
+
+    #[test]
+    fn try_save_to_file_uses_named_temp_file_and_persists_atomically() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let path = directory.path().join("test_save.json");
+        let prefs = UserPreferences {
+            theme: ThemeMode::Dark,
+            ..UserPreferences::default()
+        };
+        assert!(try_save_to_file(&prefs, &path).is_ok());
+        let loaded = try_load_from_file(&path).expect("load saved preferences");
+        assert_eq!(loaded.theme, ThemeMode::Dark);
     }
 }

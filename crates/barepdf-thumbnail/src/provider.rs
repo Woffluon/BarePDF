@@ -149,15 +149,11 @@ impl BarePdfThumbnailProvider {
         }
 
         let pdf_data = {
-            let stored_bytes = self
+            let mut stored_bytes = self
                 .pdf_bytes
                 .lock()
                 .map_err(|_| ThumbnailError::ProviderStatePoisoned)?;
-            Arc::clone(
-                stored_bytes
-                    .as_ref()
-                    .ok_or(ThumbnailError::NotInitialized)?,
-            )
+            stored_bytes.take().ok_or(ThumbnailError::NotInitialized)?
         };
 
         let pdfium = init_pdfium(self.hinstance).map_err(ThumbnailError::PdfiumInitialization)?;
@@ -288,17 +284,17 @@ impl IThumbnailProvider_Impl for BarePdfThumbnailProvider_Impl {
         phbmp: *mut HBITMAP,
         pdwalpha: *mut WTS_ALPHATYPE,
     ) -> Result<()> {
-        if phbmp.is_null() || pdwalpha.is_null() {
-            return Err(Error::from(E_POINTER));
-        }
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !crate::is_aligned_mut_ptr(phbmp) || !crate::is_aligned_mut_ptr(pdwalpha) {
+                return Err(Error::from(E_POINTER));
+            }
 
-        // SAFETY: COM caller contract documented above guarantees both non-null outputs are valid.
-        unsafe {
-            *phbmp = HBITMAP::default();
-            *pdwalpha = WTSAT_UNKNOWN;
-        }
+            // SAFETY: COM caller contract documented above guarantees both non-null, aligned outputs are valid.
+            unsafe {
+                *phbmp = HBITMAP::default();
+                *pdwalpha = WTSAT_UNKNOWN;
+            }
 
-        std::panic::catch_unwind(|| {
             let hbitmap = self
                 .get_thumbnail(cx)
                 .map_err(ThumbnailError::into_com_error)?;
@@ -308,7 +304,60 @@ impl IThumbnailProvider_Impl for BarePdfThumbnailProvider_Impl {
                 *pdwalpha = WTSAT_ARGB;
             }
             Ok(())
-        })
-        .unwrap_or_else(|_| Err(Error::from(E_UNEXPECTED)))
+        }));
+
+        res.unwrap_or_else(|_| Err(Error::from(E_UNEXPECTED)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_thumbnail_rejects_null_and_misaligned_pointers() {
+        let provider: IThumbnailProvider =
+            BarePdfThumbnailProvider::new(HMODULE(std::ptr::null_mut())).into();
+
+        // Null pointers
+        // SAFETY: Testing that GetThumbnail rejects null output pointers with E_POINTER before dereferencing.
+        let res = unsafe { provider.GetThumbnail(256, std::ptr::null_mut(), std::ptr::null_mut()) };
+        assert_eq!(res.unwrap_err().code(), E_POINTER);
+
+        // Misaligned pointer for phbmp
+        let mut alpha: WTS_ALPHATYPE = WTSAT_UNKNOWN;
+        let mut aligned_buf = [0u8; 16];
+        // SAFETY: `aligned_buf` has 16 bytes; offsetting by 1 byte stays within the allocation.
+        let misaligned_phbmp = unsafe { aligned_buf.as_mut_ptr().add(1) as *mut HBITMAP };
+        // SAFETY: Testing that GetThumbnail rejects misaligned `phbmp` with E_POINTER before dereferencing.
+        let res = unsafe { provider.GetThumbnail(256, misaligned_phbmp, &mut alpha) };
+        assert_eq!(res.unwrap_err().code(), E_POINTER);
+
+        // Misaligned pointer for pdwalpha
+        let mut hbmp: HBITMAP = HBITMAP::default();
+        // SAFETY: `aligned_buf` has 16 bytes; offsetting by 1 byte stays within the allocation.
+        let misaligned_pdwalpha = unsafe { aligned_buf.as_mut_ptr().add(1) as *mut WTS_ALPHATYPE };
+        // SAFETY: Testing that GetThumbnail rejects misaligned `pdwalpha` with E_POINTER before dereferencing.
+        let res = unsafe { provider.GetThumbnail(256, &mut hbmp, misaligned_pdwalpha) };
+        assert_eq!(res.unwrap_err().code(), E_POINTER);
+    }
+
+    #[test]
+    fn get_thumbnail_releases_pdf_bytes_buffer_after_call() {
+        let provider = BarePdfThumbnailProvider::new(HMODULE(std::ptr::null_mut()));
+        let payload: Arc<[u8]> = Arc::from(vec![b'%'; 4096]);
+        let weak_ref = Arc::downgrade(&payload);
+
+        {
+            let mut guard = provider.pdf_bytes.lock().unwrap();
+            *guard = Some(payload);
+        }
+        assert_eq!(weak_ref.strong_count(), 1);
+
+        // Calling get_thumbnail consumes the buffer via `std::mem::take` / `Option::take`
+        let _ = provider.get_thumbnail(256);
+
+        assert!(provider.pdf_bytes.lock().unwrap().is_none());
+        assert_eq!(weak_ref.strong_count(), 0);
     }
 }

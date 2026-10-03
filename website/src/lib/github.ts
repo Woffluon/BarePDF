@@ -1,5 +1,5 @@
-import { repository, defaultReleaseFallback } from './repository';
-import type { ReleaseAsset } from './releases';
+import { repository, defaultReleaseFallback } from './repository.ts';
+import type { ReleaseAsset } from './releases.ts';
 import {
   isCommitUrl,
   isReleaseAssetUrl,
@@ -8,7 +8,7 @@ import {
   releaseAssetType,
   trustedGitHubUrl,
   type ReleaseAssetType,
-} from './github-validation';
+} from './github-validation.ts';
 
 interface ReleaseMetadata {
   tag: string;
@@ -35,6 +35,8 @@ export interface GitHubCommit {
 }
 
 const GITHUB_API_BASE = 'https://api.github.com';
+export const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -45,6 +47,55 @@ function stringValue(value: unknown): string | null {
 
 function finiteSize(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+export async function readBoundedJson(
+  res: Response,
+  maxBytes = MAX_API_RESPONSE_BYTES,
+): Promise<unknown> {
+  const contentLength = res.headers.get('content-length');
+  if (contentLength !== null) {
+    const declaredBytes = Number(contentLength);
+    if (!Number.isFinite(declaredBytes) || declaredBytes < 0 || declaredBytes > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`GitHub API response Content-Length (${contentLength}) exceeds limit (${maxBytes} bytes)`);
+    }
+  }
+
+  if (!res.body) {
+    throw new Error('GitHub API response body is empty');
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new Error(`GitHub API response body exceeds limit (${maxBytes} bytes)`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(merged);
+  return JSON.parse(text);
 }
 
 function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
@@ -79,12 +130,12 @@ function getHeaders(): Record<string, string> {
     'User-Agent': 'BarePDF-Website-Build',
     'Accept': 'application/vnd.github.v3+json',
   };
-  
-  const token = import.meta.env.GITHUB_TOKEN;
+
+  const token = import.meta.env?.GITHUB_TOKEN ?? process.env.GITHUB_TOKEN;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
+
   return headers;
 }
 
@@ -94,6 +145,7 @@ async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response
   try {
     const res = await fetch(url, {
       headers: getHeaders(),
+      redirect: 'error',
       signal: controller.signal,
     });
     return res;
@@ -110,7 +162,7 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
       console.warn(`[GitHub API] Failed to fetch latest release (${res.status} ${res.statusText}). Using build fallback.`);
       return defaultReleaseFallback;
     }
-    const data: unknown = await res.json();
+    const data: unknown = await readBoundedJson(res);
     if (!isRecord(data) || data.draft !== false || data.prerelease !== false) return defaultReleaseFallback;
 
     const tag = stringValue(data.tag_name);
@@ -142,14 +194,15 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
 }
 
 export async function getRecentCommits(limit = 30): Promise<GitHubCommit[]> {
-  const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/commits?sha=${encodeURIComponent(repository.defaultBranch)}&per_page=${limit}`;
+  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/commits?sha=${encodeURIComponent(repository.defaultBranch)}&per_page=${boundedLimit}`;
   try {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
       console.warn(`[GitHub API] Failed to fetch commits (${res.status}). Using build fallback.`);
       return getFallbackCommits();
     }
-    const data = await res.json();
+    const data: unknown = await readBoundedJson(res);
     if (!Array.isArray(data)) {
       return getFallbackCommits();
     }
