@@ -41,7 +41,7 @@ export component FloatingCapsule inherits Rectangle {
             drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
             drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
             drop-shadow-color: ThemeTokens.overlay-shadow;
-            opacity: (top-zone.has-hover || exit-pill-touch.has-hover) ? 1.0 : 0.0;
+            opacity: (top-zone.has-hover || exit-pill-touch.has-hover) ? 1.0 : 0.75;
             animate opacity { duration: ThemeTokens.motion-medium; }
             animate background { duration: ThemeTokens.motion-fast; }
             accessible-role: button;
@@ -77,15 +77,15 @@ export component FloatingCapsule inherits Rectangle {
         }
     }
 
-    // Bottom-hover reveal zone (height 88px at bottom of parent)
+    // Bottom-hover reveal zone (touch-friendly)
     bottom-zone := TouchArea {
-        x: 0px;
+        x: (parent.width - capsule.width) / 2 - 20px;
         y: parent.height - 88px;
-        width: parent.width;
+        width: capsule.width + 40px;
         height: 88px;
 
         capsule := Rectangle {
-            x: (parent.width - self.width) / 2;
+            x: 20px;
             y: parent.height - self.height - 20px;
             width: capsule-layout.preferred-width;
             height: 44px;
@@ -96,7 +96,7 @@ export component FloatingCapsule inherits Rectangle {
             drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
             drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
             drop-shadow-color: ThemeTokens.overlay-shadow;
-            opacity: bottom-zone.has-hover ? 1.0 : 0.0;
+            opacity: (bottom-zone.has-hover || bottom-zone.pressed) ? 1.0 : 0.85;
             animate opacity { duration: ThemeTokens.motion-medium; }
 
             TouchArea {}

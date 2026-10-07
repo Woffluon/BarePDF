@@ -901,7 +901,6 @@ pub(crate) fn invalidate_layout_and_render(
     if clear_images {
         if let Some(document) = app.active_document() {
             app.page_images.remove_document(document);
-            app.thumbnail_images.remove_document(document);
         }
     }
     app.generation = scheduler.bump_generation();
@@ -1001,7 +1000,11 @@ pub(crate) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u3
         .last()
         .map(|page| page.get())
         .unwrap_or(app.current_page);
-    (first.saturating_sub(1)..=(last + 1).min(app.page_count().saturating_sub(1))).collect()
+    if app.zoom_factor.get() >= 3.0 {
+        (first..=last.min(app.page_count().saturating_sub(1))).collect()
+    } else {
+        (first.saturating_sub(1)..=(last + 1).min(app.page_count().saturating_sub(1))).collect()
+    }
 }
 
 fn presentation_render_size(page: (f32, f32), viewport: (u32, u32), dpi_scale: f32) -> (u32, u32) {
@@ -1064,11 +1067,8 @@ pub(crate) fn render_visible_pages(
                 ((layout_page.height as f32) * render_scale).round() as u32,
             )
         };
-        let (render_width, render_height) = fit_bitmap_to_budget(
-            render_width.clamp(1, 4096),
-            render_height.clamp(1, 4096),
-            PAGE_IMAGE_BUDGET,
-        );
+        let (render_width, render_height) =
+            fit_bitmap_to_budget(render_width.max(1), render_height.max(1), PAGE_IMAGE_BUDGET);
         send_render_command(
             app,
             scheduler,
@@ -2016,5 +2016,45 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].path, path);
         assert_eq!(sessions[0].bookmarks, vec![bookmark]);
+    }
+
+    #[test]
+    fn visible_page_indices_skips_prefetch_at_high_zoom() {
+        let mut app = AppState::new(UserPreferences::default());
+        let doc_id = DocumentId::new(1);
+        crate::application::DocumentController::begin_open(
+            &mut app.application,
+            doc_id,
+            PathBuf::from("test.pdf"),
+            Instant::now(),
+        );
+        let _ = crate::application::DocumentController::opened(
+            &mut app.application,
+            doc_id,
+            10,
+            10_000,
+        );
+
+        app.page_dimensions = Arc::new(vec![(600.0, 800.0); 10]);
+        app.viewport_width = 800;
+        app.viewport_height = 600;
+        app.layout =
+            ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
+        app.current_page = 4;
+        let window = AppWindow::new().unwrap();
+        window.set_current_scroll_y(-app.layout.pages[4].y_offset);
+
+        // At zoom < 3.0 (default 1.0), ±1 neighbors are included
+        app.zoom_factor = ZoomFactor::new(1.0);
+        let normal_indices = visible_page_indices(&app, &window);
+        assert!(normal_indices.contains(&3));
+        assert!(normal_indices.contains(&4));
+        assert!(normal_indices.contains(&5));
+
+        // At zoom >= 3.0, off-screen ±1 neighbors are skipped
+        app.zoom_factor = ZoomFactor::new(3.0);
+        let high_zoom_indices = visible_page_indices(&app, &window);
+        // Page 4 is visible; neighbors 3 and 5 are not prefetched if not in viewport
+        assert_eq!(high_zoom_indices, vec![4]);
     }
 }

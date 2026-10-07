@@ -50,7 +50,8 @@ use super::models::{
     refresh_thumbnail_model, refresh_tool_thumbnails, render_signature_pad_preview,
 };
 use super::state::{
-    next_print_preview_request_id, AppState, BackgroundUiEvent, PRINT_PREVIEW_MAX_EDGE,
+    next_print_preview_request_id, AppState, BackgroundUiEvent, ERASER_RADII,
+    PRINT_PREVIEW_MAX_EDGE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1210,7 +1211,7 @@ fn connect_zoom_callbacks(
             app.zoom_mode = ZoomMode::Custom(new_zoom);
             app.update_cache_budget_for_zoom(new_zoom);
             save_zoom_preference(&mut app);
-            invalidate_layout_and_render(&mut app, &scheduler_in, &window, true);
+            invalidate_layout_and_render(&mut app, &scheduler_in, &window, false);
             update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
         }
     });
@@ -1227,7 +1228,7 @@ fn connect_zoom_callbacks(
             app.zoom_mode = ZoomMode::Custom(new_zoom);
             app.update_cache_budget_for_zoom(new_zoom);
             save_zoom_preference(&mut app);
-            invalidate_layout_and_render(&mut app, &scheduler_out, &window, true);
+            invalidate_layout_and_render(&mut app, &scheduler_out, &window, false);
             update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
         }
     });
@@ -1250,7 +1251,7 @@ fn connect_zoom_callbacks(
         app.zoom_mode = ZoomMode::Custom(new_zoom);
         app.update_cache_budget_for_zoom(new_zoom);
         save_zoom_preference(&mut app);
-        invalidate_layout_and_render(&mut app, &scheduler_set, &window, true);
+        invalidate_layout_and_render(&mut app, &scheduler_set, &window, false);
         update_zoom_ui(&window, app.zoom_mode, app.zoom_factor);
         SharedString::from(zoom_percentage(app.zoom_factor))
     });
@@ -1285,7 +1286,7 @@ fn connect_zoom_mode<F>(
                 let mut app = state.borrow_mut();
                 app.zoom_mode = mode;
                 save_zoom_preference(&mut app);
-                invalidate_layout_and_render(&mut app, &scheduler, &window, true);
+                invalidate_layout_and_render(&mut app, &scheduler, &window, false);
                 window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
             }
         }),
@@ -1300,7 +1301,7 @@ fn parse_zoom_percent(input: &str) -> Option<i32> {
     value
         .parse::<i32>()
         .ok()
-        .map(|percent| percent.clamp(25, 200))
+        .map(|percent| percent.clamp(25, 800))
 }
 
 fn connect_view_callbacks(
@@ -2195,7 +2196,7 @@ pub(super) fn handle_background_ui_event(
                         app.page_images.remove_document(doc_id);
                         app.thumbnail_images.remove_document(doc_id);
                         app.text_geometries.remove_document(doc_id);
-                        refresh_annotation_overlays(&app, window);
+                        refresh_annotation_overlays(&mut app, window);
                     }
                     window.set_drawing_mode_active(false);
                     let name = output_path
@@ -2932,12 +2933,32 @@ fn connect_niche_feature_callbacks(
     });
 }
 
+fn update_drawing_undo_redo_ui(app: &AppState, window: &AppWindow) {
+    if let Some(doc_id) = app.active_document() {
+        if let Some(history) = app.annotation_history.get(&doc_id) {
+            window.set_drawing_can_undo(history.can_undo());
+            window.set_drawing_can_redo(history.can_redo());
+            return;
+        }
+    }
+    window.set_drawing_can_undo(false);
+    window.set_drawing_can_redo(false);
+}
+
 fn connect_annotation_and_signature_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
     dialogs: Arc<WindowsFileDialogs>,
 ) {
+    {
+        let app = state.borrow();
+        window.set_pan_mode_active(app.pan_mode);
+        window.set_drawing_eraser_size_index(app.drawing_eraser_size_index as i32);
+        window.set_drawing_eraser_diameter_norm(ERASER_RADII[app.drawing_eraser_size_index] * 2.0);
+        window.set_drawing_toolbar_at_bottom(app.drawing_toolbar_at_bottom);
+        update_drawing_undo_redo_ui(&app, window);
+    }
     let weak = window.as_weak();
     let state_ctx = state.clone();
     window.on_page_right_clicked(move |page_idx, _norm_x, _norm_y, win_x, win_y| {
@@ -3015,31 +3036,83 @@ fn connect_annotation_and_signature_callbacks(
             }
         }
         if !new_quads.is_empty() {
+            let before = app.annotations.get(&doc_id).cloned().unwrap_or_default();
             app.annotations
                 .entry(doc_id)
                 .or_default()
                 .highlights
                 .extend(new_quads);
+            let history = app.annotation_history.entry(doc_id).or_default();
+            history.push_snapshot(before);
             app.selection = None;
             window.set_has_selection(false);
+            app.committed_overlay_cache = None;
+            update_drawing_undo_redo_ui(&app, &window);
             refresh_page_model(&mut app, &window);
         }
     });
 
     let weak = window.as_weak();
+    let state_draw_mode = state.clone();
     window.on_toggle_drawing_mode(move || {
         if let Some(window) = weak.upgrade() {
             let next = !window.get_drawing_mode_active();
             window.set_drawing_mode_active(next);
+            let app = state_draw_mode.borrow();
+            window.set_pan_mode_active(app.pan_mode);
+            window.set_drawing_eraser_size_index(app.drawing_eraser_size_index as i32);
+            window.set_drawing_eraser_diameter_norm(
+                ERASER_RADII[app.drawing_eraser_size_index] * 2.0,
+            );
+            window.set_drawing_toolbar_at_bottom(app.drawing_toolbar_at_bottom);
+            update_drawing_undo_redo_ui(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_pan = state.clone();
+    window.on_toggle_pan_mode(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_pan.borrow_mut();
+            app.pan_mode = !app.pan_mode;
+            window.set_pan_mode_active(app.pan_mode);
         }
     });
 
     let weak = window.as_weak();
     let state_eraser = state.clone();
     window.on_set_drawing_eraser(move |active| {
-        state_eraser.borrow_mut().drawing_eraser = active;
+        let mut app = state_eraser.borrow_mut();
+        app.drawing_eraser = active;
         if let Some(window) = weak.upgrade() {
             window.set_drawing_eraser_active(active);
+            let idx = app.drawing_eraser_size_index;
+            let radius = ERASER_RADII[idx];
+            window.set_drawing_eraser_size_index(idx as i32);
+            window.set_drawing_eraser_diameter_norm(radius * 2.0);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_eraser_size = state.clone();
+    window.on_set_drawing_eraser_size(move |idx| {
+        let mut app = state_eraser_size.borrow_mut();
+        let idx = (idx.max(0) as usize).min(ERASER_RADII.len() - 1);
+        app.drawing_eraser_size_index = idx;
+        let radius = ERASER_RADII[idx];
+        if let Some(window) = weak.upgrade() {
+            window.set_drawing_eraser_size_index(idx as i32);
+            window.set_drawing_eraser_diameter_norm(radius * 2.0);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_toolbar_pos = state.clone();
+    window.on_toggle_drawing_toolbar_position(move || {
+        if let Some(window) = weak.upgrade() {
+            let mut app = state_toolbar_pos.borrow_mut();
+            app.drawing_toolbar_at_bottom = !app.drawing_toolbar_at_bottom;
+            window.set_drawing_toolbar_at_bottom(app.drawing_toolbar_at_bottom);
         }
     });
 
@@ -3090,8 +3163,29 @@ fn connect_annotation_and_signature_callbacks(
         let page_idx = PageIndex::from_raw(page as u32);
         let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
         if app.drawing_eraser {
+            app.last_eraser_point = Some((page_idx, pt.0, pt.1));
+            let radius = ERASER_RADII[app.drawing_eraser_size_index];
+            let mut modified = false;
+            let mut before = None;
             if let Some(ann) = app.annotations.get_mut(&doc_id) {
-                erase_strokes_near(&mut ann.strokes, page_idx, pt.0, pt.1, 0.035);
+                before = Some(ann.clone());
+                modified = barepdf_core::erase_ink_strokes_along_segment(
+                    &mut ann.strokes,
+                    page_idx,
+                    pt,
+                    pt,
+                    radius,
+                    radius,
+                );
+            }
+            if let Some(before) = before {
+                let history = app.annotation_history.entry(doc_id).or_default();
+                history.push_snapshot(before);
+            }
+            if modified {
+                app.committed_overlay_cache = None;
+                update_drawing_undo_redo_ui(&app, &window);
+                refresh_annotation_overlays(&mut app, &window);
             }
         } else {
             app.active_stroke = Some(barepdf_core::InkStroke {
@@ -3100,8 +3194,8 @@ fn connect_annotation_and_signature_callbacks(
                 color: app.drawing_color,
                 width_pts: app.drawing_width_pts,
             });
+            refresh_annotation_overlays(&mut app, &window);
         }
-        refresh_annotation_overlays(&app, &window);
     });
 
     let weak = window.as_weak();
@@ -3120,15 +3214,32 @@ fn connect_annotation_and_signature_callbacks(
         let page_idx = PageIndex::from_raw(page as u32);
         let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
         if app.drawing_eraser {
+            let prev_pt = app
+                .last_eraser_point
+                .filter(|(p, _, _)| *p == page_idx)
+                .map(|(_, x, y)| (x, y))
+                .unwrap_or(pt);
+            app.last_eraser_point = Some((page_idx, pt.0, pt.1));
+            let radius = ERASER_RADII[app.drawing_eraser_size_index];
             if let Some(ann) = app.annotations.get_mut(&doc_id) {
-                if erase_strokes_near(&mut ann.strokes, page_idx, pt.0, pt.1, 0.035) {
-                    refresh_annotation_overlays(&app, &window);
+                let modified = barepdf_core::erase_ink_strokes_along_segment(
+                    &mut ann.strokes,
+                    page_idx,
+                    prev_pt,
+                    pt,
+                    radius,
+                    radius,
+                );
+                if modified {
+                    app.committed_overlay_cache = None;
+                    update_drawing_undo_redo_ui(&app, &window);
+                    refresh_annotation_overlays(&mut app, &window);
                 }
             }
         } else if let Some(stroke) = app.active_stroke.as_mut() {
             if stroke.page == page_idx && stroke.points.len() < 4096 {
                 stroke.points.push(pt);
-                refresh_annotation_overlays(&app, &window);
+                refresh_annotation_overlays(&mut app, &window);
             }
         }
     });
@@ -3143,16 +3254,32 @@ fn connect_annotation_and_signature_callbacks(
         let Some(doc_id) = app.active_document() else {
             return;
         };
+        app.last_eraser_point = None;
+        if app.drawing_eraser {
+            let current_ann = app.annotations.get(&doc_id).cloned();
+            if let Some(ann) = current_ann {
+                if let Some(history) = app.annotation_history.get_mut(&doc_id) {
+                    if history.undo_stack.last() == Some(&ann) {
+                        history.undo_stack.pop();
+                    }
+                }
+            }
+            update_drawing_undo_redo_ui(&app, &window);
+            return;
+        }
         if let Some(mut stroke) = app.active_stroke.take() {
             if stroke.points.is_empty() {
                 stroke.points.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
             }
-            app.annotations
-                .entry(doc_id)
-                .or_default()
-                .strokes
-                .push(stroke);
-            refresh_annotation_overlays(&app, &window);
+            stroke.points = barepdf_core::smooth_ink_points(&stroke.points);
+            let ann = app.annotations.entry(doc_id).or_default();
+            let before = ann.clone();
+            ann.strokes.push(stroke);
+            let history = app.annotation_history.entry(doc_id).or_default();
+            history.push_snapshot(before);
+            app.committed_overlay_cache = None;
+            update_drawing_undo_redo_ui(&app, &window);
+            refresh_annotation_overlays(&mut app, &window);
         }
     });
 
@@ -3166,11 +3293,35 @@ fn connect_annotation_and_signature_callbacks(
         let Some(doc_id) = app.active_document() else {
             return;
         };
-        if let Some(ann) = app.annotations.get_mut(&doc_id) {
-            if ann.strokes.pop().is_none() && ann.signatures.pop().is_none() {
-                let _ = ann.highlights.pop();
+        let current_ann = app.annotations.get(&doc_id).cloned().unwrap_or_default();
+        if let Some(history) = app.annotation_history.get_mut(&doc_id) {
+            if let Some(prev) = history.undo(current_ann) {
+                app.annotations.insert(doc_id, prev);
+                app.committed_overlay_cache = None;
+                update_drawing_undo_redo_ui(&app, &window);
+                refresh_annotation_overlays(&mut app, &window);
             }
-            refresh_annotation_overlays(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
+    let state_redo = state.clone();
+    window.on_drawing_redo(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_redo.borrow_mut();
+        let Some(doc_id) = app.active_document() else {
+            return;
+        };
+        let current_ann = app.annotations.get(&doc_id).cloned().unwrap_or_default();
+        if let Some(history) = app.annotation_history.get_mut(&doc_id) {
+            if let Some(next) = history.redo(current_ann) {
+                app.annotations.insert(doc_id, next);
+                app.committed_overlay_cache = None;
+                update_drawing_undo_redo_ui(&app, &window);
+                refresh_annotation_overlays(&mut app, &window);
+            }
         }
     });
 
@@ -3186,10 +3337,17 @@ fn connect_annotation_and_signature_callbacks(
             return;
         };
         if let Some(ann) = app.annotations.get_mut(&doc_id) {
+            let before = ann.clone();
             ann.strokes.retain(|s| s.page.get() != current_page);
             ann.highlights.retain(|h| h.page.get() != current_page);
             ann.signatures.retain(|s| s.page.get() != current_page);
-            refresh_annotation_overlays(&app, &window);
+            if *ann != before {
+                let history = app.annotation_history.entry(doc_id).or_default();
+                history.push_snapshot(before);
+                app.committed_overlay_cache = None;
+                update_drawing_undo_redo_ui(&app, &window);
+                refresh_annotation_overlays(&mut app, &window);
+            }
         }
     });
 
@@ -3202,10 +3360,13 @@ fn connect_annotation_and_signature_callbacks(
         let mut app = state_discard.borrow_mut();
         if let Some(doc_id) = app.active_document() {
             app.annotations.remove(&doc_id);
+            app.annotation_history.remove(&doc_id);
         }
         app.active_stroke = None;
+        app.committed_overlay_cache = None;
         window.set_drawing_mode_active(false);
-        refresh_annotation_overlays(&app, &window);
+        update_drawing_undo_redo_ui(&app, &window);
+        refresh_annotation_overlays(&mut app, &window);
     });
 
     let weak = window.as_weak();
@@ -3401,13 +3562,15 @@ fn connect_annotation_and_signature_callbacks(
             h_norm: window.get_signature_box_h().clamp(0.03, 1.0),
             payload,
         };
-        app.annotations
-            .entry(doc_id)
-            .or_default()
-            .signatures
-            .push(stamp);
+        let ann = app.annotations.entry(doc_id).or_default();
+        let before = ann.clone();
+        ann.signatures.push(stamp);
+        let history = app.annotation_history.entry(doc_id).or_default();
+        history.push_snapshot(before);
+        app.committed_overlay_cache = None;
         window.set_signature_placement_active(false);
-        refresh_annotation_overlays(&app, &window);
+        update_drawing_undo_redo_ui(&app, &window);
+        refresh_annotation_overlays(&mut app, &window);
     });
 
     let weak = window.as_weak();
@@ -3503,6 +3666,7 @@ fn selection_to_highlight_quads(
     quads
 }
 
+#[cfg(test)]
 fn erase_strokes_near(
     strokes: &mut Vec<barepdf_core::InkStroke>,
     page: PageIndex,
@@ -3625,7 +3789,9 @@ mod tests {
             ("+125", Some(125)),
             ("0", Some(25)),
             ("-25", Some(25)),
-            ("250", Some(200)),
+            ("250", Some(250)),
+            ("800", Some(800)),
+            ("999", Some(800)),
         ] {
             assert_eq!(parse_zoom_percent(input), expected, "{input}");
         }
@@ -3799,5 +3965,52 @@ mod tests {
         assert!(sink.begin("doc.pdf").is_ok());
         assert!(initialized.load(Ordering::SeqCst));
         assert!(sink.finish().is_ok());
+    }
+
+    #[test]
+    fn wave2_drawing_segment_eraser_removes_strokes_along_drag_path() {
+        use crate::presentation::state::ERASER_RADII;
+        use barepdf_core::{erase_ink_strokes_along_segment, InkColor, InkStroke, PageIndex};
+
+        let page = PageIndex::zero();
+        let mut strokes = vec![
+            InkStroke {
+                page,
+                points: vec![(0.5, 0.1), (0.5, 0.9)],
+                color: InkColor::Black,
+                width_pts: 2.0,
+            },
+            InkStroke {
+                page,
+                points: vec![(0.1, 0.1), (0.2, 0.2)],
+                color: InkColor::Red,
+                width_pts: 2.0,
+            },
+        ];
+
+        let radius = ERASER_RADII[1]; // default index 1: 0.028
+        let modified = erase_ink_strokes_along_segment(
+            &mut strokes,
+            page,
+            (0.4, 0.5),
+            (0.6, 0.5),
+            radius,
+            radius,
+        );
+
+        assert!(modified);
+        // The vertical stroke was cut into 2 pieces, horizontal unaffected (total 3 strokes)
+        assert_eq!(strokes.len(), 3);
+    }
+
+    #[test]
+    fn wave2_smooth_ink_points_subdivides_strokes() {
+        use barepdf_core::smooth_ink_points;
+
+        let points = vec![(0.0, 0.0), (0.5, 0.5), (1.0, 0.0)];
+        let smoothed = smooth_ink_points(&points);
+        assert!(smoothed.len() > points.len());
+        assert_eq!(smoothed.first().copied(), Some((0.0, 0.0)));
+        assert_eq!(smoothed.last().copied(), Some((1.0, 0.0)));
     }
 }

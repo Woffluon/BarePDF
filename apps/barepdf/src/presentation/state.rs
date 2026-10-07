@@ -392,6 +392,17 @@ impl UiImageCache {
     }
 }
 
+pub(crate) const ERASER_RADII: [f32; 4] = [0.015, 0.028, 0.048, 0.075];
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CommittedOverlayCache {
+    pub(crate) document_id: DocumentId,
+    pub(crate) page: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
+}
+
 pub(crate) struct AppState {
     pub(crate) application: Application,
     pub(crate) current_page: u32,
@@ -451,6 +462,12 @@ pub(crate) struct AppState {
     pub(crate) drawing_color: barepdf_core::InkColor,
     pub(crate) drawing_width_pts: f32,
     pub(crate) drawing_eraser: bool,
+    pub(crate) pan_mode: bool,
+    pub(crate) drawing_eraser_size_index: usize,
+    pub(crate) drawing_toolbar_at_bottom: bool,
+    pub(crate) last_eraser_point: Option<(barepdf_core::PageIndex, f32, f32)>,
+    pub(crate) annotation_history: HashMap<DocumentId, barepdf_core::AnnotationHistory>,
+    pub(crate) committed_overlay_cache: Option<CommittedOverlayCache>,
     pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
     pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
     pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
@@ -525,6 +542,12 @@ impl AppState {
             drawing_color: barepdf_core::InkColor::Black,
             drawing_width_pts: 4.0,
             drawing_eraser: false,
+            pan_mode: true,
+            drawing_eraser_size_index: 1,
+            drawing_toolbar_at_bottom: true,
+            last_eraser_point: None,
+            annotation_history: HashMap::new(),
+            committed_overlay_cache: None,
             sign_pad_strokes: Vec::new(),
             sign_pad_active_stroke: None,
             sign_uploaded_image: None,
@@ -1219,5 +1242,17 @@ mod tests {
         assert_eq!(cache.bytes, 0);
         assert!(!cache.contains_key(doc, 1, RenderKind::Page));
         assert!(!cache.contains_key(doc, 3, RenderKind::Page));
+    }
+
+    #[test]
+    fn wave2_task4_state_fields_and_constants_defaults() {
+        assert_eq!(ERASER_RADII, [0.015, 0.028, 0.048, 0.075]);
+        let app = AppState::new(UserPreferences::default());
+        assert!(app.pan_mode);
+        assert_eq!(app.drawing_eraser_size_index, 1);
+        assert!(app.drawing_toolbar_at_bottom);
+        assert_eq!(app.last_eraser_point, None);
+        assert!(app.annotation_history.is_empty());
+        assert_eq!(app.committed_overlay_cache, None);
     }
 }

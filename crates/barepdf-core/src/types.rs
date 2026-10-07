@@ -117,7 +117,7 @@ pub struct ZoomFactor(f32);
 
 impl ZoomFactor {
     pub const MIN: f32 = 0.25;
-    pub const MAX: f32 = 3.5;
+    pub const MAX: f32 = 8.0;
     pub const DEFAULT: f32 = 1.0;
     pub const STEP: f32 = 0.25;
 
@@ -142,12 +142,26 @@ impl ZoomFactor {
 
     #[must_use]
     pub fn zoom_in(self) -> Self {
-        Self::new(self.0 + Self::STEP)
+        let next = if self.0 < 2.0 {
+            self.0 + 0.25
+        } else if self.0 < 4.0 {
+            self.0 + 0.50
+        } else {
+            self.0 + 1.00
+        };
+        Self::new(next)
     }
 
     #[must_use]
     pub fn zoom_out(self) -> Self {
-        Self::new(self.0 - Self::STEP)
+        let next = if self.0 > 4.0 {
+            self.0 - 1.00
+        } else if self.0 > 2.0 {
+            self.0 - 0.50
+        } else {
+            self.0 - 0.25
+        };
+        Self::new(next)
     }
 }
 
@@ -540,6 +554,320 @@ impl DocumentAnnotations {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AnnotationHistory {
+    pub undo_stack: Vec<DocumentAnnotations>,
+    pub redo_stack: Vec<DocumentAnnotations>,
+}
+
+impl AnnotationHistory {
+    pub const MAX_STACK_SIZE: usize = 50;
+
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_snapshot(&mut self, current: DocumentAnnotations) {
+        self.redo_stack.clear();
+        self.undo_stack.push(current);
+        if self.undo_stack.len() > Self::MAX_STACK_SIZE {
+            let excess = self.undo_stack.len() - Self::MAX_STACK_SIZE;
+            self.undo_stack.drain(0..excess);
+        }
+    }
+
+    pub fn undo(&mut self, current: DocumentAnnotations) -> Option<DocumentAnnotations> {
+        let previous = self.undo_stack.pop()?;
+        self.redo_stack.push(current);
+        Some(previous)
+    }
+
+    pub fn redo(&mut self, current: DocumentAnnotations) -> Option<DocumentAnnotations> {
+        let next = self.redo_stack.pop()?;
+        self.undo_stack.push(current);
+        Some(next)
+    }
+
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+}
+
+/// Smooths a polyline using quadratic Bézier curve interpolation through midpoints.
+#[must_use]
+pub fn smooth_ink_points(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+
+    const SUBDIVISIONS: usize = 4;
+    let n = points.len();
+    let mut smoothed = Vec::with_capacity(1 + n * SUBDIVISIONS);
+    let p0 = points[0];
+    smoothed.push(p0);
+
+    let mut midpoints = Vec::with_capacity(n - 1);
+    for i in 0..(n - 1) {
+        let p_curr = points[i];
+        let p_next = points[i + 1];
+        midpoints.push(((p_curr.0 + p_next.0) * 0.5, (p_curr.1 + p_next.1) * 0.5));
+    }
+
+    let mut curr = p0;
+    for (i, &mid) in midpoints.iter().enumerate() {
+        let ctrl = points[i];
+        for step in 1..=SUBDIVISIONS {
+            #[allow(clippy::cast_precision_loss)]
+            let t = step as f32 / SUBDIVISIONS as f32;
+            let one_minus_t = 1.0 - t;
+            let x =
+                one_minus_t * one_minus_t * curr.0 + 2.0 * one_minus_t * t * ctrl.0 + t * t * mid.0;
+            let y =
+                one_minus_t * one_minus_t * curr.1 + 2.0 * one_minus_t * t * ctrl.1 + t * t * mid.1;
+            smoothed.push((x, y));
+        }
+        curr = mid;
+    }
+
+    let p_last = points[n - 1];
+    for step in 1..=SUBDIVISIONS {
+        #[allow(clippy::cast_precision_loss)]
+        let t = step as f32 / SUBDIVISIONS as f32;
+        let one_minus_t = 1.0 - t;
+        let x = one_minus_t * one_minus_t * curr.0
+            + 2.0 * one_minus_t * t * p_last.0
+            + t * t * p_last.0;
+        let y = one_minus_t * one_minus_t * curr.1
+            + 2.0 * one_minus_t * t * p_last.1
+            + t * t * p_last.1;
+        smoothed.push((x, y));
+    }
+
+    smoothed
+}
+
+#[inline]
+fn polyline_length(pts: &[(f32, f32)]) -> f32 {
+    if pts.len() < 2 {
+        return 0.0;
+    }
+    pts.windows(2)
+        .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+        .sum()
+}
+
+type Segment2D = ((f32, f32), (f32, f32));
+
+fn clip_segment_against_ellipse(
+    a: (f32, f32),
+    b: (f32, f32),
+    ex: f32,
+    ey: f32,
+    rx: f32,
+    ry: f32,
+) -> (Vec<Segment2D>, bool) {
+    let a_prime = ((a.0 - ex) / rx, (a.1 - ey) / ry);
+    let b_prime = ((b.0 - ex) / rx, (b.1 - ey) / ry);
+    let v = (b_prime.0 - a_prime.0, b_prime.1 - a_prime.1);
+    let w = a_prime;
+
+    let a_quad = v.0 * v.0 + v.1 * v.1;
+    let b_quad = 2.0 * (v.0 * w.0 + v.1 * w.1);
+    let c_quad = w.0 * w.0 + w.1 * w.1 - 1.0;
+
+    if a_quad < 1e-12 {
+        if c_quad <= 0.0 {
+            return (Vec::new(), true);
+        }
+        return (vec![(a, b)], false);
+    }
+
+    let delta = b_quad * b_quad - 4.0 * a_quad * c_quad;
+    if delta <= 0.0 {
+        return (vec![(a, b)], false);
+    }
+
+    let sqrt_delta = delta.sqrt();
+    let u1 = (-b_quad - sqrt_delta) / (2.0 * a_quad);
+    let u2 = (-b_quad + sqrt_delta) / (2.0 * a_quad);
+
+    if u2 <= 0.0 || u1 >= 1.0 {
+        return (vec![(a, b)], false);
+    }
+
+    let mut surviving = Vec::with_capacity(2);
+
+    if u1 > 0.0 {
+        let end_t = u1.min(1.0);
+        let end_pt = (a.0 + end_t * (b.0 - a.0), a.1 + end_t * (b.1 - a.1));
+        surviving.push((a, end_pt));
+    }
+
+    if u2 < 1.0 {
+        let start_t = u2.max(0.0);
+        let start_pt = (a.0 + start_t * (b.0 - a.0), a.1 + start_t * (b.1 - a.1));
+        surviving.push((start_pt, b));
+    }
+
+    (surviving, true)
+}
+
+fn clip_stroke_at_point(
+    stroke: &InkStroke,
+    ex: f32,
+    ey: f32,
+    rx: f32,
+    ry: f32,
+) -> (Vec<Vec<(f32, f32)>>, bool) {
+    let mut sub_strokes = Vec::new();
+    let mut current_polyline: Vec<(f32, f32)> = Vec::new();
+    let mut stroke_modified = false;
+
+    for window in stroke.points.windows(2) {
+        let (surviving, modified) =
+            clip_segment_against_ellipse(window[0], window[1], ex, ey, rx, ry);
+        if modified {
+            stroke_modified = true;
+        }
+
+        if surviving.is_empty() {
+            if !current_polyline.is_empty() {
+                sub_strokes.push(std::mem::take(&mut current_polyline));
+            }
+        } else if surviving.len() == 1 {
+            let (start_pt, end_pt) = surviving[0];
+            if current_polyline.is_empty() {
+                current_polyline.push(start_pt);
+                current_polyline.push(end_pt);
+            } else {
+                let last = *current_polyline.last().unwrap();
+                if (start_pt.0 - last.0).hypot(start_pt.1 - last.1) < 1e-5 {
+                    current_polyline.push(end_pt);
+                } else {
+                    sub_strokes.push(std::mem::take(&mut current_polyline));
+                    current_polyline.push(start_pt);
+                    current_polyline.push(end_pt);
+                }
+            }
+        } else {
+            let (part1_start, part1_end) = surviving[0];
+            let (part2_start, part2_end) = surviving[1];
+
+            if current_polyline.is_empty() {
+                current_polyline.push(part1_start);
+                current_polyline.push(part1_end);
+            } else {
+                let last = *current_polyline.last().unwrap();
+                if (part1_start.0 - last.0).hypot(part1_start.1 - last.1) < 1e-5 {
+                    current_polyline.push(part1_end);
+                } else {
+                    sub_strokes.push(std::mem::take(&mut current_polyline));
+                    current_polyline.push(part1_start);
+                    current_polyline.push(part1_end);
+                }
+            }
+            sub_strokes.push(std::mem::take(&mut current_polyline));
+            current_polyline.push(part2_start);
+            current_polyline.push(part2_end);
+        }
+    }
+
+    if !current_polyline.is_empty() {
+        sub_strokes.push(current_polyline);
+    }
+
+    (sub_strokes, stroke_modified)
+}
+
+/// Erases ink strokes along the line segment from `from_pt` to `to_pt` using an elliptical eraser footprint.
+///
+/// Returns `true` if any stroke was modified, split, or deleted.
+pub fn erase_ink_strokes_along_segment(
+    strokes: &mut Vec<InkStroke>,
+    page: PageIndex,
+    from_pt: (f32, f32),
+    to_pt: (f32, f32),
+    radius_x: f32,
+    radius_y: f32,
+) -> bool {
+    if radius_x <= 0.0 || radius_y <= 0.0 || strokes.is_empty() {
+        return false;
+    }
+
+    let dx = to_pt.0 - from_pt.0;
+    let dy = to_pt.1 - from_pt.1;
+    let total_dist = dx.hypot(dy);
+    let min_r = radius_x.min(radius_y);
+    let step_dist = (0.5 * min_r).max(1e-5);
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let steps = ((total_dist / step_dist).ceil() as usize).max(1);
+
+    let mut any_modified = false;
+
+    for s in 0..=steps {
+        #[allow(clippy::cast_precision_loss)]
+        let t = s as f32 / steps as f32;
+        let ex = from_pt.0 + t * dx;
+        let ey = from_pt.1 + t * dy;
+
+        let mut next_strokes = Vec::with_capacity(strokes.len());
+        for stroke in strokes.drain(..) {
+            if stroke.page != page {
+                next_strokes.push(stroke);
+                continue;
+            }
+
+            if stroke.points.is_empty() {
+                any_modified = true;
+                continue;
+            }
+
+            if stroke.points.len() == 1 {
+                let p = stroke.points[0];
+                let nx = (p.0 - ex) / radius_x;
+                let ny = (p.1 - ey) / radius_y;
+                if nx * nx + ny * ny <= 1.0 {
+                    any_modified = true;
+                } else {
+                    next_strokes.push(stroke);
+                }
+                continue;
+            }
+
+            let (cut_pieces, modified) = clip_stroke_at_point(&stroke, ex, ey, radius_x, radius_y);
+            if modified {
+                any_modified = true;
+            }
+            for piece in cut_pieces {
+                if polyline_length(&piece) >= 1e-4 {
+                    next_strokes.push(InkStroke {
+                        page: stroke.page,
+                        points: piece,
+                        color: stroke.color,
+                        width_pts: stroke.width_pts,
+                    });
+                } else {
+                    any_modified = true;
+                }
+            }
+        }
+        *strokes = next_strokes;
+    }
+
+    any_modified
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,8 +883,16 @@ mod tests {
         assert_eq!(ZoomFactor::new(0.25).zoom_out(), ZoomFactor::new(0.25));
         assert_eq!(ZoomFactor::new(0.25).zoom_in(), ZoomFactor::new(0.5));
         assert_eq!(ZoomFactor::new(1.75).zoom_in(), ZoomFactor::new(2.0));
-        assert_eq!(ZoomFactor::new(3.25).zoom_in(), ZoomFactor::new(3.5));
-        assert_eq!(ZoomFactor::new(3.5).zoom_in(), ZoomFactor::new(3.5));
+        assert_eq!(ZoomFactor::new(2.0).zoom_in(), ZoomFactor::new(2.5));
+        assert_eq!(ZoomFactor::new(3.5).zoom_in(), ZoomFactor::new(4.0));
+        assert_eq!(ZoomFactor::new(4.0).zoom_in(), ZoomFactor::new(5.0));
+        assert_eq!(ZoomFactor::new(7.0).zoom_in(), ZoomFactor::new(8.0));
+        assert_eq!(ZoomFactor::new(8.0).zoom_in(), ZoomFactor::new(8.0));
+        assert_eq!(ZoomFactor::new(8.0).zoom_out(), ZoomFactor::new(7.0));
+        assert_eq!(ZoomFactor::new(4.5).zoom_out(), ZoomFactor::new(3.5));
+        assert_eq!(ZoomFactor::new(4.0).zoom_out(), ZoomFactor::new(3.5));
+        assert_eq!(ZoomFactor::new(2.5).zoom_out(), ZoomFactor::new(2.0));
+        assert_eq!(ZoomFactor::new(2.0).zoom_out(), ZoomFactor::new(1.75));
     }
 
     #[test]
@@ -566,7 +902,7 @@ mod tests {
         >::new(10.0))
         .expect("valid persisted zoom");
 
-        assert_eq!(zoom, ZoomFactor::new(3.5));
+        assert_eq!(zoom, ZoomFactor::new(8.0));
     }
 
     #[test]
@@ -648,5 +984,151 @@ mod tests {
             h_norm: 0.05,
         });
         assert!(!annotations.is_empty());
+    }
+
+    #[test]
+    fn smooth_ink_points_short_inputs_returned_as_is() {
+        assert_eq!(smooth_ink_points(&[]), Vec::<(f32, f32)>::new());
+        assert_eq!(smooth_ink_points(&[(1.0, 2.0)]), vec![(1.0, 2.0)]);
+        assert_eq!(
+            smooth_ink_points(&[(1.0, 2.0), (3.0, 4.0)]),
+            vec![(1.0, 2.0), (3.0, 4.0)]
+        );
+    }
+
+    #[test]
+    fn smooth_ink_points_produces_smooth_curve_starting_and_ending_at_endpoints() {
+        let raw = vec![(0.0, 0.0), (1.0, 2.0), (2.0, 0.0)];
+        let smoothed = smooth_ink_points(&raw);
+        assert!(smoothed.len() > raw.len());
+        assert_eq!(smoothed.first(), Some(&(0.0, 0.0)));
+        assert_eq!(smoothed.last(), Some(&(2.0, 0.0)));
+    }
+
+    #[test]
+    fn erase_ink_strokes_cuts_stroke_middle_into_two() {
+        let page = PageIndex::zero();
+        let mut strokes = vec![InkStroke {
+            page,
+            points: vec![(0.0, 0.5), (1.0, 0.5)],
+            color: InkColor::Black,
+            width_pts: 2.0,
+        }];
+
+        let modified =
+            erase_ink_strokes_along_segment(&mut strokes, page, (0.5, 0.5), (0.5, 0.5), 0.1, 0.1);
+
+        assert!(modified);
+        assert_eq!(strokes.len(), 2);
+        assert_eq!(strokes[0].points[0], (0.0, 0.5));
+        assert!((strokes[0].points[1].0 - 0.4).abs() < 1e-4);
+        assert!((strokes[1].points[0].0 - 0.6).abs() < 1e-4);
+        assert_eq!(strokes[1].points[1], (1.0, 0.5));
+    }
+
+    #[test]
+    fn erase_ink_strokes_cuts_end_of_stroke() {
+        let page = PageIndex::zero();
+        let mut strokes = vec![InkStroke {
+            page,
+            points: vec![(0.0, 0.5), (1.0, 0.5)],
+            color: InkColor::Black,
+            width_pts: 2.0,
+        }];
+
+        let modified =
+            erase_ink_strokes_along_segment(&mut strokes, page, (0.95, 0.5), (0.95, 0.5), 0.1, 0.1);
+
+        assert!(modified);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].points[0], (0.0, 0.5));
+        assert!((strokes[0].points[1].0 - 0.85).abs() < 1e-4);
+    }
+
+    #[test]
+    fn erase_ink_strokes_fast_drag_interpolates_across_stroke() {
+        let page = PageIndex::zero();
+        let mut strokes = vec![InkStroke {
+            page,
+            points: vec![(0.5, 0.0), (0.5, 1.0)],
+            color: InkColor::Blue,
+            width_pts: 2.0,
+        }];
+
+        // Fast drag jumps from x=0.2 to x=0.8 with small radius 0.04
+        let modified =
+            erase_ink_strokes_along_segment(&mut strokes, page, (0.2, 0.5), (0.8, 0.5), 0.04, 0.04);
+
+        assert!(modified);
+        assert_eq!(strokes.len(), 2);
+    }
+
+    #[test]
+    fn erase_ink_strokes_preserves_strokes_on_other_pages() {
+        let page0 = PageIndex::from_raw(0);
+        let page1 = PageIndex::from_raw(1);
+        let mut strokes = vec![InkStroke {
+            page: page1,
+            points: vec![(0.0, 0.5), (1.0, 0.5)],
+            color: InkColor::Red,
+            width_pts: 2.0,
+        }];
+
+        let modified =
+            erase_ink_strokes_along_segment(&mut strokes, page0, (0.5, 0.5), (0.5, 0.5), 0.2, 0.2);
+
+        assert!(!modified);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].points.len(), 2);
+    }
+
+    #[test]
+    fn annotation_history_push_undo_redo_and_cap() {
+        let mut history = AnnotationHistory::default();
+        assert!(!history.can_undo());
+        assert!(!history.can_redo());
+
+        let state0 = DocumentAnnotations::default();
+        let mut state1 = DocumentAnnotations::default();
+        state1.strokes.push(InkStroke {
+            page: PageIndex::zero(),
+            points: vec![(0.1, 0.1)],
+            color: InkColor::Black,
+            width_pts: 1.0,
+        });
+
+        history.push_snapshot(state0.clone());
+        assert!(history.can_undo());
+        assert!(!history.can_redo());
+
+        // Undo
+        let undone = history.undo(state1.clone()).expect("undo succeeds");
+        assert_eq!(undone, state0);
+        assert!(!history.can_undo());
+        assert!(history.can_redo());
+
+        // Redo
+        let redone = history.redo(state0).expect("redo succeeds");
+        assert_eq!(redone, state1);
+        assert!(history.can_undo());
+        assert!(!history.can_redo());
+
+        // Test cap at 50
+        let mut cap_history = AnnotationHistory::default();
+        for i in 0..60 {
+            let mut s = DocumentAnnotations::default();
+            s.strokes.push(InkStroke {
+                page: PageIndex::from_raw(i),
+                points: vec![],
+                color: InkColor::Red,
+                width_pts: 1.0,
+            });
+            cap_history.push_snapshot(s);
+        }
+        assert_eq!(cap_history.undo_stack.len(), 50);
+        assert_eq!(
+            cap_history.undo_stack[0].strokes[0].page,
+            PageIndex::from_raw(10)
+        );
     }
 }

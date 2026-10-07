@@ -283,6 +283,7 @@ slint::slint! {
         in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc)" : "Exit (Esc)";
         in-out property <string> text-toolbar-rotate: "Rotate (Ctrl+R)";
         in-out property <string> text-toolbar-draw: "Draw";
+        in-out property <string> text-toolbar-pan: "Pan";
         in-out property <string> text-toolbar-sign: "Sign";
         in-out property <string> text-context-find: "Find in Document";
         in-out property <string> text-context-highlight: "Highlight";
@@ -291,6 +292,7 @@ slint::slint! {
         in-out property <string> text-draw-pen: "Pen";
         in-out property <string> text-draw-eraser: "Eraser";
         in-out property <string> text-draw-undo: "Undo";
+        in-out property <string> text-draw-redo: "Redo";
         in-out property <string> text-draw-clear: "Clear";
         in-out property <string> text-draw-save: "Save";
         in-out property <string> text-draw-save-as: "Save As…";
@@ -305,7 +307,13 @@ slint::slint! {
         in-out property <string> text-sign-cancel: "Cancel";
 
         in-out property <bool> drawing-mode-active: false;
+        in-out property <bool> pan-mode-active: true;
         in-out property <bool> drawing-eraser-active: false;
+        in-out property <int> drawing-eraser-size-index: 1;
+        in-out property <float> drawing-eraser-diameter-norm: 0.05;
+        in-out property <bool> drawing-toolbar-at-bottom: true;
+        in-out property <bool> drawing-can-undo: false;
+        in-out property <bool> drawing-can-redo: false;
         in-out property <int> drawing-color-index: 0;
         in-out property <int> drawing-width-index: 1;
         in-out property <bool> has-unsaved-annotations: false;
@@ -422,11 +430,15 @@ slint::slint! {
         callback rotate-view-cw();
         callback rotate-view-ccw();
         callback toggle-drawing-mode();
+        callback toggle-pan-mode();
         callback set-drawing-eraser(bool);
+        callback set-drawing-eraser-size(int);
         callback set-drawing-color(int);
         callback set-drawing-width(int);
         callback drawing-undo();
+        callback drawing-redo();
         callback drawing-clear-page();
+        callback toggle-drawing-toolbar-position();
         callback save-annotations();
         callback save-annotations-as();
         callback discard-annotations();
@@ -875,6 +887,16 @@ slint::slint! {
                         clicked => { root.toggle-drawing-mode(); }
                     }
                     IconButton {
+                        icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+                        label: root.text-toolbar-pan;
+                        tooltip: root.text-toolbar-pan;
+                        show-label: root.width >= 1080px;
+                        active: root.pan-mode-active;
+                        enabled: root.has-document;
+                        visible: root.width >= 900px;
+                        clicked => { root.toggle-pan-mode(); }
+                    }
+                    IconButton {
                         icon: @image-url("../../../assets/icons/signature_20_regular.svg");
                         label: root.text-toolbar-sign;
                         tooltip: root.text-toolbar-sign;
@@ -1321,9 +1343,9 @@ slint::slint! {
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
                             if root.visible-pages.length == 0 && root.page-bitmap.width > 0 : Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
-                            if root.page-annotation-overlays.length > spread-scroll.first-idx && root.page-annotation-overlays[spread-scroll.first-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.first-idx]; width: 100%; height: 100%; image-fit: contain; }
-                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
-                            if root.page-annotation-overlay.width > 0 && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > spread-scroll.first-idx && root.page-annotation-overlays[spread-scroll.first-idx].width > 0 && spread-scroll.first-idx != root.current-annotation-page-index : Image { source: root.page-annotation-overlays[spread-scroll.first-idx]; width: 100%; height: 100%; image-fit: fill; }
+                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                            if root.page-annotation-overlay.width > 0 && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
                             for rect in root.current-page-overlay-rects : Rectangle {
                                 x: parent.width * rect.x_ratio;
                                 y: parent.height * rect.y_ratio;
@@ -1339,7 +1361,10 @@ slint::slint! {
                                     x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
                                 }
                             }
-                            TouchArea {
+                            page-touch-1 := TouchArea {
+                                property <length> pan-last-abs-y: 0px;
+                                property <length> pan-last-abs-x: 0px;
+                                mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                                 pointer-event(event) => {
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                         root.page-right-clicked(
@@ -1351,25 +1376,43 @@ slint::slint! {
                                         );
                                     }
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                        root.pointer-down(spread-scroll.first-idx, self.mouse-x, self.mouse-y, 1);
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-down(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active) {
+                                            self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                            self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                        } else {
+                                            root.pointer-down(spread-scroll.first-idx, self.mouse-x, self.mouse-y, 1);
                                         }
                                     }
-                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                                        root.pointer-up(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
+                                    if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-up(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-up(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                     if (event.kind == PointerEventKind.move) {
-                                        root.pointer-move(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
                                         if (root.drawing-mode-active && self.pressed) {
                                             root.drawing-pointer-move(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active && self.pressed) {
+                                            let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                            let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                            let dy = current-abs-y - self.pan-last-abs-y;
+                                            let dx = current-abs-x - self.pan-last-abs-x;
+                                            self.pan-last-abs-y = current-abs-y;
+                                            self.pan-last-abs-x = current-abs-x;
+                                            spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
+                                            spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-move(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                 }
                                 scroll-event(event) => {
+                                    if (root.drawing-mode-active) {
+                                        return accept;
+                                    }
                                     if (event.modifiers.control) {
                                         if (event.delta-y > 0) { root.request-zoom-in(); }
                                         else if (event.delta-y < 0) { root.request-zoom-out(); }
@@ -1377,6 +1420,17 @@ slint::slint! {
                                     }
                                     return reject;
                                 }
+                            }
+                            if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-1.has-hover || page-touch-1.pressed) : Rectangle {
+                                property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                                x: page-touch-1.mouse-x - self.diameter / 2;
+                                y: page-touch-1.mouse-y - self.diameter / 2;
+                                width: self.diameter;
+                                height: self.diameter;
+                                border-radius: self.diameter / 2;
+                                background: #e0313125;
+                                border-width: 1.5px;
+                                border-color: #e03131cc;
                             }
                             if root.signature-placement-active && spread-scroll.first-idx == root.signature-placement-page : Rectangle {
                                 x: parent.width * root.signature-box-x;
@@ -1387,8 +1441,8 @@ slint::slint! {
                                 border-width: 2px;
                                 border-color: ThemeTokens.accent;
                                 border-radius: 4px;
-                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
-                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
                                 TouchArea {
                                     pointer-event(event) => {
                                         if (event.kind == PointerEventKind.move && self.pressed) {
@@ -1450,8 +1504,8 @@ slint::slint! {
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if root.visible-pages.length > 1 && root.visible-pages[1].has-bitmap : Image { source: root.visible-pages[1].bitmap; width: 100%; height: 100%; image-fit: contain; }
                             if (root.visible-pages.length <= 1 || !root.visible-pages[1].has-bitmap) && root.second-page-image.width > 0 : Image { source: root.second-page-image; width: 100%; height: 100%; image-fit: contain; }
-                            if root.page-annotation-overlays.length > spread-scroll.second-idx && root.page-annotation-overlays[spread-scroll.second-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.second-idx]; width: 100%; height: 100%; image-fit: contain; }
-                            if root.second-page-has-annotation-overlay || root.second-page-annotation-overlay.width > 0 : Image { source: root.second-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > spread-scroll.second-idx && root.page-annotation-overlays[spread-scroll.second-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.second-idx]; width: 100%; height: 100%; image-fit: fill; }
+                            if root.second-page-has-annotation-overlay || root.second-page-annotation-overlay.width > 0 : Image { source: root.second-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
                             if root.visible-pages.length > 1 : Rectangle {
                                 for box in root.visible-pages[1].selection-boxes : Rectangle {
                                     x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection;
@@ -1460,7 +1514,10 @@ slint::slint! {
                                     x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
                                 }
                             }
-                            TouchArea {
+                            page-touch-2 := TouchArea {
+                                property <length> pan-last-abs-y: 0px;
+                                property <length> pan-last-abs-x: 0px;
+                                mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                                 pointer-event(event) => {
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                         root.page-right-clicked(
@@ -1472,25 +1529,43 @@ slint::slint! {
                                         );
                                     }
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                        root.pointer-down(spread-scroll.second-idx, self.mouse-x, self.mouse-y, 1);
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-down(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active) {
+                                            self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                            self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                        } else {
+                                            root.pointer-down(spread-scroll.second-idx, self.mouse-x, self.mouse-y, 1);
                                         }
                                     }
-                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                                        root.pointer-up(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
+                                    if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-up(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-up(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                     if (event.kind == PointerEventKind.move) {
-                                        root.pointer-move(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
                                         if (root.drawing-mode-active && self.pressed) {
                                             root.drawing-pointer-move(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active && self.pressed) {
+                                            let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                            let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                            let dy = current-abs-y - self.pan-last-abs-y;
+                                            let dx = current-abs-x - self.pan-last-abs-x;
+                                            self.pan-last-abs-y = current-abs-y;
+                                            self.pan-last-abs-x = current-abs-x;
+                                            spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
+                                            spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-move(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                 }
                                 scroll-event(event) => {
+                                    if (root.drawing-mode-active) {
+                                        return accept;
+                                    }
                                     if (event.modifiers.control) {
                                         if (event.delta-y > 0) { root.request-zoom-in(); }
                                         else if (event.delta-y < 0) { root.request-zoom-out(); }
@@ -1498,6 +1573,17 @@ slint::slint! {
                                     }
                                     return reject;
                                 }
+                            }
+                            if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-2.has-hover || page-touch-2.pressed) : Rectangle {
+                                property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                                x: page-touch-2.mouse-x - self.diameter / 2;
+                                y: page-touch-2.mouse-y - self.diameter / 2;
+                                width: self.diameter;
+                                height: self.diameter;
+                                border-radius: self.diameter / 2;
+                                background: #e0313125;
+                                border-width: 1.5px;
+                                border-color: #e03131cc;
                             }
                             if root.signature-placement-active && spread-scroll.second-idx == root.signature-placement-page : Rectangle {
                                 x: parent.width * root.signature-box-x;
@@ -1508,8 +1594,8 @@ slint::slint! {
                                 border-width: 2px;
                                 border-color: ThemeTokens.accent;
                                 border-radius: 4px;
-                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
-                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
                                 TouchArea {
                                     pointer-event(event) => {
                                         if (event.kind == PointerEventKind.move && self.pressed) {
@@ -1564,7 +1650,7 @@ slint::slint! {
                         }
                     }
 
-                    if root.has-document && root.view-mode == 0 : ScrollView {
+                    if root.has-document && root.view-mode == 0 : continuous-scroll := ScrollView {
                         viewport-width: Math.max(self.width, root.page-display-width + 48px);
                         viewport-height: Math.max(self.height, root.document-total-height + 48px);
                         viewport-y <=> root.current-scroll-y;
@@ -1587,9 +1673,9 @@ slint::slint! {
                             border-width: 1px;
                             border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
                             if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
-                            if root.page-annotation-overlays.length > page.page-index && root.page-annotation-overlays[page.page-index].width > 0 : Image { source: root.page-annotation-overlays[page.page-index]; width: 100%; height: 100%; image-fit: contain; }
-                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && page.page-index == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
-                            if root.page-annotation-overlay.width > 0 && page.page-index == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: contain; }
+                            if root.page-annotation-overlays.length > page.page-index && root.page-annotation-overlays[page.page-index].width > 0 && page.page-index != root.current-annotation-page-index : Image { source: root.page-annotation-overlays[page.page-index]; width: 100%; height: 100%; image-fit: fill; }
+                            if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && page.page-index == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                            if root.page-annotation-overlay.width > 0 && page.page-index == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
                             if page.page-index == root.current-annotation-page-index : Rectangle {
                                 width: 100%; height: 100%;
                                 for rect in root.current-page-overlay-rects : Rectangle {
@@ -1602,7 +1688,10 @@ slint::slint! {
                             }
                             for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
                             for highlight in page.search-highlights : Rectangle { x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B; }
-                            TouchArea {
+                            page-touch := TouchArea {
+                                property <length> pan-last-abs-y: 0px;
+                                property <length> pan-last-abs-x: 0px;
+                                mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                                 pointer-event(event) => {
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                         root.page-right-clicked(
@@ -1614,25 +1703,43 @@ slint::slint! {
                                         );
                                     }
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                        root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1);
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-down(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active) {
+                                            self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                            self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                        } else {
+                                            root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1);
                                         }
                                     }
-                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                                        root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
+                                    if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
                                         if (root.drawing-mode-active) {
                                             root.drawing-pointer-up(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                     if (event.kind == PointerEventKind.move) {
-                                        root.pointer-move(page.page-index, self.mouse-x, self.mouse-y);
                                         if (root.drawing-mode-active && self.pressed) {
                                             root.drawing-pointer-move(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                        } else if (root.pan-mode-active && self.pressed) {
+                                            let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                            let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                            let dy = current-abs-y - self.pan-last-abs-y;
+                                            let dx = current-abs-x - self.pan-last-abs-x;
+                                            self.pan-last-abs-y = current-abs-y;
+                                            self.pan-last-abs-x = current-abs-x;
+                                            root.current-scroll-y = Math.min(0px, Math.max(continuous-scroll.height - continuous-scroll.viewport-height, root.current-scroll-y + dy));
+                                            continuous-scroll.viewport-x = Math.min(0px, Math.max(continuous-scroll.width - continuous-scroll.viewport-width, continuous-scroll.viewport-x + dx));
+                                        } else if (!root.pan-mode-active) {
+                                            root.pointer-move(page.page-index, self.mouse-x, self.mouse-y);
                                         }
                                     }
                                 }
                                 scroll-event(event) => {
+                                    if (root.drawing-mode-active) {
+                                        return accept;
+                                    }
                                     if (event.modifiers.control) {
                                         if (event.delta-y > 0) { root.request-zoom-in(); }
                                         else if (event.delta-y < 0) { root.request-zoom-out(); }
@@ -1640,6 +1747,17 @@ slint::slint! {
                                     }
                                     return reject;
                                 }
+                            }
+                            if root.drawing-mode-active && root.drawing-eraser-active && (page-touch.has-hover || page-touch.pressed) : Rectangle {
+                                property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                                x: page-touch.mouse-x - self.diameter / 2;
+                                y: page-touch.mouse-y - self.diameter / 2;
+                                width: self.diameter;
+                                height: self.diameter;
+                                border-radius: self.diameter / 2;
+                                background: #e0313125;
+                                border-width: 1.5px;
+                                border-color: #e03131cc;
                             }
                             if root.signature-placement-active && page.page-index == root.signature-placement-page : Rectangle {
                                 x: parent.width * root.signature-box-x;
@@ -1650,8 +1768,8 @@ slint::slint! {
                                 border-width: 2px;
                                 border-color: ThemeTokens.accent;
                                 border-radius: 4px;
-                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: contain; }
-                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: contain; }
+                                if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                                if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
                                 TouchArea {
                                     pointer-event(event) => {
                                         if (event.kind == PointerEventKind.move && self.pressed) {
@@ -1710,8 +1828,8 @@ slint::slint! {
                     // Floating Drawing & Annotations Toolbar
                     if root.has-document && (root.drawing-mode-active || root.has-unsaved-annotations) : Rectangle {
                         x: Math.max(8px, (parent.width - self.width) / 2);
-                        y: 12px;
-                        height: 44px;
+                        y: root.drawing-toolbar-at-bottom ? parent.height - self.height - 16px : 12px;
+                        height: 52px;
                         background: ThemeTokens.layer-elevated;
                         border-radius: ThemeTokens.overlay-radius;
                         border-width: 1px;
@@ -1719,96 +1837,184 @@ slint::slint! {
                         drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
                         drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
                         drop-shadow-color: ThemeTokens.overlay-shadow;
+                        animate y { duration: ThemeTokens.motion-medium; }
 
                         HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
-                            padding-top: 5px;
-                            padding-bottom: 5px;
+                            padding-top: 6px;
+                            padding-bottom: 6px;
                             spacing: 6px;
                             alignment: center;
+
+                            // Dock position toggle (bottom / top)
+                            IconButton {
+                                height: 40px;
+                                icon: @image-url("../../../assets/icons/chevron_down_20_regular.svg");
+                                tooltip: root.drawing-toolbar-at-bottom ? "Move toolbar to top" : "Move toolbar to bottom";
+                                clicked => {
+                                    root.drawing-toolbar-at-bottom = !root.drawing-toolbar-at-bottom;
+                                    root.toggle-drawing-toolbar-position();
+                                }
+                            }
+
+                            Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                            // Pan mode button
+                            TextButton {
+                                height: 40px;
+                                min-width: 44px;
+                                text: root.text-toolbar-pan;
+                                active: root.pan-mode-active;
+                                clicked => { root.toggle-pan-mode(); }
+                            }
 
                             if root.drawing-mode-active : HorizontalLayout {
                                 spacing: 4px;
                                 TextButton {
+                                    height: 40px;
+                                    min-width: 44px;
                                     text: root.text-draw-pen;
                                     active: !root.drawing-eraser-active;
                                     clicked => { root.drawing-eraser-active = false; root.set-drawing-eraser(false); }
                                 }
                                 TextButton {
+                                    height: 40px;
+                                    min-width: 44px;
                                     text: root.text-draw-eraser;
                                     active: root.drawing-eraser-active;
                                     clicked => { root.drawing-eraser-active = true; root.set-drawing-eraser(true); }
                                 }
 
-                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.divider; }
+                                Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
 
-                                // 4 Color Swatches: Black (0), Red (1), Blue (2), Yellow (3)
-                                for swatch-color[cidx] in [#181a1f, #e03131, #1971c2, #f59f00] : Rectangle {
-                                    width: 24px;
-                                    height: 24px;
-                                    border-radius: 6px;
-                                    background: swatch-color;
-                                    border-width: root.drawing-color-index == cidx ? 2px : 1px;
-                                    border-color: root.drawing-color-index == cidx ? ThemeTokens.accent : ThemeTokens.stroke;
-                                    TouchArea {
-                                        clicked => {
-                                            root.drawing-color-index = cidx;
-                                            root.set-drawing-color(cidx);
+                                if !root.drawing-eraser-active : HorizontalLayout {
+                                    spacing: 4px;
+                                    // 4 Color Swatches: Black (0), Red (1), Blue (2), Yellow (3)
+                                    for swatch-color[cidx] in [#181a1f, #e03131, #1971c2, #f59f00] : Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: root.drawing-color-index == cidx ? ThemeTokens.selection : #00000000;
+                                        border-width: root.drawing-color-index == cidx ? 1px : 0px;
+                                        border-color: ThemeTokens.accent;
+                                        Rectangle {
+                                            width: 24px;
+                                            height: 24px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 6px;
+                                            background: swatch-color;
+                                            border-width: 1px;
+                                            border-color: ThemeTokens.stroke;
+                                        }
+                                        TouchArea {
+                                            clicked => {
+                                                root.drawing-color-index = cidx;
+                                                root.set-drawing-color(cidx);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                                    // 3 Stroke Widths: Thin (0), Medium (1), Thick (2)
+                                    for dot-size[widx] in [4px, 7px, 12px] : Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: root.drawing-width-index == widx ? ThemeTokens.selection : ThemeTokens.control;
+                                        border-width: 1px;
+                                        border-color: root.drawing-width-index == widx ? ThemeTokens.accent : ThemeTokens.stroke;
+                                        Rectangle {
+                                            width: dot-size;
+                                            height: dot-size;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: dot-size / 2;
+                                            background: ThemeTokens.text;
+                                        }
+                                        TouchArea {
+                                            clicked => {
+                                                root.drawing-width-index = widx;
+                                                root.set-drawing-width(widx);
+                                            }
                                         }
                                     }
                                 }
 
-                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.divider; }
-
-                                // 3 Stroke Widths: Thin (0), Medium (1), Thick (2)
-                                for dot-size[widx] in [4px, 7px, 11px] : Rectangle {
-                                    width: 28px;
-                                    height: 28px;
-                                    border-radius: ThemeTokens.control-radius;
-                                    background: root.drawing-width-index == widx ? ThemeTokens.selection : ThemeTokens.control;
-                                    border-width: 1px;
-                                    border-color: root.drawing-width-index == widx ? ThemeTokens.accent : ThemeTokens.stroke;
-                                    Rectangle {
-                                        width: dot-size;
-                                        height: dot-size;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        border-radius: dot-size / 2;
-                                        background: ThemeTokens.text;
-                                    }
-                                    TouchArea {
-                                        clicked => {
-                                            root.drawing-width-index = widx;
-                                            root.set-drawing-width(widx);
+                                if root.drawing-eraser-active : HorizontalLayout {
+                                    spacing: 4px;
+                                    // 4 Eraser Sizes: 0 (Small), 1 (Medium), 2 (Large), 3 (X-Large)
+                                    for eraser-size[eidx] in [8px, 14px, 20px, 26px] : Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: root.drawing-eraser-size-index == eidx ? ThemeTokens.selection : ThemeTokens.control;
+                                        border-width: 1px;
+                                        border-color: root.drawing-eraser-size-index == eidx ? ThemeTokens.accent : ThemeTokens.stroke;
+                                        Rectangle {
+                                            width: eraser-size;
+                                            height: eraser-size;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: eraser-size / 2;
+                                            background: #e0313125;
+                                            border-width: 1.5px;
+                                            border-color: #e03131cc;
+                                        }
+                                        TouchArea {
+                                            clicked => {
+                                                root.drawing-eraser-size-index = eidx;
+                                                root.drawing-eraser-diameter-norm = eidx == 0 ? 0.025 : (eidx == 1 ? 0.05 : (eidx == 2 ? 0.08 : 0.12));
+                                                root.set-drawing-eraser-size(eidx);
+                                            }
                                         }
                                     }
                                 }
 
-                                Rectangle { width: 1px; height: 22px; background: ThemeTokens.divider; }
+                                Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
                             }
 
                             TextButton {
+                                height: 40px;
+                                min-width: 44px;
                                 text: root.text-draw-undo;
+                                enabled: root.drawing-can-undo;
                                 clicked => { root.drawing-undo(); }
                             }
                             TextButton {
+                                height: 40px;
+                                min-width: 44px;
+                                text: root.text-draw-redo;
+                                enabled: root.drawing-can-redo;
+                                clicked => { root.drawing-redo(); }
+                            }
+                            TextButton {
+                                height: 40px;
+                                min-width: 44px;
                                 text: root.text-draw-clear;
                                 clicked => { root.drawing-clear-page(); }
                             }
 
-                            Rectangle { width: 1px; height: 22px; background: ThemeTokens.divider; }
+                            Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
 
                             TextButton {
+                                height: 40px;
+                                min-width: 44px;
                                 text: root.text-draw-save;
                                 primary: true;
                                 clicked => { root.save-annotations(); }
                             }
                             TextButton {
+                                height: 40px;
+                                min-width: 44px;
                                 text: root.text-draw-save-as;
                                 clicked => { root.save-annotations-as(); }
                             }
                             TextButton {
+                                height: 40px;
+                                min-width: 44px;
                                 text: root.text-draw-discard;
                                 clicked => { root.discard-annotations(); }
                             }
@@ -2213,6 +2419,17 @@ slint::slint! {
                 }
             }
             if root.width < 900px : MenuItem {
+                icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+                has-icon: true;
+                text: root.text-toolbar-pan;
+                checked: root.pan-mode-active;
+                enabled: root.has-document;
+                activated => {
+                    root.toolbar-more-open = false;
+                    root.toggle-pan-mode();
+                }
+            }
+            if root.width < 900px : MenuItem {
                 icon: @image-url("../../../assets/icons/signature_20_regular.svg");
                 has-icon: true;
                 text: root.text-toolbar-sign;
@@ -2580,5 +2797,38 @@ mod tests {
                 "unexpected duplicate callback `{duplicate}` in context_menu.slint"
             );
         }
+    }
+
+    #[test]
+    fn drawing_and_pan_callbacks_and_contracts_are_exposed() {
+        type VoidCallbackSetter = fn(&AppWindow, Box<dyn Fn()>);
+        type IntCallbackSetter = fn(&AppWindow, Box<dyn Fn(i32)>);
+        type BoolGetter = fn(&AppWindow) -> bool;
+        type IntGetter = fn(&AppWindow) -> i32;
+        type FloatGetter = fn(&AppWindow) -> f32;
+
+        let callbacks: [VoidCallbackSetter; 3] = [
+            AppWindow::on_toggle_pan_mode,
+            AppWindow::on_drawing_redo,
+            AppWindow::on_toggle_drawing_toolbar_position,
+        ];
+        assert_eq!(callbacks.len(), 3);
+
+        let int_callbacks: [IntCallbackSetter; 1] = [AppWindow::on_set_drawing_eraser_size];
+        assert_eq!(int_callbacks.len(), 1);
+
+        let bool_getters: [BoolGetter; 4] = [
+            AppWindow::get_pan_mode_active,
+            AppWindow::get_drawing_can_undo,
+            AppWindow::get_drawing_can_redo,
+            AppWindow::get_drawing_toolbar_at_bottom,
+        ];
+        assert_eq!(bool_getters.len(), 4);
+
+        let int_getters: [IntGetter; 1] = [AppWindow::get_drawing_eraser_size_index];
+        assert_eq!(int_getters.len(), 1);
+
+        let float_getters: [FloatGetter; 1] = [AppWindow::get_drawing_eraser_diameter_norm];
+        assert_eq!(float_getters.len(), 1);
     }
 }

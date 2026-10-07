@@ -75,9 +75,11 @@ pub fn calculate_page_pairings(
     pairings
 }
 
+pub const MAX_LAYOUT_DIMENSION: f32 = 16_384.0;
+
 #[must_use]
 #[allow(clippy::cast_precision_loss)] // Viewport pixels are bounded by the UI and converted for PDF point math.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Finite positive values are clamped to 1..=4096.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Finite positive values are bounded by MAX_LAYOUT_DIMENSION.
 pub fn compute_target_dimensions(
     page_width_pts: f32,
     page_height_pts: f32,
@@ -107,8 +109,16 @@ pub fn compute_target_dimensions(
         ZoomMode::Custom(factor) => factor.get() * dpi_scale,
     };
 
-    let target_w = ((page_width_pts * scale).round() as u32).clamp(1, 4096);
-    let target_h = ((page_height_pts * scale).round() as u32).clamp(1, 4096);
+    let raw_w = (page_width_pts * scale).max(1.0);
+    let raw_h = (page_height_pts * scale).max(1.0);
+    let max_edge = raw_w.max(raw_h);
+    let clamp_scale = if max_edge > MAX_LAYOUT_DIMENSION {
+        MAX_LAYOUT_DIMENSION / max_edge
+    } else {
+        1.0
+    };
+    let target_w = (raw_w * clamp_scale).round().max(1.0) as u32;
+    let target_h = (raw_h * clamp_scale).round().max(1.0) as u32;
 
     RenderDimensions::new(target_w, target_h).unwrap_or(RenderDimensions {
         width: 1,
@@ -355,5 +365,29 @@ mod tests {
             expected_last_y
         );
         assert_eq!(layout.total_height, expected_total);
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn compute_target_dimensions_preserves_aspect_ratio_at_high_zoom() {
+        let a4_w = 595.28_f32;
+        let a4_h = 841.89_f32;
+        let expected_ratio = a4_w / a4_h;
+
+        for zoom in [5.0_f32, 6.0, 8.0] {
+            let dims = compute_target_dimensions(
+                a4_w,
+                a4_h,
+                1920,
+                1080,
+                ZoomMode::Custom(crate::types::ZoomFactor::new(zoom)),
+                1.0,
+            );
+            let actual_ratio = dims.width as f32 / dims.height as f32;
+            assert!(
+                (actual_ratio - expected_ratio).abs() < 1e-3,
+                "Aspect ratio distorted at zoom {zoom}x: got {actual_ratio}, expected {expected_ratio}"
+            );
+        }
     }
 }
