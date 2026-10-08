@@ -84,6 +84,7 @@ pub enum RenderCommand {
     Shutdown,
 }
 
+#[derive(Debug)]
 pub enum RenderEvent {
     DocumentOpened {
         document_id: DocumentId,

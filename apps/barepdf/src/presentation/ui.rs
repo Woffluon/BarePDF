@@ -117,6 +117,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     ));
 
     let state = Rc::new(RefCell::new(AppState::new(preferences)));
+    scheduler.set_invert_colors(state.borrow().preferences.invert_colors);
     let print_controller = match PrintController::spawn() {
         Ok(controller) => Some(Rc::new(RefCell::new(controller))),
         Err(error) => {
@@ -531,7 +532,7 @@ pub(crate) fn handle_render_event(
                 bitmap.width(),
                 bitmap.height(),
             );
-            if app.preferences.invert_colors {
+            if app.preferences.invert_colors && !scheduler.invert_colors() {
                 invert_rgba_pixels(buffer.make_mut_bytes());
             }
             let image = Image::from_rgba8(buffer);

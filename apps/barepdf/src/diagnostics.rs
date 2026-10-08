@@ -1,5 +1,10 @@
 use std::ffi::OsStr;
 use std::fmt::Display;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DiagnosticEvent {
@@ -44,14 +49,85 @@ impl DiagnosticEvent {
     }
 }
 
+#[derive(Clone, Default)]
+struct TeeWriter {
+    file: Option<Arc<Mutex<File>>>,
+}
+
+impl TeeWriter {
+    fn new(file: Option<File>) -> Self {
+        Self {
+            file: file.map(|f| Arc::new(Mutex::new(f))),
+        }
+    }
+}
+
+impl<'a> MakeWriter<'a> for TeeWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _ = io::stderr().write_all(buf);
+        if let Some(file) = &self.file {
+            if let Ok(mut guard) = file.lock() {
+                let _ = guard.write_all(buf);
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let _ = io::stderr().flush();
+        if let Some(file) = &self.file {
+            if let Ok(mut guard) = file.lock() {
+                let _ = guard.flush();
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn init() {
-    let Some(level) = parse_opt_in(std::env::var_os("BAREPDF_LOG").as_deref()) else {
+    let has_log_flag = std::env::args_os().any(|arg| arg == "--log");
+    let Some(level) =
+        resolve_opt_in_with_args(std::env::var_os("BAREPDF_LOG").as_deref(), has_log_flag)
+    else {
         return;
     };
+    let log_file = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .and_then(|base_dir| init_log_file_in_dir(&base_dir).ok());
+    let writer = TeeWriter::new(log_file);
     let _ = tracing_subscriber::fmt()
         .with_max_level(level)
-        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_writer(writer)
         .try_init();
+}
+
+pub(crate) fn init_log_file_in_dir(base_dir: &Path) -> io::Result<File> {
+    let log_dir = base_dir.join("BarePDF").join("logs");
+    fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join("barepdf.log");
+    OpenOptions::new().create(true).append(true).open(log_path)
+}
+
+pub(crate) fn resolve_opt_in_with_args(
+    env_val: Option<&OsStr>,
+    has_log_flag: bool,
+) -> Option<tracing::Level> {
+    if let Some(level) = parse_opt_in(env_val) {
+        return Some(level);
+    }
+    if has_log_flag {
+        return Some(tracing::Level::INFO);
+    }
+    None
 }
 
 pub(crate) fn warn_redacted(event: DiagnosticEvent, sensitive_detail: &dyn Display) {
@@ -130,6 +206,59 @@ mod tests {
             parse_opt_in(Some(OsStr::new("debug"))),
             Some(tracing::Level::DEBUG)
         );
+    }
+
+    #[test]
+    fn resolve_opt_in_with_args_honors_flag_and_env() {
+        assert_eq!(resolve_opt_in_with_args(None, false), None);
+        assert_eq!(resolve_opt_in_with_args(Some(OsStr::new("")), false), None);
+        assert_eq!(
+            resolve_opt_in_with_args(Some(OsStr::new("off")), false),
+            None
+        );
+        assert_eq!(
+            resolve_opt_in_with_args(None, true),
+            Some(tracing::Level::INFO)
+        );
+        assert_eq!(
+            resolve_opt_in_with_args(Some(OsStr::new("off")), true),
+            Some(tracing::Level::INFO)
+        );
+        assert_eq!(
+            resolve_opt_in_with_args(Some(OsStr::new("debug")), false),
+            Some(tracing::Level::DEBUG)
+        );
+        assert_eq!(
+            resolve_opt_in_with_args(Some(OsStr::new("debug")), true),
+            Some(tracing::Level::DEBUG)
+        );
+    }
+
+    #[test]
+    fn init_log_file_in_dir_creates_and_appends_log_lines() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let file = init_log_file_in_dir(temp.path()).expect("log file should be created");
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(TeeWriter::new(Some(file)))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_redacted(
+                DiagnosticEvent::Update,
+                &r"failed to verify C:\Users\Alice\setup.exe",
+            );
+        });
+
+        let log_path = temp.path().join("BarePDF").join("logs").join("barepdf.log");
+        assert!(log_path.is_file());
+        let contents = fs::read_to_string(&log_path).expect("log file should be readable");
+        assert!(contents.contains("update_failed"));
+        assert!(contents.contains("update operation failed"));
+        assert!(contents.contains("[path]"));
+        assert!(!contents.contains("Alice"));
+        assert!(!contents.contains("\u{1b}["));
     }
 
     #[test]

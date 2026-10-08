@@ -1,0 +1,2657 @@
+import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { ThemeTokens } from "./tokens.slint";
+import {
+    SelectionBox,
+    OverlayRectData,
+    BookmarkItem,
+    PageItem,
+    ThumbnailItem,
+    OutlineItem,
+    RecentFileItem,
+} from "./types.slint";
+import { IconButton } from "./components/icon_button.slint";
+import { TextButton } from "./components/button.slint";
+import { TabItem } from "./components/tab_bar.slint";
+import { TitleBar } from "./components/title_bar.slint";
+import { Flyout } from "./components/flyout.slint";
+import { MenuItem } from "./components/menu_item.slint";
+import { FloatingCapsule } from "./components/floating_capsule.slint";
+import { CommandPalette } from "./components/command_palette.slint";
+import { ContextMenu } from "./components/context_menu.slint";
+import { Scrubber } from "./components/scrubber.slint";
+import { SearchBar } from "./components/search_bar.slint";
+import { PasswordDialog as PasswordPopover } from "./dialogs/password_dialog.slint";
+import { PrintPreviewDialog as PrintPreview } from "./dialogs/print_preview_dialog.slint";
+import { SignatureDialog } from "./dialogs/signature_dialog.slint";
+import { ToolsModal } from "./dialogs/tools_dialog.slint";
+
+export {
+    ThemeTokens,
+    TabItem,
+    SelectionBox,
+    OverlayRectData,
+    BookmarkItem,
+    PageItem,
+    ThumbnailItem,
+    OutlineItem,
+    RecentFileItem,
+}
+
+export component AppWindow inherits Window {
+    no-frame: true;
+    title: root.document-title != "" ? root.document-title + " - BarePDF" : "BarePDF";
+    icon: @image-url("../../../assets/logo.svg");
+    preferred-width: 1200px;
+    preferred-height: 860px;
+    min-width: 760px;
+    min-height: 520px;
+    background: ThemeTokens.window;
+    forward-focus: main-focus;
+
+    in property <string> document-title: "";
+    in property <string> status-text: "Ready";
+    in-out property <string> current-page-str: "1";
+    in property <string> total-pages-str: "0";
+    in property <string> zoom-str: "100%";
+    in property <int> zoom-mode: 0;
+    property <bool> zoom-dirty: false;
+    in property <image> page-bitmap;
+    in property <length> page-display-width: 800px;
+    in property <length> page-display-height: 1040px;
+    in property <length> document-total-height: 1040px;
+    in property <[PageItem]> visible-pages: [];
+    in property <[ThumbnailItem]> thumbnail-items: [];
+    in property <[OutlineItem]> outline-items: [];
+    in property <[BookmarkItem]> bookmark-items: [];
+    in property <string> text-bookmarks: "Bookmarks";
+    in property <string> text-no-bookmarks: "No bookmarks.";
+    in property <[RecentFileItem]> recent-files: [];
+    in property <[TabItem]> tab-items: [];
+    in-out property <length> current-scroll-y: 0px;
+    in-out property <length> thumbnail-scroll-y: 0px;
+    out property <length> pdf-viewport-width: root.window-mode != 0 ? root.width : root.width - (root.sidebar-visible && root.has-document ? 260px : 0px);
+    out property <length> pdf-viewport-height: root.window-mode != 0 ? root.height : root.height - 80px
+        - (root.banner-visible ? 40px : 0px)
+        - (root.print-active || root.print-status != "" ? 40px : 0px);
+    out property <length> thumbnail-viewport-height: root.pdf-viewport-height - 54px;
+    in property <bool> has-document: false;
+    in property <bool> has-selection: false;
+    in-out property <bool> password-required: false;
+    in property <string> password-error: "";
+    in-out property <string> document-password-input: "";
+    in-out property <bool> window-maximized: false;
+    in-out property <bool> fit-menu-open: false;
+    property <length> fit-anchor-x: 412px;
+    in-out property <bool> settings-open: false;
+    in-out property <bool> toolbar-more-open: false;
+    in-out property <bool> context-menu-open: false;
+    in-out property <length> context-menu-x: 0px;
+    in-out property <length> context-menu-y: 0px;
+    in property <string> protected-file-name: "";
+    in-out property <bool> sidebar-visible: true;
+    in-out property <int> sidebar-tab: 0;
+    in-out property <int> window-mode: 0;
+    in-out property <int> paper-tint <=> ThemeTokens.paper-tint;
+    in-out property <bool> invert-page-colors: false;
+    in-out property <bool> command-palette-open: false;
+    in-out property <bool> search-open: false;
+    in-out property <string> search-query: "";
+    in property <string> search-match-counter: "";
+    in-out property <bool> search-case-sensitive: false;
+    in-out property <bool> search-whole-word: false;
+    in property <bool> search-has-matches: false;
+    callback request-search-next();
+    callback request-search-prev();
+    callback request-search-query(string);
+    in-out property <string> command-palette-query: "";
+    in property <[string]> command-palette-titles: [];
+    in property <[string]> command-palette-subtitles: [];
+    in property <bool> scrubber-active: false;
+    in property <string> scrubber-page-label: "";
+    in property <length> scrubber-y: 0px;
+    in property <int> view-mode: 0;
+    in property <string> view-mode-label: "Continuous";
+    in property <int> current-language: 0;
+    in property <int> current-theme: 0;
+    in property <string> current-version: "";
+    in property <bool> update-checks-enabled: false;
+    in property <string> update-status: "";
+    in property <string> update-action-label: "";
+    in property <bool> update-action-enabled: false;
+    in property <bool> banner-visible: false;
+    in property <string> banner-text: "";
+    in property <bool> banner-can-retry: false;
+    in property <bool> banner-update-action: false;
+    in property <string> banner-action-label: "";
+    in property <bool> banner-action-enabled: false;
+    in property <bool> print-active: false;
+    in property <float> print-progress: 0;
+    in property <string> print-status: "";
+    in-out property <bool> print-preview-open: false;
+    in-out property <int> print-preview-page: 0;
+    in-out property <string> print-preview-range: "";
+    in-out property <int> print-preview-orientation: 0;
+    in property <image> print-preview-image;
+    in property <bool> print-preview-has-image: false;
+    in property <[string]> print-preview-printers: ["Microsoft Print to PDF", "OneNote (Desktop)", "Varsayılan Yazıcı"];
+    in-out property <int> print-preview-selected-printer: 0;
+    in-out property <int> print-preview-copies: 1;
+    in-out property <int> print-preview-range-mode: 0;
+    in-out property <int> print-preview-paper-size: 0;
+    in-out property <int> print-preview-duplex: 0;
+    in-out property <bool> tools-open: false;
+    in-out property <int> current-tool: -1;
+    in-out property <[string]> merge-files: [];
+    in property <[image]> merge-first-page-images: [];
+    in-out property <int> selected-merge-index: -1;
+    in-out property <int> merge-drag-index: -1;
+    in-out property <string> tools-page-range: "";
+    in-out property <string> page-selection-range: "";
+    in-out property <int> tools-split-mode: 0;
+    in-out property <int> tools-rotation: 1;
+    in-out property <int> tools-convert-format: 0;
+    in-out property <int> tools-convert-dpi: 150;
+    in-out property <int> tools-convert-jpeg-quality: 90;
+    in property <string> tools-error: "";
+    in property <bool> tools-working: false;
+    in-out property <bool> tool-password-prompt-open: false;
+    in property <string> tool-password-error: "";
+    in-out property <string> tool-password-input: "";
+    in property <bool> system-reduce-effects: false;
+
+    in property <string> text-minimize: "Minimize";
+    in property <string> text-maximize: "Maximize";
+    in property <string> text-restore: "Restore";
+    in property <string> text-fit: "Fit";
+    in property <string> text-search: "Find (Ctrl+F)";
+    in property <string> text-command-palette: "Command Palette (Ctrl+K)";
+    in property <string> text-open: "Open PDF";
+    in property <string> text-sidebar: "Sidebar";
+    in property <string> text-thumbnails: "Thumbnails";
+    in property <string> text-outline: "Outline";
+    in property <string> text-view: "View";
+    in property <string> text-zoom-in: "Zoom In";
+    in property <string> text-zoom-out: "Zoom Out";
+    in property <string> text-zoom: "Zoom";
+    in property <string> text-fit-width: "Fit Width";
+    in property <string> text-fit-page: "Fit Page";
+    in property <string> text-actual-size: "Actual Size";
+    in property <string> text-fullscreen: "Full Screen";
+    in property <string> text-presentation: "Presentation";
+    in property <string> text-settings: "Settings";
+    in property <string> text-copy: "Copy";
+    in property <string> text-select-all: "Select All";
+    in property <string> text-close: "Close";
+    in property <string> text-empty-title: "No document loaded";
+    in property <string> text-empty-desc: "Open or drop a PDF to begin reading.";
+    in property <string> text-no-outline: "This document has no outline.";
+    in property <string> text-recent: "Recent files";
+    in property <string> text-retry: "Retry";
+    in property <string> text-dismiss: "Dismiss";
+    in property <string> text-loading: "Loading";
+    in property <string> text-updates: "Updates";
+    in property <string> text-update-enabled: "Enabled";
+    in property <string> text-update-disabled: "Disabled";
+    in property <string> text-check-now: "Check now";
+    in property <string> text-prev-page: "Previous page";
+    in property <string> text-next-page: "Next page";
+    in property <string> text-password-title: "Password Required";
+    in property <string> text-password-placeholder: "Password";
+    in property <string> text-password-cancel: "Cancel";
+    in property <string> text-password-unlock: "Unlock";
+    in property <string> text-settings-language: "Language";
+    in property <string> text-settings-theme: "Theme";
+    in property <string> text-settings-appearance: "Appearance";
+    in property <string> text-settings-about: "About";
+    in property <string> text-settings-system: "System";
+    in property <string> text-settings-english: "English";
+    in property <string> text-settings-turkish: "Türkçe";
+    in property <string> text-settings-light: "Light";
+    in property <string> text-settings-dark: "Dark";
+    in property <string> text-settings-developer: "Developer";
+    in property <string> text-settings-website: "Website";
+    in property <string> text-settings-manifesto: "Manifesto";
+    in property <string> text-settings-manifesto-button: "Read the Manifesto ↗";
+    in property <string> text-settings-invert-colors: "Invert page colors";
+    in property <string> text-new-tab: "New tab";
+    in property <string> text-print: "Print";
+    in property <string> text-cancel-print: "Cancel";
+    in property <string> text-toolbar-more: "More";
+    in property <string> text-print-preview-title: "Print preview";
+    in property <string> text-print-preview-cancel-tooltip: "Cancel print preview";
+    in property <string> text-print-preview-empty: "Page preview";
+    in property <string> text-print-preview-page: "Page";
+    in property <string> text-print-preview-page-range: "Page range";
+    in property <string> text-print-preview-range-placeholder: "All pages or 1-3";
+    in property <string> text-print-preview-range-accessible: "Print page range";
+    in property <string> text-print-preview-orientation: "Orientation";
+    in property <string> text-print-preview-orientation-auto: "Auto";
+    in property <string> text-print-preview-orientation-portrait: "Portrait";
+    in property <string> text-print-preview-orientation-landscape: "Landscape";
+    in property <string> text-print-preview-continue: "Continue";
+    in property <string> text-tools: "PDF Tools";
+    in property <string> text-tools-tooltip: "PDF Operations and Tools";
+    in property <string> text-tools-merge: "Merge PDFs";
+    in property <string> text-tools-merge-desc: "Combine multiple PDF documents into a single file.";
+    in property <string> text-tools-split: "Split / Extract Pages";
+    in property <string> text-tools-split-desc: "Extract specific page ranges or split every page into separate files.";
+    in property <string> text-tools-delete: "Delete Pages";
+    in property <string> text-tools-delete-desc: "Remove selected pages and create a new PDF document.";
+    in property <string> text-tools-rotate: "Rotate Pages";
+    in property <string> text-tools-rotate-desc: "Rotate pages by 90°, 180°, or 270° and save the result.";
+    in property <string> text-tools-btn-add-files: "Add Files…";
+    in property <string> text-tools-btn-move-up: "Move Up";
+    in property <string> text-tools-btn-move-down: "Move Down";
+    in property <string> text-tools-btn-remove: "Remove";
+    in property <string> text-tools-btn-clear: "Clear All";
+    in property <string> text-tools-btn-cancel: "Cancel";
+    in property <string> text-tools-btn-save: "Save Result…";
+    in property <string> text-tools-btn-execute: "Process";
+    in property <string> text-tools-label-pages: "Pages (e.g. 1-3, 5, 8-10):";
+    in property <string> text-tools-label-split-mode: "Split Mode:";
+    in property <string> text-tools-split-extract: "Extract page range to single file";
+    in property <string> text-tools-split-separate: "Split every page into separate files";
+    in property <string> text-tools-label-rotation: "Rotation:";
+    in property <string> text-tools-rotation-90: "90° Clockwise";
+    in property <string> text-tools-rotation-180: "180°";
+    in property <string> text-tools-rotation-270: "90° Counter-Clockwise";
+    in property <string> text-tools-convert: "Convert PDF";
+    in property <string> text-tools-convert-desc: "Export pages or text in a format that suits your workflow.";
+    in property <string> text-tools-drop-merge: "Drop PDFs to add to the merge";
+    in property <string> text-tools-drop-split: "Drop a PDF to split";
+    in property <string> text-tools-drop-delete: "Drop a PDF to delete pages";
+    in property <string> text-tools-drop-rotate: "Drop a PDF to rotate pages";
+    in property <string> text-tools-drop-convert: "Drop a PDF to convert";
+    in property <string> text-tools-pages-unit: "pages";
+    in property <string> text-tools-pages-empty-hint: "empty for all pages";
+    in property <string> text-tools-select-all: "Select All";
+    in property <string> text-tools-clear-selection: "Clear";
+    in property <string> text-tools-split-placeholder: "1-3, 5, 8-10";
+    in property <string> text-tools-delete-placeholder: "2, 4-6, 10";
+    in property <string> text-tools-rotate-placeholder: "All pages or e.g. 1, 3-5";
+    in property <string> text-tools-format: "Format";
+    in property <string> text-tools-resolution: "Resolution";
+    in property <string> text-tools-jpeg-quality: "JPEG quality";
+    in property <string> text-tools-convert-all: "All Pages";
+    in property <string> text-tools-convert-custom: "Custom Pages";
+    in property <string> text-tools-btn-convert-all: "Convert All Pages";
+    in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
+    in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
+    in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc)" : "Exit (Esc)";
+    in-out property <string> text-toolbar-rotate: "Rotate (Ctrl+R)";
+    in-out property <string> text-toolbar-draw: "Draw";
+    in-out property <string> text-toolbar-pan: "Pan";
+    in-out property <string> text-toolbar-sign: "Sign";
+    in-out property <string> text-context-find: "Find in Document";
+    in-out property <string> text-context-highlight: "Highlight";
+    in-out property <string> text-context-rotate-cw: "Rotate Clockwise";
+    in-out property <string> text-context-fit-page: "Fit Page";
+    in-out property <string> text-draw-pen: "Pen";
+    in-out property <string> text-draw-eraser: "Eraser";
+    in-out property <string> text-draw-undo: "Undo";
+    in-out property <string> text-draw-redo: "Redo";
+    in-out property <string> text-draw-clear: "Clear";
+    in-out property <string> text-draw-save: "Save";
+    in-out property <string> text-draw-save-as: "Save As…";
+    in-out property <string> text-draw-discard: "Discard";
+    in-out property <string> text-sign-title: "Add Signature";
+    in-out property <string> text-sign-draw-tab: "Draw Signature";
+    in-out property <string> text-sign-image-tab: "Upload Image";
+    in-out property <string> text-sign-pick-image: "Choose Image (PNG/JPG)…";
+    in-out property <string> text-sign-clear: "Clear";
+    in-out property <string> text-sign-place: "Place on Page";
+    in-out property <string> text-sign-apply: "Apply Signature";
+    in-out property <string> text-sign-cancel: "Cancel";
+
+    in-out property <bool> drawing-mode-active: false;
+    in-out property <bool> pan-mode-active: true;
+    in-out property <bool> drawing-eraser-active: false;
+    in-out property <int> drawing-eraser-size-index: 1;
+    in-out property <float> drawing-eraser-diameter-norm: 0.05;
+    in-out property <bool> drawing-toolbar-at-bottom: true;
+    in-out property <bool> drawing-can-undo: false;
+    in-out property <bool> drawing-can-redo: false;
+    in-out property <int> drawing-color-index: 0;
+    in-out property <int> drawing-width-index: 1;
+    in-out property <bool> has-unsaved-annotations: false;
+    in-out property <image> page-annotation-overlay;
+    in-out property <image> current-page-annotation-overlay;
+    in-out property <bool> current-page-has-annotation-overlay: false;
+    in-out property <int> current-annotation-page-index: 0;
+    in-out property <[image]> page-annotation-overlays: [];
+    in-out property <[OverlayRectData]> current-page-overlay-rects: [];
+
+    in-out property <bool> has-second-spread-page: false;
+    in-out property <image> second-page-image;
+    in-out property <length> second-page-width: 600px;
+    in-out property <length> second-page-height: 800px;
+    in-out property <int> second-page-index: 1;
+    in-out property <image> second-page-annotation-overlay;
+    in-out property <bool> second-page-has-annotation-overlay: false;
+
+    in-out property <bool> context-menu-has-selection: false;
+
+    in-out property <bool> sign-modal-open: false;
+    in-out property <int> sign-tab-index: 0;
+    in-out property <image> sign-pad-preview;
+    in-out property <image> signature-preview-image;
+    in-out property <bool> sign-has-preview: false;
+    in-out property <bool> signature-placement-active: false;
+    in-out property <int> signature-placement-page: 0;
+    in-out property <float> signature-box-x: 0.35;
+    in-out property <float> signature-box-y: 0.75;
+    in-out property <float> signature-box-w: 0.25;
+    in-out property <float> signature-box-h: 0.10;
+
+    callback begin-drag();
+    callback begin-resize(int);
+    callback minimize-window();
+    callback toggle-maximize();
+    callback close-window();
+    callback request-open-file();
+    callback request-next-page();
+    callback request-prev-page();
+    callback request-first-page();
+    callback request-last-page();
+    callback request-go-to-page(string);
+    callback request-zoom-in();
+    callback request-zoom-out();
+    callback request-set-zoom(string) -> string;
+    callback request-fit-width();
+    callback request-fit-page();
+    callback request-actual-size();
+    callback request-toggle-sidebar();
+    callback request-sidebar-tab(int);
+    callback request-toggle-outline(int);
+    callback bookmark-selected(int);
+    callback request-toggle-bookmark();
+    callback request-toggle-fullscreen();
+    callback request-presentation-mode();
+    callback request-exit-special-mode();
+    callback request-unlock-password(string);
+    callback request-cancel-unlock-password();
+    callback request-select-page(int);
+    callback request-select-page-range(int, bool, bool);
+    callback request-toggle-view-mode();
+    callback request-change-language(int);
+    callback request-change-theme(int);
+    callback request-change-update-checks(bool);
+    callback request-check-update();
+    callback request-update-action();
+    callback request-open-url(string);
+    callback request-select-all-tool-pages();
+    callback request-clear-tool-pages();
+    callback request-copy();
+    callback request-select-all();
+    callback request-open-recent(string);
+    callback request-drop(data-transfer);
+    callback request-dismiss-banner();
+    callback request-retry();
+    callback request-activate-tab(int);
+    callback request-close-tab(int);
+    callback request-new-tab();
+    callback request-print();
+    callback request-print-preview-page(int);
+    callback request-print-preview-range(string);
+    callback request-print-preview-orientation(int);
+    callback request-print-preview-duplex(int);
+    callback request-confirm-print();
+    callback request-close-print-preview();
+    callback request-cancel-print();
+    callback request-toggle-tools();
+    callback request-open-tool(int);
+    callback request-close-tools();
+    callback request-merge-add-files();
+    callback request-merge-select-file(int);
+    callback request-merge-move-up(int);
+    callback request-merge-move-down(int);
+    callback request-merge-reorder(int, int);
+    callback request-merge-remove-file(int);
+    callback request-merge-clear();
+    callback request-merge-execute();
+    callback request-split-execute(string, int);
+    callback request-delete-pages-execute(string);
+    callback request-rotate-pages-execute(string, int);
+    callback request-convert-execute(int, int, int, string);
+    callback request-tool-drop(data-transfer, int);
+    callback request-submit-tool-password(string);
+    callback request-cancel-tool-password();
+    callback pointer-down(int, length, length, int);
+    callback pointer-move(int, length, length);
+    callback pointer-up(int, length, length);
+    callback request-toggle-command-palette();
+    callback request-execute-command(string);
+    callback request-command-selected(int);
+    callback request-set-paper-tint(int);
+    callback request-toggle-invert-colors();
+    callback rotate-view-cw();
+    callback rotate-view-ccw();
+    callback toggle-drawing-mode();
+    callback toggle-pan-mode();
+    callback set-drawing-eraser(bool);
+    callback set-drawing-eraser-size(int);
+    callback set-drawing-color(int);
+    callback set-drawing-width(int);
+    callback drawing-undo();
+    callback drawing-redo();
+    callback drawing-clear-page();
+    callback toggle-drawing-toolbar-position();
+    callback save-annotations();
+    callback save-annotations-as();
+    callback discard-annotations();
+    callback drawing-pointer-down(int, float, float);
+    callback drawing-pointer-move(int, float, float);
+    callback drawing-pointer-up(int, float, float);
+    callback page-right-clicked(int, float, float, length, length);
+    callback context-highlight-selection();
+    callback context-find-selection();
+    callback open-sign-modal();
+    callback sign-pad-pointer-down(float, float);
+    callback sign-pad-pointer-move(float, float);
+    callback sign-pad-pointer-up();
+    callback sign-pad-clear();
+    callback sign-pick-image();
+    callback sign-start-placement();
+    callback signature-drag-move(float, float);
+    callback signature-resize-move(float, float);
+    callback signature-apply();
+    callback signature-cancel();
+
+    changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
+    changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
+    changed password-required => {
+        if (!root.password-required) { root.document-password-input = ""; }
+    }
+    changed tool-password-prompt-open => {
+        if (!root.tool-password-prompt-open) { root.tool-password-input = ""; }
+    }
+    changed system-reduce-effects => { ThemeTokens.system-reduce-effects = root.system-reduce-effects; }
+    changed window-mode => { main-focus.focus(); }
+
+    public function focus-main() { main-focus.focus(); }
+
+    main-focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                if (root.window-mode != 0) {
+                    root.search-open = false;
+                    root.command-palette-open = false;
+                    root.fit-menu-open = false;
+                    root.toolbar-more-open = false;
+                    root.context-menu-open = false;
+                    root.settings-open = false;
+                    root.sign-modal-open = false;
+                    root.request-exit-special-mode();
+                    return accept;
+                }
+                if (root.context-menu-open) { root.context-menu-open = false; return accept; }
+                if (root.sign-modal-open) { root.sign-modal-open = false; return accept; }
+                if (root.signature-placement-active) { root.signature-placement-active = false; root.signature-cancel(); return accept; }
+                if (root.drawing-mode-active) { root.drawing-mode-active = false; root.toggle-drawing-mode(); return accept; }
+                if (root.search-open) { root.search-open = false; return accept; }
+                if (root.command-palette-open) { root.command-palette-open = false; return accept; }
+                if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
+                if (root.tools-open) {
+                    if (root.current-tool != -1) {
+                        root.current-tool = -1;
+                    } else {
+                        root.tools-open = false;
+                    }
+                    return accept;
+                }
+                if (root.fit-menu-open) { root.fit-menu-open = false; return accept; }
+                if (root.toolbar-more-open) { root.toolbar-more-open = false; return accept; }
+                if (root.settings-open) { root.settings-open = false; return accept; }
+                root.request-exit-special-mode(); return accept;
+            }
+            if (event.modifiers.control && (event.text == "f" || event.text == "F")) {
+                root.search-open = !root.search-open;
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "d" || event.text == "D")) {
+                root.request-toggle-bookmark();
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "k" || event.text == "K")) {
+                root.command-palette-open = !root.command-palette-open;
+                root.request-toggle-command-palette();
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "r" || event.text == "R")) {
+                if (event.modifiers.shift) {
+                    root.rotate-view-ccw();
+                } else {
+                    root.rotate-view-cw();
+                }
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "h" || event.text == "H")) {
+                root.context-highlight-selection();
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "s" || event.text == "S")) {
+                if (event.modifiers.shift) {
+                    root.save-annotations-as();
+                } else {
+                    root.save-annotations();
+                }
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "z" || event.text == "Z")) {
+                if (root.drawing-mode-active || root.has-unsaved-annotations) {
+                    root.drawing-undo();
+                    return accept;
+                }
+            }
+            if (event.text == "\u{f11}" || event.text == "F11" || event.text == Key.F11) {
+                root.request-toggle-fullscreen();
+                return accept;
+            }
+            if (event.text == "\u{f5}" || event.text == "F5") { root.request-presentation-mode(); return accept; }
+            if (event.text == Key.Home) { root.request-first-page(); return accept; }
+            if (event.text == Key.End) { root.request-last-page(); return accept; }
+            if (event.text == Key.PageDown || event.text == Key.DownArrow || event.text == Key.RightArrow) { root.request-next-page(); return accept; }
+            if (event.text == Key.PageUp || event.text == Key.UpArrow || event.text == Key.LeftArrow) { root.request-prev-page(); return accept; }
+            if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.request-copy(); return accept; }
+            if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.request-select-all(); return accept; }
+            if (event.modifiers.control && (event.text == "o" || event.text == "O")) { root.request-open-file(); return accept; }
+            if (event.modifiers.control && (event.text == "i" || event.text == "I")) { root.request-toggle-invert-colors(); return accept; }
+            if (event.modifiers.control && (event.text == "p" || event.text == "P") && root.has-document && !root.print-active) { root.request-print(); return accept; }
+            if (event.modifiers.control && event.text == "0") { root.request-actual-size(); return accept; }
+            if (event.text == "+" || event.text == "=") { root.request-zoom-in(); return accept; }
+            if (event.text == "-") { root.request-zoom-out(); return accept; }
+            return reject;
+        }
+    }
+
+    if root.window-mode == 2 : Rectangle {
+        background: #08090b;
+
+        pres-focus := FocusScope {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 100%;
+
+            init => { self.focus(); }
+
+            key-pressed(event) => {
+                if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                    root.request-exit-special-mode();
+                    return accept;
+                }
+                if (event.text == "\u{f11}" || event.text == "F11" || event.text == Key.F11) {
+                    root.request-toggle-fullscreen();
+                    return accept;
+                }
+                if (event.text == Key.PageDown || event.text == Key.DownArrow || event.text == Key.RightArrow || event.text == " ") {
+                    root.request-next-page();
+                    return accept;
+                }
+                if (event.text == Key.PageUp || event.text == Key.UpArrow || event.text == Key.LeftArrow || event.text == Key.Backspace) {
+                    root.request-prev-page();
+                    return accept;
+                }
+                if (event.text == Key.Home) { root.request-first-page(); return accept; }
+                if (event.text == Key.End) { root.request-last-page(); return accept; }
+                return reject;
+            }
+
+            TouchArea {
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        root.request-exit-special-mode();
+                    }
+                }
+                clicked => {
+                    pres-focus.focus();
+                    root.request-next-page();
+                }
+            }
+
+            Rectangle {
+                width: Math.min(parent.width - 40px, root.page-display-width);
+                height: Math.min(parent.height - 40px, root.page-display-height);
+                background: white;
+                border-width: 1px;
+                border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
+            }
+
+            FloatingCapsule {
+                page-info: root.current-page-str + " / " + root.total-pages-str;
+                can-prev: root.has-document;
+                can-next: root.has-document;
+                show-zoom: false;
+                exit-label: root.text-exit-presentation;
+                prev-label: root.text-prev-page;
+                next-label: root.text-next-page;
+                prev => { root.request-prev-page(); }
+                next => { root.request-next-page(); }
+                exit => { root.request-exit-special-mode(); }
+            }
+        }
+    }
+
+    if root.window-mode != 2 : VerticalLayout {
+        spacing: 0px;
+
+        // 1. Custom Frameless TitleBar (height: 40px)
+        if root.window-mode == 0 : TitleBar {
+            tabs: root.tab-items;
+            maximized: root.window-maximized;
+            text-new-tab: root.text-new-tab;
+            text-minimize: root.text-minimize;
+            text-maximize: root.text-maximize;
+            text-restore: root.text-restore;
+            text-close: root.text-close;
+            activate-tab(id) => { root.request-activate-tab(id); }
+            close-tab(id) => { root.request-close-tab(id); }
+            new-tab => { root.request-new-tab(); }
+            begin-drag => { root.begin-drag(); }
+            toggle-maximize => { root.toggle-maximize(); }
+            minimize => { root.minimize-window(); }
+            close-window => { root.close-window(); }
+        }
+
+        // 2. Command Bar directly beneath TitleBar (height: 40px)
+        if root.window-mode == 0 : command-bar := Rectangle {
+            height: 40px;
+            background: ThemeTokens.window;
+
+            HorizontalLayout {
+                height: 40px;
+                padding-left: root.width < 960px ? 6px : 10px;
+                padding-right: root.width < 960px ? 6px : 10px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: root.width < 960px ? 4px : 6px;
+                alignment: center;
+
+                // Left Group: Open file & Sidebar toggle
+                IconButton {
+                    icon: @image-url("../../../assets/icons/folder_open_20_regular.svg");
+                    label: root.text-open;
+                    tooltip: root.text-open;
+                    show-label: root.width >= 960px;
+                    primary: false;
+                    clicked => { root.request-open-file(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/panel_left_20_regular.svg");
+                    label: root.text-sidebar;
+                    tooltip: root.text-sidebar;
+                    show-label: false;
+                    active: root.sidebar-visible && root.has-document;
+                    enabled: root.has-document;
+                    clicked => { root.request-toggle-sidebar(); }
+                }
+
+                // Divider 1
+                Rectangle {
+                    width: 1px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    background: ThemeTokens.divider;
+                }
+
+                // Center Navigation & Zoom Group
+                IconButton {
+                    icon: @image-url("../../../assets/icons/chevron_left_20_regular.svg");
+                    tooltip: root.text-prev-page;
+                    enabled: root.has-document;
+                    clicked => { root.request-prev-page(); }
+                }
+                Rectangle {
+                    width: 92px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: ThemeTokens.control-radius;
+                    background: ThemeTokens.control;
+                    border-width: 1px;
+                    border-color: ThemeTokens.stroke;
+                    HorizontalLayout {
+                        padding-left: 4px;
+                        padding-right: 6px;
+                        spacing: 3px;
+                        LineEdit {
+                            width: 52px;
+                            enabled: root.has-document;
+                            text <=> root.current-page-str;
+                            input-type: number;
+                            horizontal-alignment: center;
+                            accepted => { root.request-go-to-page(self.text); }
+                        }
+                        Text {
+                            text: "/ " + root.total-pages-str;
+                            color: ThemeTokens.text-muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/chevron_right_20_regular.svg");
+                    tooltip: root.text-next-page;
+                    enabled: root.has-document;
+                    clicked => { root.request-next-page(); }
+                }
+
+                // Divider 2
+                Rectangle {
+                    width: 1px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    background: ThemeTokens.divider;
+                }
+
+                // Zoom Out | [ Zoom% ] | Zoom In | Fit ▾
+                IconButton {
+                    icon: @image-url("../../../assets/icons/zoom_out_20_regular.svg");
+                    tooltip: root.text-zoom-out;
+                    enabled: root.has-document;
+                    clicked => { root.request-zoom-out(); }
+                }
+                zoom-field := Rectangle {
+                    min-width: 64px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: ThemeTokens.control-radius;
+                    background: ThemeTokens.control;
+                    border-width: 1px;
+                    border-color: zoom-input.has-focus ? ThemeTokens.focus : ThemeTokens.stroke;
+                    in property <string> canonical-zoom: root.zoom-str;
+                    changed canonical-zoom => {
+                        if !zoom-input.has-focus {
+                            zoom-input.text = self.canonical-zoom;
+                        }
+                    }
+                    zoom-input := LineEdit {
+                        x: 4px;
+                        y: 1px;
+                        width: parent.width - 8px;
+                        height: parent.height - 2px;
+                        enabled: root.has-document;
+                        text: root.zoom-str;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        accessible-label: root.text-zoom;
+                        edited => { root.zoom-dirty = true; }
+                        accepted => {
+                            self.text = root.request-set-zoom(self.text);
+                            root.zoom-dirty = false;
+                        }
+                        changed has-focus => {
+                            if self.has-focus {
+                                root.zoom-dirty = false;
+                                self.select-all();
+                            } else if root.zoom-dirty {
+                                self.text = root.request-set-zoom(self.text);
+                                root.zoom-dirty = false;
+                            } else {
+                                self.text = root.zoom-str;
+                            }
+                        }
+                        key-pressed(event) => {
+                            if event.text == "\u{001b}" {
+                                self.text = root.zoom-str;
+                                root.zoom-dirty = false;
+                                self.clear-selection();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/zoom_in_20_regular.svg");
+                    tooltip: root.text-zoom-in;
+                    enabled: root.has-document;
+                    clicked => { root.request-zoom-in(); }
+                }
+                fit-button := Rectangle {
+                    property <bool> active: root.zoom-mode == 1 || root.zoom-mode == 2 || root.fit-menu-open;
+                    height: 32px;
+                    width: fit-btn-layout.preferred-width;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: ThemeTokens.control-radius;
+                    background: !root.has-document ? #00000000
+                        : (self.active ? ThemeTokens.selection
+                        : (fit-touch.pressed ? ThemeTokens.control-pressed
+                        : (fit-touch.has-hover ? ThemeTokens.control-hover : #00000000)));
+                    border-width: root.has-document && (self.active || fit-touch.has-hover) ? 1px : 0px;
+                    border-color: self.active ? ThemeTokens.accent : ThemeTokens.stroke;
+                    animate background { duration: ThemeTokens.motion-fast; }
+                    accessible-role: button;
+                    accessible-label: root.text-fit;
+                    accessible-enabled: root.has-document;
+
+                    fit-touch := TouchArea {
+                        enabled: root.has-document;
+                        clicked => {
+                            root.fit-anchor-x = fit-button.absolute-position.x;
+                            root.fit-menu-open = !root.fit-menu-open;
+                        }
+                    }
+
+                    fit-btn-layout := HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 7px;
+                        spacing: 4px;
+                        alignment: center;
+
+                        Image {
+                            source: @image-url("../../../assets/icons/document_fit_20_regular.svg");
+                            width: 18px;
+                            height: 18px;
+                            y: (parent.height - self.height) / 2;
+                            colorize: root.has-document ? ThemeTokens.text : ThemeTokens.text-muted.with-alpha(0.45);
+                            image-fit: contain;
+                            accessible-role: none;
+                        }
+
+                        Image {
+                            source: @image-url("../../../assets/icons/chevron_down_20_regular.svg");
+                            width: 12px;
+                            height: 12px;
+                            y: (parent.height - self.height) / 2;
+                            colorize: root.has-document ? ThemeTokens.text-muted : ThemeTokens.text-muted.with-alpha(0.45);
+                            image-fit: contain;
+                            accessible-role: none;
+                        }
+                    }
+                }
+
+                // Flexible Spacer
+                Rectangle { horizontal-stretch: 1; }
+
+                // Right Action Group: Search | Draw | Sign | Print | PDF Tools | ⋯ | Settings
+                IconButton {
+                    icon: @image-url("../../../assets/icons/search_20_regular.svg");
+                    tooltip: root.text-search;
+                    active: root.search-open;
+                    enabled: root.has-document;
+                    clicked => { root.search-open = !root.search-open; }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/pen_20_regular.svg");
+                    label: root.text-toolbar-draw;
+                    tooltip: root.text-toolbar-draw;
+                    show-label: root.width >= 1080px;
+                    active: root.drawing-mode-active;
+                    enabled: root.has-document;
+                    visible: root.width >= 900px;
+                    clicked => { root.toggle-drawing-mode(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+                    label: root.text-toolbar-pan;
+                    tooltip: root.text-toolbar-pan;
+                    show-label: root.width >= 1080px;
+                    active: root.pan-mode-active;
+                    enabled: root.has-document;
+                    visible: root.width >= 900px;
+                    clicked => { root.toggle-pan-mode(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/signature_20_regular.svg");
+                    label: root.text-toolbar-sign;
+                    tooltip: root.text-toolbar-sign;
+                    show-label: root.width >= 1080px;
+                    active: root.sign-modal-open || root.signature-placement-active;
+                    enabled: root.has-document;
+                    visible: root.width >= 900px;
+                    clicked => { root.open-sign-modal(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/print_20_regular.svg");
+                    label: root.text-print;
+                    tooltip: root.text-print;
+                    show-label: root.width >= 1080px;
+                    enabled: root.has-document && !root.print-active;
+                    visible: root.width >= 900px;
+                    clicked => { root.request-print(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/toolbox_20_regular.svg");
+                    label: root.text-tools;
+                    tooltip: root.text-tools-tooltip;
+                    show-label: root.width >= 1140px;
+                    active: root.tools-open;
+                    clicked => { root.request-toggle-tools(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/more_horizontal_20_regular.svg");
+                    tooltip: root.text-toolbar-more;
+                    active: root.toolbar-more-open;
+                    clicked => { root.toolbar-more-open = !root.toolbar-more-open; }
+                }
+                settings-button := IconButton {
+                    icon: @image-url("../../../assets/icons/settings_20_regular.svg");
+                    tooltip: root.text-settings;
+                    active: root.settings-open;
+                    clicked => { root.settings-open = !root.settings-open; }
+                }
+            }
+
+            Rectangle {
+                x: 0px;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: ThemeTokens.divider;
+            }
+        }
+
+        // 3. InfoBar banner directly beneath command bar (height: 40px)
+        if root.banner-visible : Rectangle {
+            height: 40px;
+            background: ThemeTokens.dark ? #231b14 : #fff9f2;
+            border-width: 1px;
+            border-color: ThemeTokens.accent.with-alpha(0.35);
+            accessible-role: region;
+            accessible-label: root.banner-text;
+            accessible-live-region: polite;
+
+            // Left accent stripe
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 4px;
+                height: parent.height;
+                background: ThemeTokens.accent;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 10px;
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: root.banner-text;
+                    color: ThemeTokens.text;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.banner-update-action : TextButton {
+                    text: root.banner-action-label;
+                    enabled: root.banner-action-enabled;
+                    primary: true;
+                    clicked => { root.request-update-action(); }
+                }
+                if root.banner-can-retry : TextButton {
+                    text: root.text-retry;
+                    clicked => { root.request-retry(); }
+                }
+                IconButton {
+                    icon: @image-url("../../../assets/icons/dismiss_20_regular.svg");
+                    tooltip: root.text-dismiss;
+                    clicked => { root.request-dismiss-banner(); }
+                }
+            }
+        }
+
+        if root.window-mode == 0 && (root.print-active || root.print-status != "") : Rectangle {
+            height: 40px;
+            background: ThemeTokens.layer;
+            border-width: 1px;
+            border-color: ThemeTokens.stroke;
+
+            Rectangle {
+                x: 0px;
+                y: parent.height - 2px;
+                width: parent.width * Math.max(0, Math.min(1, root.print-progress));
+                height: 2px;
+                background: ThemeTokens.accent;
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                spacing: 8px;
+                Text {
+                    text: root.print-status != "" ? root.print-status : root.text-print;
+                    color: ThemeTokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.print-active : TextButton {
+                    text: root.text-cancel-print;
+                    clicked => { root.request-cancel-print(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            if root.window-mode == 0 && root.sidebar-visible && root.has-document : sidebar := Rectangle {
+                width: 260px;
+                background: ThemeTokens.layer;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 10px;
+                    Rectangle {
+                        height: 32px;
+                        border-radius: ThemeTokens.control-radius;
+                        background: ThemeTokens.control-subtle;
+                        border-width: 1px;
+                        border-color: ThemeTokens.stroke;
+                        HorizontalLayout {
+                            padding: 2px;
+                            spacing: 2px;
+                            TextButton {
+                                text: root.text-thumbnails;
+                                active: root.sidebar-tab == 0;
+                                clicked => { root.sidebar-tab = 0; root.request-sidebar-tab(0); }
+                            }
+                            TextButton {
+                                text: root.text-outline;
+                                active: root.sidebar-tab == 1;
+                                clicked => { root.sidebar-tab = 1; root.request-sidebar-tab(1); }
+                            }
+                            TextButton {
+                                text: root.text-bookmarks;
+                                active: root.sidebar-tab == 2;
+                                clicked => { root.sidebar-tab = 2; root.request-sidebar-tab(2); }
+                            }
+                        }
+                    }
+
+                    sidebar-list := Rectangle {
+                        if root.sidebar-tab == 0 : ListView {
+                            viewport-y <=> root.thumbnail-scroll-y;
+                            for thumb in root.thumbnail-items : Rectangle {
+                                height: 188px;
+                                border-radius: ThemeTokens.control-radius;
+                                background: thumb-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                                border-width: thumb.is-selected ? 2px : 1px;
+                                border-color: thumb.is-selected ? ThemeTokens.accent : (thumb-touch.has-hover ? ThemeTokens.stroke : #00000000);
+                                thumb-touch := TouchArea { clicked => { root.request-select-page(thumb.page-index); } }
+                                Rectangle {
+                                    x: (parent.width - self.width) / 2;
+                                    y: 8px + (150px - self.height) / 2;
+                                    width: Math.min(140px, thumb.width);
+                                    height: Math.min(150px, thumb.height);
+                                    border-radius: ThemeTokens.page-radius;
+                                    background: white;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.stroke;
+                                    if thumb.has-bitmap : Image { source: thumb.bitmap; width: 100%; height: 100%; image-fit: contain; }
+                                }
+                                Text {
+                                    x: 8px; y: 162px; width: parent.width - 16px; height: 20px;
+                                    text: thumb.page-number;
+                                    color: thumb.is-selected ? ThemeTokens.accent : ThemeTokens.text-muted;
+                                    font-size: 12px;
+                                    font-weight: thumb.is-selected ? 700 : 500;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        if root.sidebar-tab == 2 && root.bookmark-items.length == 0 : Text {
+                            text: root.text-no-bookmarks; color: ThemeTokens.text-muted; font-size: 12px;
+                            wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        if root.sidebar-tab == 2 && root.bookmark-items.length > 0 : ListView {
+                            for item[index] in root.bookmark-items : Rectangle {
+                                height: 32px;
+                                border-radius: ThemeTokens.control-radius;
+                                background: bookmark-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                                bookmark-touch := TouchArea { clicked => { root.bookmark-selected(index); } }
+                                HorizontalLayout {
+                                    padding-left: 12px; padding-right: 8px; spacing: 8px;
+                                    Text { text: item.title; color: ThemeTokens.text; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                    Text { text: item.page-number; color: ThemeTokens.text-muted; font-size: 11px; vertical-alignment: center; }
+                                }
+                            }
+                        }
+
+                        if root.sidebar-tab == 1 && root.outline-items.length == 0 : Text {
+                            text: root.text-no-outline; color: ThemeTokens.text-muted; font-size: 12px;
+                            wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        if root.sidebar-tab == 1 && root.outline-items.length > 0 : ListView {
+                            for item[index] in root.outline-items : Rectangle {
+                                height: 32px;
+                                border-radius: ThemeTokens.control-radius;
+                                background: outline-touch.has-hover ? ThemeTokens.control-hover : #00000000;
+                                outline-touch := TouchArea { clicked => { root.request-toggle-outline(index); } }
+                                HorizontalLayout {
+                                    padding-left: 8px + item.depth * 16px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    if item.has-children : Image {
+                                        source: item.expanded ? @image-url("../../../assets/icons/chevron_down_20_regular.svg") : @image-url("../../../assets/icons/chevron_right_16_regular.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: ThemeTokens.text-muted;
+                                        image-fit: contain;
+                                    }
+                                    if !item.has-children : Rectangle { width: 14px; }
+                                    Text {
+                                        text: item.title;
+                                        color: item.page-index >= 0 ? ThemeTokens.text : ThemeTokens.text-muted;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    y: 0px;
+                    width: 1px;
+                    height: parent.height;
+                    background: ThemeTokens.divider;
+                }
+            }
+
+            workspace := Rectangle {
+                background: ThemeTokens.canvas;
+
+                drop-target := DropArea {
+                    can-drop(event) => { return DragAction.copy; }
+                    dropped(event) => { root.request-drop(event.data); return DragAction.copy; }
+                }
+                if drop-target.has-drag : Rectangle {
+                    border-width: 2px; border-color: ThemeTokens.accent; background: ThemeTokens.accent.with-alpha(0.08);
+                }
+
+                if !root.has-document && !root.password-required : VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
+
+                    HorizontalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            width: Math.min(parent.width - 48px, 460px);
+                            background: ThemeTokens.layer;
+                            border-radius: ThemeTokens.overlay-radius;
+                            border-width: 1px;
+                            border-color: ThemeTokens.stroke;
+
+                            VerticalLayout {
+                                padding: 24px;
+                                spacing: 16px;
+
+                                // Header with Logo
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 12px;
+                                    Image {
+                                        source: @image-url("../../../assets/logo.svg");
+                                        width: 38px;
+                                        height: 38px;
+                                        image-fit: contain;
+                                    }
+                                    VerticalLayout {
+                                        alignment: start;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "BarePDF";
+                                            color: ThemeTokens.accent;
+                                            font-size: 13px;
+                                            font-weight: 700;
+                                            horizontal-alignment: left;
+                                        }
+                                        Text {
+                                            text: root.text-empty-title;
+                                            color: ThemeTokens.text;
+                                            font-size: 18px;
+                                            font-weight: 700;
+                                            horizontal-alignment: left;
+                                        }
+                                    }
+                                }
+
+                                // Drop Zone Card
+                                drop-card := Rectangle {
+                                    height: 96px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent.with-alpha(0.08) : ThemeTokens.window;
+                                    border-width: 1px;
+                                    border-color: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.stroke;
+
+                                    drop-card-touch := TouchArea {
+                                        clicked => { root.request-open-file(); }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        spacing: 6px;
+                                        Image {
+                                            source: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+                                            width: 26px;
+                                            height: 26px;
+                                            colorize: drop-card-touch.has-hover || drop-target.has-drag ? ThemeTokens.accent : ThemeTokens.text-muted;
+                                            image-fit: contain;
+                                            horizontal-alignment: center;
+                                        }
+                                        Text {
+                                            width: 100%;
+                                            text: root.text-empty-desc;
+                                            color: ThemeTokens.text-muted;
+                                            font-size: 12px;
+                                            horizontal-alignment: center;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+
+                                // Prominent Open File CTA Button
+                                HorizontalLayout {
+                                    alignment: center;
+                                    TextButton {
+                                        text: root.text-open;
+                                        primary: true;
+                                        clicked => { root.request-open-file(); }
+                                    }
+                                }
+
+                                // Recent Files List
+                                if root.recent-files.length > 0 : VerticalLayout {
+                                    spacing: 8px;
+                                    Rectangle { height: 1px; background: ThemeTokens.divider; }
+                                    Text {
+                                        text: root.text-recent;
+                                        color: ThemeTokens.text-muted;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                    }
+                                    for recent in root.recent-files : Rectangle {
+                                        height: 34px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: recent-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control;
+                                        border-width: 1px;
+                                        border-color: recent-touch.has-hover ? ThemeTokens.stroke : #00000000;
+                                        recent-touch := TouchArea { clicked => { root.request-open-recent(recent.path); } }
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            Image {
+                                                source: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+                                                width: 16px;
+                                                height: 16px;
+                                                colorize: ThemeTokens.text-muted;
+                                                image-fit: contain;
+                                            }
+                                            Text {
+                                                text: recent.name;
+                                                color: ThemeTokens.text;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.has-document && (root.view-mode == 1 || root.view-mode == 2) : spread-scroll := ScrollView {
+                    property <bool> show-second: root.view-mode == 2 && (root.has-second-spread-page || root.visible-pages.length > 1);
+                    property <length> second-w: root.visible-pages.length > 1 ? root.visible-pages[1].width : root.second-page-width;
+                    property <length> second-h: root.visible-pages.length > 1 ? root.visible-pages[1].height : root.second-page-height;
+                    property <int> first-idx: root.visible-pages.length > 0 ? root.visible-pages[0].page-index : root.current-annotation-page-index;
+                    property <int> second-idx: root.visible-pages.length > 1 ? root.visible-pages[1].page-index : root.second-page-index;
+                    property <length> spread-total-w: root.page-display-width + (self.show-second ? (12px + self.second-w) : 0px);
+                    property <length> spread-max-h: self.show-second ? Math.max(root.page-display-height, self.second-h) : root.page-display-height;
+                    property <length> spread-start-x: Math.max(24px, (self.viewport-width - self.spread-total-w) / 2);
+
+                    viewport-width: Math.max(self.width, self.spread-total-w + 48px);
+                    viewport-height: Math.max(self.height, self.spread-max-h + 48px);
+                    TouchArea {
+                        width: parent.viewport-width;
+                        height: parent.viewport-height;
+                        scroll-event(event) => {
+                            if (event.modifiers.control) {
+                                if (event.delta-y > 0) { root.request-zoom-in(); }
+                                else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    Rectangle {
+                        width: root.page-display-width; height: root.page-display-height;
+                        x: spread-scroll.spread-start-x;
+                        y: Math.max(24px, (parent.viewport-height - self.height) / 2);
+                        background: white; border-radius: ThemeTokens.page-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                        if root.visible-pages.length > 0 && root.visible-pages[0].has-bitmap : Image { source: root.visible-pages[0].bitmap; width: 100%; height: 100%; image-fit: contain; }
+                        if root.visible-pages.length == 0 && root.page-bitmap.width > 0 : Image { source: root.page-bitmap; width: 100%; height: 100%; image-fit: contain; }
+                        if root.page-annotation-overlays.length > spread-scroll.first-idx && root.page-annotation-overlays[spread-scroll.first-idx].width > 0 && spread-scroll.first-idx != root.current-annotation-page-index : Image { source: root.page-annotation-overlays[spread-scroll.first-idx]; width: 100%; height: 100%; image-fit: fill; }
+                        if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                        if root.page-annotation-overlay.width > 0 && spread-scroll.first-idx == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                        for rect in root.current-page-overlay-rects : Rectangle {
+                            x: parent.width * rect.x_ratio;
+                            y: parent.height * rect.y_ratio;
+                            width: parent.width * rect.width_ratio;
+                            height: parent.height * rect.height_ratio;
+                            background: rect.color;
+                        }
+                        if root.visible-pages.length > 0 : Rectangle {
+                            for box in root.visible-pages[0].selection-boxes : Rectangle {
+                                x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection;
+                            }
+                            for highlight in root.visible-pages[0].search-highlights : Rectangle {
+                                x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
+                            }
+                        }
+                        page-touch-1 := TouchArea {
+                            property <length> pan-last-abs-y: 0px;
+                            property <length> pan-last-abs-x: 0px;
+                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.page-right-clicked(
+                                        spread-scroll.first-idx,
+                                        self.mouse-x / Math.max(1px, self.width),
+                                        self.mouse-y / Math.max(1px, self.height),
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y
+                                    );
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-down(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active) {
+                                        self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                        self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                    } else {
+                                        root.pointer-down(spread-scroll.first-idx, self.mouse-x, self.mouse-y, 1);
+                                    }
+                                }
+                                if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-up(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-up(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                                if (event.kind == PointerEventKind.move) {
+                                    if (root.drawing-mode-active && self.pressed) {
+                                        root.drawing-pointer-move(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active && self.pressed) {
+                                        let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                        let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                        let dy = current-abs-y - self.pan-last-abs-y;
+                                        let dx = current-abs-x - self.pan-last-abs-x;
+                                        self.pan-last-abs-y = current-abs-y;
+                                        self.pan-last-abs-x = current-abs-x;
+                                        spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
+                                        spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-move(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                            }
+                            scroll-event(event) => {
+                                if (root.drawing-mode-active) {
+                                    return accept;
+                                }
+                                if (event.modifiers.control) {
+                                    if (event.delta-y > 0) { root.request-zoom-in(); }
+                                    else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-1.has-hover || page-touch-1.pressed) : Rectangle {
+                            property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                            x: page-touch-1.mouse-x - self.diameter / 2;
+                            y: page-touch-1.mouse-y - self.diameter / 2;
+                            width: self.diameter;
+                            height: self.diameter;
+                            border-radius: self.diameter / 2;
+                            background: #e0313125;
+                            border-width: 1.5px;
+                            border-color: #e03131cc;
+                        }
+                        if root.signature-placement-active && spread-scroll.first-idx == root.signature-placement-page : Rectangle {
+                            x: parent.width * root.signature-box-x;
+                            y: parent.height * root.signature-box-y;
+                            width: parent.width * root.signature-box-w;
+                            height: parent.height * root.signature-box-h;
+                            background: ThemeTokens.accent.with-alpha(0.08);
+                            border-width: 2px;
+                            border-color: ThemeTokens.accent;
+                            border-radius: 4px;
+                            if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                            if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move && self.pressed) {
+                                        root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width)));
+                                        root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height)));
+                                        root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height));
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: parent.width - 14px;
+                                y: parent.height - 14px;
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 3px;
+                                background: ThemeTokens.accent;
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width)));
+                                            root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height)));
+                                            root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.page-display-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.page-display-height));
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: Math.max(0px, (parent.width - self.width) / 2);
+                                y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                width: 220px;
+                                height: 34px;
+                                background: ThemeTokens.layer-elevated;
+                                border-radius: ThemeTokens.control-radius;
+                                border-width: 1px;
+                                border-color: ThemeTokens.stroke;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    TextButton {
+                                        text: root.text-sign-apply;
+                                        primary: true;
+                                        clicked => { root.signature-apply(); }
+                                    }
+                                    TextButton {
+                                        text: root.text-sign-cancel;
+                                        clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if spread-scroll.show-second : Rectangle {
+                        width: spread-scroll.second-w; height: spread-scroll.second-h;
+                        x: spread-scroll.spread-start-x + root.page-display-width + 12px;
+                        y: Math.max(24px, (parent.viewport-height - self.height) / 2);
+                        background: white; border-radius: ThemeTokens.page-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                        if root.visible-pages.length > 1 && root.visible-pages[1].has-bitmap : Image { source: root.visible-pages[1].bitmap; width: 100%; height: 100%; image-fit: contain; }
+                        if (root.visible-pages.length <= 1 || !root.visible-pages[1].has-bitmap) && root.second-page-image.width > 0 : Image { source: root.second-page-image; width: 100%; height: 100%; image-fit: contain; }
+                        if root.page-annotation-overlays.length > spread-scroll.second-idx && root.page-annotation-overlays[spread-scroll.second-idx].width > 0 : Image { source: root.page-annotation-overlays[spread-scroll.second-idx]; width: 100%; height: 100%; image-fit: fill; }
+                        if root.second-page-has-annotation-overlay || root.second-page-annotation-overlay.width > 0 : Image { source: root.second-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                        if root.visible-pages.length > 1 : Rectangle {
+                            for box in root.visible-pages[1].selection-boxes : Rectangle {
+                                x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection;
+                            }
+                            for highlight in root.visible-pages[1].search-highlights : Rectangle {
+                                x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
+                            }
+                        }
+                        page-touch-2 := TouchArea {
+                            property <length> pan-last-abs-y: 0px;
+                            property <length> pan-last-abs-x: 0px;
+                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.page-right-clicked(
+                                        spread-scroll.second-idx,
+                                        self.mouse-x / Math.max(1px, self.width),
+                                        self.mouse-y / Math.max(1px, self.height),
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y
+                                    );
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-down(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active) {
+                                        self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                        self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                    } else {
+                                        root.pointer-down(spread-scroll.second-idx, self.mouse-x, self.mouse-y, 1);
+                                    }
+                                }
+                                if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-up(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-up(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                                if (event.kind == PointerEventKind.move) {
+                                    if (root.drawing-mode-active && self.pressed) {
+                                        root.drawing-pointer-move(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active && self.pressed) {
+                                        let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                        let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                        let dy = current-abs-y - self.pan-last-abs-y;
+                                        let dx = current-abs-x - self.pan-last-abs-x;
+                                        self.pan-last-abs-y = current-abs-y;
+                                        self.pan-last-abs-x = current-abs-x;
+                                        spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
+                                        spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-move(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                            }
+                            scroll-event(event) => {
+                                if (root.drawing-mode-active) {
+                                    return accept;
+                                }
+                                if (event.modifiers.control) {
+                                    if (event.delta-y > 0) { root.request-zoom-in(); }
+                                    else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-2.has-hover || page-touch-2.pressed) : Rectangle {
+                            property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                            x: page-touch-2.mouse-x - self.diameter / 2;
+                            y: page-touch-2.mouse-y - self.diameter / 2;
+                            width: self.diameter;
+                            height: self.diameter;
+                            border-radius: self.diameter / 2;
+                            background: #e0313125;
+                            border-width: 1.5px;
+                            border-color: #e03131cc;
+                        }
+                        if root.signature-placement-active && spread-scroll.second-idx == root.signature-placement-page : Rectangle {
+                            x: parent.width * root.signature-box-x;
+                            y: parent.height * root.signature-box-y;
+                            width: parent.width * root.signature-box-w;
+                            height: parent.height * root.signature-box-h;
+                            background: ThemeTokens.accent.with-alpha(0.08);
+                            border-width: 2px;
+                            border-color: ThemeTokens.accent;
+                            border-radius: 4px;
+                            if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                            if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move && self.pressed) {
+                                        root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width)));
+                                        root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height)));
+                                        root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height));
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: parent.width - 14px;
+                                y: parent.height - 14px;
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 3px;
+                                background: ThemeTokens.accent;
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width)));
+                                            root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height)));
+                                            root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, root.second-page-width), (self.mouse-y - self.pressed-y) / Math.max(1px, root.second-page-height));
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: Math.max(0px, (parent.width - self.width) / 2);
+                                y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                width: 220px;
+                                height: 34px;
+                                background: ThemeTokens.layer-elevated;
+                                border-radius: ThemeTokens.control-radius;
+                                border-width: 1px;
+                                border-color: ThemeTokens.stroke;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    TextButton {
+                                        text: root.text-sign-apply;
+                                        primary: true;
+                                        clicked => { root.signature-apply(); }
+                                    }
+                                    TextButton {
+                                        text: root.text-sign-cancel;
+                                        clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.has-document && root.view-mode == 0 : continuous-scroll := ScrollView {
+                    viewport-width: Math.max(self.width, root.page-display-width + 48px);
+                    viewport-height: Math.max(self.height, root.document-total-height + 48px);
+                    viewport-y <=> root.current-scroll-y;
+                    TouchArea {
+                        width: parent.viewport-width;
+                        height: parent.viewport-height;
+                        scroll-event(event) => {
+                            if (event.modifiers.control) {
+                                if (event.delta-y > 0) { root.request-zoom-in(); }
+                                else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    for page in root.visible-pages : Rectangle {
+                        width: page.width; height: page.height;
+                        x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
+                        background: white; border-radius: ThemeTokens.page-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
+                        if page.has-bitmap : Image { source: page.bitmap; width: 100%; height: 100%; image-fit: contain; }
+                        if root.page-annotation-overlays.length > page.page-index && root.page-annotation-overlays[page.page-index].width > 0 && page.page-index != root.current-annotation-page-index : Image { source: root.page-annotation-overlays[page.page-index]; width: 100%; height: 100%; image-fit: fill; }
+                        if (root.current-page-has-annotation-overlay || root.current-page-annotation-overlay.width > 0) && page.page-index == root.current-annotation-page-index : Image { source: root.current-page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                        if root.page-annotation-overlay.width > 0 && page.page-index == root.current-annotation-page-index : Image { source: root.page-annotation-overlay; width: 100%; height: 100%; image-fit: fill; }
+                        if page.page-index == root.current-annotation-page-index : Rectangle {
+                            width: 100%; height: 100%;
+                            for rect in root.current-page-overlay-rects : Rectangle {
+                                x: parent.width * rect.x_ratio;
+                                y: parent.height * rect.y_ratio;
+                                width: parent.width * rect.width_ratio;
+                                height: parent.height * rect.height_ratio;
+                                background: rect.color;
+                            }
+                        }
+                        for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
+                        for highlight in page.search-highlights : Rectangle { x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B; }
+                        page-touch := TouchArea {
+                            property <length> pan-last-abs-y: 0px;
+                            property <length> pan-last-abs-x: 0px;
+                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.page-right-clicked(
+                                        page.page-index,
+                                        self.mouse-x / Math.max(1px, self.width),
+                                        self.mouse-y / Math.max(1px, self.height),
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y
+                                    );
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-down(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active) {
+                                        self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
+                                        self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                    } else {
+                                        root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1);
+                                    }
+                                }
+                                if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
+                                    if (root.drawing-mode-active) {
+                                        root.drawing-pointer-up(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                                if (event.kind == PointerEventKind.move) {
+                                    if (root.drawing-mode-active && self.pressed) {
+                                        root.drawing-pointer-move(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active && self.pressed) {
+                                        let current-abs-y = self.absolute-position.y + self.mouse-y;
+                                        let current-abs-x = self.absolute-position.x + self.mouse-x;
+                                        let dy = current-abs-y - self.pan-last-abs-y;
+                                        let dx = current-abs-x - self.pan-last-abs-x;
+                                        self.pan-last-abs-y = current-abs-y;
+                                        self.pan-last-abs-x = current-abs-x;
+                                        root.current-scroll-y = Math.min(0px, Math.max(continuous-scroll.height - continuous-scroll.viewport-height, root.current-scroll-y + dy));
+                                        continuous-scroll.viewport-x = Math.min(0px, Math.max(continuous-scroll.width - continuous-scroll.viewport-width, continuous-scroll.viewport-x + dx));
+                                    } else if (!root.pan-mode-active) {
+                                        root.pointer-move(page.page-index, self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                            }
+                            scroll-event(event) => {
+                                if (root.drawing-mode-active) {
+                                    return accept;
+                                }
+                                if (event.modifiers.control) {
+                                    if (event.delta-y > 0) { root.request-zoom-in(); }
+                                    else if (event.delta-y < 0) { root.request-zoom-out(); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch.has-hover || page-touch.pressed) : Rectangle {
+                            property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
+                            x: page-touch.mouse-x - self.diameter / 2;
+                            y: page-touch.mouse-y - self.diameter / 2;
+                            width: self.diameter;
+                            height: self.diameter;
+                            border-radius: self.diameter / 2;
+                            background: #e0313125;
+                            border-width: 1.5px;
+                            border-color: #e03131cc;
+                        }
+                        if root.signature-placement-active && page.page-index == root.signature-placement-page : Rectangle {
+                            x: parent.width * root.signature-box-x;
+                            y: parent.height * root.signature-box-y;
+                            width: parent.width * root.signature-box-w;
+                            height: parent.height * root.signature-box-h;
+                            background: ThemeTokens.accent.with-alpha(0.08);
+                            border-width: 2px;
+                            border-color: ThemeTokens.accent;
+                            border-radius: 4px;
+                            if root.sign-pad-preview.width > 0 : Image { source: root.sign-pad-preview; width: 100%; height: 100%; image-fit: fill; }
+                            if root.sign-pad-preview.width == 0 && root.signature-preview-image.width > 0 : Image { source: root.signature-preview-image; width: 100%; height: 100%; image-fit: fill; }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move && self.pressed) {
+                                        root.signature-box-x = Math.max(0.0, Math.min(1.0 - root.signature-box-w, root.signature-box-x + (self.mouse-x - self.pressed-x) / Math.max(1px, page.width)));
+                                        root.signature-box-y = Math.max(0.0, Math.min(1.0 - root.signature-box-h, root.signature-box-y + (self.mouse-y - self.pressed-y) / Math.max(1px, page.height)));
+                                        root.signature-drag-move((self.mouse-x - self.pressed-x) / Math.max(1px, page.width), (self.mouse-y - self.pressed-y) / Math.max(1px, page.height));
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: parent.width - 14px;
+                                y: parent.height - 14px;
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 3px;
+                                background: ThemeTokens.accent;
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.move && self.pressed) {
+                                            root.signature-box-w = Math.max(0.05, Math.min(1.0 - root.signature-box-x, root.signature-box-w + (self.mouse-x - self.pressed-x) / Math.max(1px, page.width)));
+                                            root.signature-box-h = Math.max(0.03, Math.min(1.0 - root.signature-box-y, root.signature-box-h + (self.mouse-y - self.pressed-y) / Math.max(1px, page.height)));
+                                            root.signature-resize-move((self.mouse-x - self.pressed-x) / Math.max(1px, page.width), (self.mouse-y - self.pressed-y) / Math.max(1px, page.height));
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: Math.max(0px, (parent.width - self.width) / 2);
+                                y: root.signature-box-y > 0.08 ? -40px : parent.height + 6px;
+                                width: 220px;
+                                height: 34px;
+                                background: ThemeTokens.layer-elevated;
+                                border-radius: ThemeTokens.control-radius;
+                                border-width: 1px;
+                                border-color: ThemeTokens.stroke;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    TextButton {
+                                        text: root.text-sign-apply;
+                                        primary: true;
+                                        clicked => { root.signature-apply(); }
+                                    }
+                                    TextButton {
+                                        text: root.text-sign-cancel;
+                                        clicked => { root.signature-placement-active = false; root.signature-cancel(); }
+                                    }
+                                }
+                            }
+                        }
+                        if !page.has-bitmap : Text { text: root.text-loading + " " + page.page-number; color: ThemeTokens.text-muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+
+                // Floating Drawing & Annotations Toolbar
+                if root.has-document && (root.drawing-mode-active || root.has-unsaved-annotations) : Rectangle {
+                    x: Math.max(8px, (parent.width - self.width) / 2);
+                    y: root.drawing-toolbar-at-bottom ? parent.height - self.height - 16px : 12px;
+                    height: 52px;
+                    background: ThemeTokens.layer-elevated;
+                    border-radius: ThemeTokens.overlay-radius;
+                    border-width: 1px;
+                    border-color: ThemeTokens.stroke;
+                    drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+                    drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+                    drop-shadow-color: ThemeTokens.overlay-shadow;
+                    animate y { duration: ThemeTokens.motion-medium; }
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 6px;
+                        alignment: center;
+
+                        // Dock position toggle (bottom / top)
+                        IconButton {
+                            height: 40px;
+                            icon: @image-url("../../../assets/icons/chevron_down_20_regular.svg");
+                            tooltip: root.drawing-toolbar-at-bottom ? "Move toolbar to top" : "Move toolbar to bottom";
+                            clicked => {
+                                root.drawing-toolbar-at-bottom = !root.drawing-toolbar-at-bottom;
+                                root.toggle-drawing-toolbar-position();
+                            }
+                        }
+
+                        Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                        // Pan mode button
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-toolbar-pan;
+                            active: root.pan-mode-active;
+                            clicked => { root.toggle-pan-mode(); }
+                        }
+
+                        if root.drawing-mode-active : HorizontalLayout {
+                            spacing: 4px;
+                            TextButton {
+                                height: 40px;
+                                min-width: 44px;
+                                text: root.text-draw-pen;
+                                active: !root.drawing-eraser-active;
+                                clicked => { root.drawing-eraser-active = false; root.set-drawing-eraser(false); }
+                            }
+                            TextButton {
+                                height: 40px;
+                                min-width: 44px;
+                                text: root.text-draw-eraser;
+                                active: root.drawing-eraser-active;
+                                clicked => { root.drawing-eraser-active = true; root.set-drawing-eraser(true); }
+                            }
+
+                            Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                            if !root.drawing-eraser-active : HorizontalLayout {
+                                spacing: 4px;
+                                // 4 Color Swatches: Black (0), Red (1), Blue (2), Yellow (3)
+                                for swatch-color[cidx] in [#181a1f, #e03131, #1971c2, #f59f00] : Rectangle {
+                                    width: 40px;
+                                    height: 40px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: root.drawing-color-index == cidx ? ThemeTokens.selection : #00000000;
+                                    border-width: root.drawing-color-index == cidx ? 1px : 0px;
+                                    border-color: ThemeTokens.accent;
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: 6px;
+                                        background: swatch-color;
+                                        border-width: 1px;
+                                        border-color: ThemeTokens.stroke;
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.drawing-color-index = cidx;
+                                            root.set-drawing-color(cidx);
+                                        }
+                                    }
+                                }
+
+                                Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                                // 3 Stroke Widths: Thin (0), Medium (1), Thick (2)
+                                for dot-size[widx] in [4px, 7px, 12px] : Rectangle {
+                                    width: 40px;
+                                    height: 40px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: root.drawing-width-index == widx ? ThemeTokens.selection : ThemeTokens.control;
+                                    border-width: 1px;
+                                    border-color: root.drawing-width-index == widx ? ThemeTokens.accent : ThemeTokens.stroke;
+                                    Rectangle {
+                                        width: dot-size;
+                                        height: dot-size;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: dot-size / 2;
+                                        background: ThemeTokens.text;
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.drawing-width-index = widx;
+                                            root.set-drawing-width(widx);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.drawing-eraser-active : HorizontalLayout {
+                                spacing: 4px;
+                                // 4 Eraser Sizes: 0 (Small), 1 (Medium), 2 (Large), 3 (X-Large)
+                                for eraser-size[eidx] in [8px, 14px, 20px, 26px] : Rectangle {
+                                    width: 40px;
+                                    height: 40px;
+                                    border-radius: ThemeTokens.control-radius;
+                                    background: root.drawing-eraser-size-index == eidx ? ThemeTokens.selection : ThemeTokens.control;
+                                    border-width: 1px;
+                                    border-color: root.drawing-eraser-size-index == eidx ? ThemeTokens.accent : ThemeTokens.stroke;
+                                    Rectangle {
+                                        width: eraser-size;
+                                        height: eraser-size;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: eraser-size / 2;
+                                        background: #e0313125;
+                                        border-width: 1.5px;
+                                        border-color: #e03131cc;
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.drawing-eraser-size-index = eidx;
+                                            root.drawing-eraser-diameter-norm = eidx == 0 ? 0.025 : (eidx == 1 ? 0.05 : (eidx == 2 ? 0.08 : 0.12));
+                                            root.set-drawing-eraser-size(eidx);
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+                        }
+
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-undo;
+                            enabled: root.drawing-can-undo;
+                            clicked => { root.drawing-undo(); }
+                        }
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-redo;
+                            enabled: root.drawing-can-redo;
+                            clicked => { root.drawing-redo(); }
+                        }
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-clear;
+                            clicked => { root.drawing-clear-page(); }
+                        }
+
+                        Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
+
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-save;
+                            primary: true;
+                            clicked => { root.save-annotations(); }
+                        }
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-save-as;
+                            clicked => { root.save-annotations-as(); }
+                        }
+                        TextButton {
+                            height: 40px;
+                            min-width: 44px;
+                            text: root.text-draw-discard;
+                            clicked => { root.discard-annotations(); }
+                        }
+                    }
+                }
+
+                if root.password-required : password-popup := PasswordPopover {
+                    password-input <=> root.document-password-input;
+                    file-name: root.protected-file-name; error-text: root.password-error;
+                    title: root.text-password-title;
+                    placeholder: root.text-password-placeholder;
+                    cancel-label: root.text-password-cancel;
+                    unlock-label: root.text-password-unlock;
+                    submit(password) => {
+                        root.document-password-input = "";
+                        password-popup.clear-password();
+                        root.request-unlock-password(password);
+                    }
+                    cancel => {
+                        root.document-password-input = "";
+                        password-popup.clear-password();
+                        root.password-required = false;
+                        root.request-cancel-unlock-password();
+                    }
+                }
+
+                if root.settings-open : Rectangle {
+                    background: #00000001;
+                    TouchArea { clicked => { root.settings-open = false; } }
+                    Rectangle {
+                        x: parent.width - 368px; y: root.settings-open ? 8px : 14px; width: 360px; height: parent.height - 16px;
+                        background: ThemeTokens.layer-elevated;
+                        border-radius: ThemeTokens.overlay-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.stroke;
+                        drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+                        drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+                        drop-shadow-color: ThemeTokens.overlay-shadow;
+                        accessible-role: groupbox;
+                        accessible-label: root.text-settings;
+                        opacity: root.settings-open ? 1 : 0;
+                        animate opacity { duration: ThemeTokens.motion-medium; }
+                        animate y { duration: ThemeTokens.motion-medium; easing: ease-out; }
+                        TouchArea { clicked => { } }
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                height: 36px;
+                                Text { text: root.text-settings; color: ThemeTokens.text; font-size: 19px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                                IconButton { icon: @image-url("../../../assets/icons/dismiss_20_regular.svg"); tooltip: root.text-close; clicked => { root.settings-open = false; } }
+                            }
+                            Rectangle { height: 1px; background: ThemeTokens.divider; }
+                            ScrollView {
+                                VerticalLayout {
+                                    padding-top: 4px;
+                                    padding-right: 4px;
+                                    spacing: 12px;
+
+                                    Text { text: root.text-settings-appearance; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                    Text { text: root.text-settings-theme; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        TextButton { text: root.text-settings-system; active: root.current-theme == 0; clicked => { root.request-change-theme(0); } }
+                                        TextButton { text: root.text-settings-light; active: root.current-theme == 1; clicked => { root.request-change-theme(1); } }
+                                        TextButton { text: root.text-settings-dark; active: root.current-theme == 2; clicked => { root.request-change-theme(2); } }
+                                    }
+                                    Text { text: root.text-settings-invert-colors; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        TextButton { text: "Off"; active: !root.invert-page-colors; clicked => { if (root.invert-page-colors) { root.request-toggle-invert-colors(); } } }
+                                        TextButton { text: "On"; active: root.invert-page-colors; clicked => { if (!root.invert-page-colors) { root.request-toggle-invert-colors(); } } }
+                                    }
+                                    Rectangle { height: 1px; background: ThemeTokens.divider; }
+
+                                    Text { text: root.text-settings-language; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        TextButton { text: root.text-settings-system; active: root.current-language == 0; clicked => { root.request-change-language(0); } }
+                                        TextButton { text: root.text-settings-english; active: root.current-language == 1; clicked => { root.request-change-language(1); } }
+                                        TextButton { text: root.text-settings-turkish; active: root.current-language == 2; clicked => { root.request-change-language(2); } }
+                                    }
+                                    Rectangle { height: 1px; background: ThemeTokens.divider; }
+
+                                    Text { text: root.text-updates; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                    Text { text: "BarePDF v" + root.current-version; color: ThemeTokens.text-muted; font-size: 11px; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        TextButton { text: root.text-update-enabled; active: root.update-checks-enabled; clicked => { root.request-change-update-checks(true); } }
+                                        TextButton { text: root.text-update-disabled; active: !root.update-checks-enabled; clicked => { root.request-change-update-checks(false); } }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        TextButton { text: root.text-check-now; clicked => { root.request-check-update(); } }
+                                        if root.update-action-label != "" : TextButton {
+                                            text: root.update-action-label;
+                                            enabled: root.update-action-enabled;
+                                            clicked => { root.request-update-action(); }
+                                        }
+                                    }
+                                    Text { text: root.update-status; color: ThemeTokens.text-muted; font-size: 11px; wrap: word-wrap; }
+                                    Rectangle { height: 1px; background: ThemeTokens.divider; }
+
+                                    Text { text: root.text-settings-about; color: ThemeTokens.text; font-size: 13px; font-weight: 700; }
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: root.text-settings-developer; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                        TextButton { text: "Efe Arabacı ↗"; clicked => { root.request-open-url("https://xn--efearabac-3pb.com/"); } }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: root.text-settings-website; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                        TextButton { text: "BarePDF Web ↗"; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/"); } }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: root.text-settings-manifesto; color: ThemeTokens.text-muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                        TextButton { text: root.text-settings-manifesto-button; clicked => { root.request-open-url("https://woffluon.github.io/BarePDF/manifesto/"); } }
+                                    }
+                                    Rectangle { height: 4px; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.tools-open : ToolsModal {
+                    current-tool <=> root.current-tool;
+                    merge-files: root.merge-files;
+                    merge-first-page-images: root.merge-first-page-images;
+                    page-thumbnails: root.thumbnail-items;
+                    selected-merge-index <=> root.selected-merge-index;
+                    merge-drag-index <=> root.merge-drag-index;
+                    page-range-input <=> root.page-selection-range;
+                    split-mode <=> root.tools-split-mode;
+                    rotation <=> root.tools-rotation;
+                    convert-format <=> root.tools-convert-format;
+                    convert-dpi <=> root.tools-convert-dpi;
+                    convert-jpeg-quality <=> root.tools-convert-jpeg-quality;
+                    error-text: root.tools-error;
+                    is-working: root.tools-working;
+                    active-doc-title: root.document-title;
+                    active-doc-pages: root.total-pages-str;
+
+                    title: root.text-tools;
+                    text-merge: root.text-tools-merge;
+                    text-merge-desc: root.text-tools-merge-desc;
+                    text-split: root.text-tools-split;
+                    text-split-desc: root.text-tools-split-desc;
+                    text-delete: root.text-tools-delete;
+                    text-delete-desc: root.text-tools-delete-desc;
+                    text-rotate: root.text-tools-rotate;
+                    text-rotate-desc: root.text-tools-rotate-desc;
+                    btn-add-files: root.text-tools-btn-add-files;
+                    btn-move-up: root.text-tools-btn-move-up;
+                    btn-move-down: root.text-tools-btn-move-down;
+                    btn-remove: root.text-tools-btn-remove;
+                    btn-clear: root.text-tools-btn-clear;
+                    btn-cancel: root.text-tools-btn-cancel;
+                    btn-save: root.text-tools-btn-save;
+                    label-pages: root.text-tools-label-pages;
+                    label-split-mode: root.text-tools-label-split-mode;
+                    split-extract: root.text-tools-split-extract;
+                    split-separate: root.text-tools-split-separate;
+                    label-rotation: root.text-tools-label-rotation;
+                    rotation-90: root.text-tools-rotation-90;
+                    rotation-180: root.text-tools-rotation-180;
+                    rotation-270: root.text-tools-rotation-270;
+                    text-convert: root.text-tools-convert;
+                    text-convert-desc: root.text-tools-convert-desc;
+                    text-drop-merge: root.text-tools-drop-merge;
+                    text-drop-split: root.text-tools-drop-split;
+                    text-drop-delete: root.text-tools-drop-delete;
+                    text-drop-rotate: root.text-tools-drop-rotate;
+                    text-drop-convert: root.text-tools-drop-convert;
+                    text-pages-unit: root.text-tools-pages-unit;
+                    text-pages-empty-hint: root.text-tools-pages-empty-hint;
+                    text-pages-select-all: root.text-tools-select-all;
+                    text-pages-clear-selection: root.text-tools-clear-selection;
+                    text-split-placeholder: root.text-tools-split-placeholder;
+                    text-delete-placeholder: root.text-tools-delete-placeholder;
+                    text-rotate-placeholder: root.text-tools-rotate-placeholder;
+                    text-format: root.text-tools-format;
+                    text-resolution: root.text-tools-resolution;
+                    text-jpeg-quality: root.text-tools-jpeg-quality;
+                    text-convert-all: root.text-tools-convert-all;
+                    text-convert-custom: root.text-tools-convert-custom;
+                    btn-convert-all: root.text-tools-btn-convert-all;
+                    text-merge-drag-hint: root.text-tools-merge-drag-hint;
+                    text-merge-dragged-hint: root.text-tools-merge-dragged-hint;
+
+                    select-tool(tool-id) => { root.request-open-tool(tool-id); }
+                    close => { root.request-close-tools(); }
+                    merge-add-files => { root.request-merge-add-files(); }
+                    merge-select-file(idx) => { root.request-merge-select-file(idx); }
+                    merge-move-up(idx) => { root.request-merge-move-up(idx); }
+                    merge-move-down(idx) => { root.request-merge-move-down(idx); }
+                    merge-reorder(from, to) => { root.request-merge-reorder(from, to); }
+                    merge-remove(idx) => { root.request-merge-remove-file(idx); }
+                    merge-clear => { root.request-merge-clear(); }
+                    merge-submit => { root.request-merge-execute(); }
+                    split-submit(range, mode) => { root.request-split-execute(range, mode); }
+                    delete-submit(range) => { root.request-delete-pages-execute(range); }
+                    rotate-submit(range, rot) => { root.request-rotate-pages-execute(range, rot); }
+                    convert-submit(format, dpi, quality, range) => { root.request-convert-execute(format, dpi, quality, range); }
+                    drop-files(data, tool-id) => { root.request-tool-drop(data, tool-id); }
+                    select-page(page, ctrl, shift) => { root.request-select-page-range(page, ctrl, shift); }
+                    select-all-pages => { root.request-select-all-tool-pages(); }
+                    clear-pages => { root.request-clear-tool-pages(); }
+                }
+                if root.print-preview-open : PrintPreview {
+                    page <=> root.print-preview-page;
+                    range <=> root.print-preview-range;
+                    orientation <=> root.print-preview-orientation;
+                    image: root.print-preview-image;
+                    has-image: root.print-preview-has-image;
+                    total-pages: root.total-pages-str;
+                    printers: root.print-preview-printers;
+                    selected-printer <=> root.print-preview-selected-printer;
+                    copies <=> root.print-preview-copies;
+                    range-mode <=> root.print-preview-range-mode;
+                    paper-size <=> root.print-preview-paper-size;
+                    duplex <=> root.print-preview-duplex;
+                    text-title: root.text-print-preview-title;
+                    text-cancel-tooltip: root.text-print-preview-cancel-tooltip;
+                    text-empty: root.text-print-preview-empty;
+                    text-page: root.text-print-preview-page;
+                    text-previous: root.text-prev-page;
+                    text-next: root.text-next-page;
+                    text-page-range: root.text-print-preview-page-range;
+                    text-range-placeholder: root.text-print-preview-range-placeholder;
+                    text-range-accessible: root.text-print-preview-range-accessible;
+                    text-orientation: root.text-print-preview-orientation;
+                    text-orientation-auto: root.text-print-preview-orientation-auto;
+                    text-orientation-portrait: root.text-print-preview-orientation-portrait;
+                    text-orientation-landscape: root.text-print-preview-orientation-landscape;
+                    text-cancel: root.text-cancel-print;
+                    text-continue: root.text-print-preview-continue;
+                    previous => { root.request-print-preview-page(root.print-preview-page - 1); }
+                    next => { root.request-print-preview-page(root.print-preview-page + 1); }
+                    range-changed(value) => { root.request-print-preview-range(value); }
+                    orientation-changed(value) => { root.request-print-preview-orientation(value); }
+                    duplex-changed(value) => { root.request-print-preview-duplex(value); }
+                    confirm => { root.request-confirm-print(); }
+                    cancel => { root.request-close-print-preview(); }
+                }
+                if root.tool-password-prompt-open : tool-password-popup := PasswordPopover {
+                    password-input <=> root.tool-password-input;
+                    file-name: root.document-title;
+                    error-text: root.tool-password-error;
+                    title: root.text-password-title;
+                    placeholder: root.text-password-placeholder;
+                    cancel-label: root.text-password-cancel;
+                    unlock-label: root.text-password-unlock;
+                    submit(password) => {
+                        root.tool-password-input = "";
+                        tool-password-popup.clear-password();
+                        root.request-submit-tool-password(password);
+                    }
+                    cancel => {
+                        root.tool-password-input = "";
+                        tool-password-popup.clear-password();
+                        root.request-cancel-tool-password();
+                    }
+                }
+            }
+        }
+    }
+
+    // Zero-size screen-reader live region for status announcements
+    Text {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: root.status-text;
+        accessible-role: text;
+        accessible-label: root.status-text;
+        accessible-live-region: polite;
+    }
+
+    // Fit ▾ Flyout
+    Flyout {
+        open <=> root.fit-menu-open;
+        anchor-x: Math.max(8px, Math.min(root.width - 198px, root.fit-anchor-x));
+        anchor-y: 84px;
+        flyout-width: 190px;
+        flyout-height: 112px;
+
+        MenuItem {
+            icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+            has-icon: true;
+            text: root.text-fit-width;
+            checked: root.zoom-mode == 1;
+            enabled: root.has-document;
+            activated => {
+                root.fit-menu-open = false;
+                root.request-fit-width();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/document_fit_20_regular.svg");
+            has-icon: true;
+            text: root.text-fit-page;
+            checked: root.zoom-mode == 2;
+            enabled: root.has-document;
+            activated => {
+                root.fit-menu-open = false;
+                root.request-fit-page();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/document_pdf_20_regular.svg");
+            has-icon: true;
+            text: root.text-actual-size;
+            shortcut: "Ctrl+0";
+            checked: root.zoom-mode == 0 && root.zoom-str == "100%";
+            enabled: root.has-document;
+            activated => {
+                root.fit-menu-open = false;
+                root.request-actual-size();
+            }
+        }
+    }
+
+    // ⋯ More Overflow Menu Flyout
+    Flyout {
+        open <=> root.toolbar-more-open;
+        anchor-x: Math.max(8px, root.width - 248px);
+        anchor-y: 84px;
+        flyout-width: 240px;
+        flyout-height: root.width < 900px ? 286px : 182px;
+
+        MenuItem {
+            icon: @image-url("../../../assets/icons/slide_text_20_regular.svg");
+            has-icon: true;
+            text: root.text-view + ": " + root.view-mode-label;
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.request-toggle-view-mode();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/arrow_rotate_clockwise_20_regular.svg");
+            has-icon: true;
+            text: root.text-toolbar-rotate;
+            shortcut: "Ctrl+R";
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.rotate-view-cw();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/full_screen_maximize_20_regular.svg");
+            has-icon: true;
+            text: root.text-fullscreen;
+            shortcut: "F11";
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.request-toggle-fullscreen();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/slide_play_20_regular.svg");
+            has-icon: true;
+            text: root.text-presentation;
+            shortcut: "F5";
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.request-presentation-mode();
+            }
+        }
+        MenuItem {
+            icon: @image-url("../../../assets/icons/search_20_regular.svg");
+            has-icon: true;
+            text: root.text-command-palette;
+            shortcut: "Ctrl+K";
+            activated => {
+                root.toolbar-more-open = false;
+                root.command-palette-open = true;
+                root.command-palette-query = "";
+                root.request-search-query("");
+            }
+        }
+
+        if root.width < 900px : Rectangle {
+            height: 1px;
+            background: ThemeTokens.divider;
+        }
+        if root.width < 900px : MenuItem {
+            icon: @image-url("../../../assets/icons/pen_20_regular.svg");
+            has-icon: true;
+            text: root.text-toolbar-draw;
+            checked: root.drawing-mode-active;
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.toggle-drawing-mode();
+            }
+        }
+        if root.width < 900px : MenuItem {
+            icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+            has-icon: true;
+            text: root.text-toolbar-pan;
+            checked: root.pan-mode-active;
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.toggle-pan-mode();
+            }
+        }
+        if root.width < 900px : MenuItem {
+            icon: @image-url("../../../assets/icons/signature_20_regular.svg");
+            has-icon: true;
+            text: root.text-toolbar-sign;
+            checked: root.sign-modal-open || root.signature-placement-active;
+            enabled: root.has-document;
+            activated => {
+                root.toolbar-more-open = false;
+                root.open-sign-modal();
+            }
+        }
+        if root.width < 900px : MenuItem {
+            icon: @image-url("../../../assets/icons/print_20_regular.svg");
+            has-icon: true;
+            text: root.text-print;
+            enabled: root.has-document && !root.print-active;
+            activated => {
+                root.toolbar-more-open = false;
+                root.request-print();
+            }
+        }
+    }
+
+    if root.search-open : SearchBar {
+        x: root.width - self.width - 24px;
+        y: 88px;
+        query <=> root.search-query;
+        match-counter: root.search-match-counter;
+        case-sensitive <=> root.search-case-sensitive;
+        whole-word <=> root.search-whole-word;
+        has-matches: root.search-has-matches;
+        query-changed(q) => { root.request-search-query(q); }
+        next-clicked => { root.request-search-next(); }
+        prev-clicked => { root.request-search-prev(); }
+        close-clicked => { root.search-open = false; }
+        toggle-case => { root.search-case-sensitive = !root.search-case-sensitive; }
+        toggle-whole-word => { root.search-whole-word = !root.search-whole-word; }
+    }
+
+    // HUD Command Palette (Ctrl+K)
+    CommandPalette {
+        width: 100%;
+        height: 100%;
+        is-open <=> root.command-palette-open;
+        search-query <=> root.command-palette-query;
+        command-titles: root.command-palette-titles;
+        command-subtitles: root.command-palette-subtitles;
+        close => { root.command-palette-open = false; }
+        execute-command(cmd) => { root.request-execute-command(cmd); }
+        command-selected(idx) => { root.request-command-selected(idx); }
+    }
+
+    // Fullscreen Floating Capsule HUD (F11)
+    if root.window-mode == 1 : FloatingCapsule {
+        z: 800;
+        page-info: root.current-page-str + " / " + root.total-pages-str;
+        can-prev: root.has-document;
+        can-next: root.has-document;
+        show-zoom: true;
+        exit-label: root.text-fullscreen;
+        prev-label: root.text-prev-page;
+        next-label: root.text-next-page;
+        zoom-in-label: root.text-zoom-in;
+        zoom-out-label: root.text-zoom-out;
+        prev => { root.request-prev-page(); }
+        next => { root.request-next-page(); }
+        zoom-in => { root.request-zoom-in(); }
+        zoom-out => { root.request-zoom-out(); }
+        exit => { root.request-exit-special-mode(); }
+    }
+
+    // Thumbnail Scrubber Popover
+    Scrubber {
+        is-active: root.scrubber-active;
+        preview-label: root.scrubber-page-label;
+        y-position: root.scrubber-y;
+    }
+
+    // Smart Right-Click Context Menu
+    if root.context-menu-open : ContextMenu {
+        is-open <=> root.context-menu-open;
+        menu-x: root.context-menu-x;
+        menu-y: root.context-menu-y;
+        has-selection: root.context-menu-has-selection;
+        text-copy: root.text-copy;
+        text-context-find: root.text-context-find;
+        text-context-highlight: root.text-context-highlight;
+        text-select-all: root.text-select-all;
+        text-context-rotate-cw: root.text-context-rotate-cw;
+        text-context-fit-page: root.text-context-fit-page;
+        text-prev-page: root.text-prev-page;
+        text-next-page: root.text-next-page;
+        request-copy => { root.request-copy(); }
+        context-find-selection => { root.context-find-selection(); }
+        context-highlight-selection => { root.context-highlight-selection(); }
+        request-select-all => { root.request-select-all(); }
+        rotate-view-cw => { root.rotate-view-cw(); }
+        request-fit-page => { root.request-fit-page(); }
+        request-prev-page => { root.request-prev-page(); }
+        request-next-page => { root.request-next-page(); }
+    }
+
+    // Signature Creation Modal
+    if root.sign-modal-open : SignatureDialog {
+        is-open <=> root.sign-modal-open;
+        tab-index <=> root.sign-tab-index;
+        pad-preview: root.sign-pad-preview;
+        has-preview: root.sign-has-preview;
+        text-title: root.text-sign-title;
+        text-draw-tab: root.text-sign-draw-tab;
+        text-image-tab: root.text-sign-image-tab;
+        text-pick-image: root.text-sign-pick-image;
+        text-clear: root.text-sign-clear;
+        text-cancel: root.text-sign-cancel;
+        text-place: root.text-sign-place;
+        pad-pointer-down(x, y) => { root.sign-pad-pointer-down(x, y); }
+        pad-pointer-move(x, y) => { root.sign-pad-pointer-move(x, y); }
+        pad-pointer-up => { root.sign-pad-pointer-up(); }
+        pad-clear => { root.sign-pad-clear(); }
+        pick-image => { root.sign-pick-image(); }
+        start-placement => { root.sign-start-placement(); }
+    }
+
+    // Frameless Window 6px Resize Edge Strips (active in Normal unmaximized mode)
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: 0px;
+        y: 6px;
+        width: 6px;
+        height: root.height - 12px;
+        mouse-cursor: ew-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(0);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: root.width - 6px;
+        y: 6px;
+        width: 6px;
+        height: root.height - 12px;
+        mouse-cursor: ew-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(1);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: 6px;
+        y: 0px;
+        width: root.width - 12px;
+        height: 6px;
+        mouse-cursor: ns-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(2);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: 6px;
+        y: root.height - 6px;
+        width: root.width - 12px;
+        height: 6px;
+        mouse-cursor: ns-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(3);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: 0px;
+        y: 0px;
+        width: 6px;
+        height: 6px;
+        mouse-cursor: nwse-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(4);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: root.width - 6px;
+        y: 0px;
+        width: 6px;
+        height: 6px;
+        mouse-cursor: nesw-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(5);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: 0px;
+        y: root.height - 6px;
+        width: 6px;
+        height: 6px;
+        mouse-cursor: nesw-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(6);
+            }
+        }
+    }
+    if root.window-mode == 0 && !root.window-maximized : TouchArea {
+        z: 999;
+        x: root.width - 6px;
+        y: root.height - 6px;
+        width: 6px;
+        height: 6px;
+        mouse-cursor: nwse-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-resize(7);
+            }
+        }
+    }
+}

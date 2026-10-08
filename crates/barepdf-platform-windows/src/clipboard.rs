@@ -1,5 +1,5 @@
 use arboard::Clipboard;
-use barepdf_platform::{ClipboardAccess, PlatformError};
+use barepdf_platform::PlatformError;
 use std::sync::Mutex;
 
 pub struct WindowsClipboard {
@@ -39,6 +39,20 @@ impl WindowsClipboard {
         self.set_text(text)
     }
 
+    /// # Errors
+    ///
+    /// Returns a platform error when clipboard ownership or data conversion fails.
+    pub fn set_text(&self, text: &str) -> Result<(), PlatformError> {
+        self.with_clipboard("Could not write clipboard text", |cb| cb.set_text(text))
+    }
+
+    /// # Errors
+    ///
+    /// Returns a platform error when clipboard data cannot be read as text.
+    pub fn get_text(&self) -> Result<String, PlatformError> {
+        self.with_clipboard("Could not read clipboard text", Clipboard::get_text)
+    }
+
     fn with_clipboard<T>(
         &self,
         operation: &'static str,
@@ -70,16 +84,6 @@ impl WindowsClipboard {
             operation,
             source: Box::new(source),
         })
-    }
-}
-
-impl ClipboardAccess for WindowsClipboard {
-    fn set_text(&self, text: &str) -> Result<(), PlatformError> {
-        self.with_clipboard("Could not write clipboard text", |cb| cb.set_text(text))
-    }
-
-    fn get_text(&self) -> Result<String, PlatformError> {
-        self.with_clipboard("Could not read clipboard text", Clipboard::get_text)
     }
 }
 

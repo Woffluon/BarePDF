@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-pub mod buffer_pool;
 pub mod cache;
 mod error;
 pub mod memory_budget;

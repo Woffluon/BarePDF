@@ -3,14 +3,15 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use barepdf_core::{
     validate_page_selection, MemoryBudget, PageIndex, PdfError, Rotation, SecretPassword,
 };
+pub use barepdf_core::{CancellationToken, EncodedImageFormat, ImageEncodeError, ImageEncoder};
 
-use crate::backend::{PdfBackend, RawBitmap};
+use crate::backend::PdfBackend;
 use crate::text;
 
 const POINTS_PER_INCH: f64 = 72.0;
@@ -42,81 +43,6 @@ impl ConversionDpi {
             Self::Dpi300 => 300,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EncodedImageFormat {
-    Png,
-    Jpeg { quality: u8 },
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageEncodeError {
-    reason: String,
-    source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
-}
-
-impl ImageEncodeError {
-    #[must_use]
-    pub fn new(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-            source: None,
-        }
-    }
-
-    #[must_use]
-    pub fn with_source(
-        reason: impl Into<String>,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            reason: reason.into(),
-            source: Some(Arc::new(source)),
-        }
-    }
-
-    #[must_use]
-    pub fn from_io(source: io::Error) -> Self {
-        let reason = source.to_string();
-        Self::with_source(reason, source)
-    }
-}
-
-impl From<io::Error> for ImageEncodeError {
-    fn from(source: io::Error) -> Self {
-        Self::from_io(source)
-    }
-}
-
-impl fmt::Display for ImageEncodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.reason)
-    }
-}
-
-impl std::error::Error for ImageEncodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_deref()
-            .map(|error| error as &(dyn std::error::Error + 'static))
-    }
-}
-
-pub trait ImageEncoder: Send + Sync {
-    /// Encodes one tightly packed RGBA bitmap to a newly staged output file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the requested format is unsupported or the staged file cannot be
-    /// encoded completely.
-    fn encode_rgba(
-        &self,
-        output: &Path,
-        bitmap: &RawBitmap,
-        format: EncodedImageFormat,
-        dpi: u16,
-    ) -> Result<(), ImageEncodeError>;
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -152,34 +78,6 @@ impl std::fmt::Debug for JobPassword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("JobPassword")
             .field(&format_args!("[REDACTED]"))
-            .finish()
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
-
-impl CancellationToken {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
-
-impl fmt::Debug for CancellationToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationToken")
-            .field("cancelled", &self.is_cancelled())
             .finish()
     }
 }

@@ -1,4 +1,3 @@
-use crate::buffer_pool::BitmapBufferPool;
 use crate::cache::{BitmapCache, CacheKey};
 use crate::error::RenderError;
 use crate::memory_budget::{calculate_adaptive_memory_budget, SystemHardwareProfile};
@@ -10,7 +9,7 @@ use barepdf_pdf::{PdfBackend, PdfDocument, RawBitmap};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn emit_lossy_event(
@@ -50,10 +49,9 @@ pub(crate) struct RenderWorker<B> {
     backend: B,
     active_docs: lru::LruCache<DocumentId, Box<dyn PdfDocument>>,
     cache: BitmapCache,
-    #[allow(dead_code)]
-    buffer_pool: Arc<BitmapBufferPool>,
     current_generation: Arc<AtomicU64>,
     pending_renders: Arc<Mutex<HashSet<RenderRequestKey>>>,
+    invert_colors: Arc<AtomicBool>,
     shutdown_receiver: Receiver<()>,
     critical_event_sender: Sender<RenderEvent>,
     event_sender: Sender<RenderEvent>,
@@ -70,21 +68,26 @@ impl<B: PdfBackend> RenderWorker<B> {
         critical_event_sender: Sender<RenderEvent>,
         event_sender: Sender<RenderEvent>,
     ) -> Self {
-        let buffer_pool = Arc::new(BitmapBufferPool::new());
         Self {
             backend,
             active_docs: lru::LruCache::new(
                 std::num::NonZeroUsize::new(4).unwrap_or(std::num::NonZeroUsize::MIN),
             ),
-            cache: BitmapCache::with_buffer_pool(budget, buffer_pool.clone()),
-            buffer_pool,
+            cache: BitmapCache::new(budget),
             current_generation,
             pending_renders,
+            invert_colors: Arc::new(AtomicBool::new(false)),
             shutdown_receiver,
             critical_event_sender,
             event_sender,
             observability: RenderObservability::default(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_invert_colors(mut self, invert_colors: Arc<AtomicBool>) -> Self {
+        self.invert_colors = invert_colors;
+        self
     }
 
     #[allow(dead_code)]
@@ -125,23 +128,6 @@ impl<B: PdfBackend> RenderWorker<B> {
     #[must_use]
     pub(crate) const fn budget(&self) -> MemoryBudget {
         self.cache.budget()
-    }
-
-    #[allow(dead_code)]
-    #[must_use]
-    pub(crate) const fn buffer_pool(&self) -> &Arc<BitmapBufferPool> {
-        &self.buffer_pool
-    }
-
-    #[allow(dead_code)]
-    #[must_use]
-    pub(crate) fn checkout_buffer(&self, required_bytes: usize) -> Vec<u8> {
-        self.buffer_pool.checkout(required_bytes)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn recycle_buffer(&self, buffer: Vec<u8>) {
-        self.buffer_pool.recycle(buffer);
     }
 
     pub(crate) fn run(
@@ -257,12 +243,14 @@ impl<B: PdfBackend> RenderWorker<B> {
             self.observability.stale_work("generation");
             return true;
         }
+        let invert_colors = self.invert_colors.load(Ordering::Acquire);
         let cache_key = CacheKey {
             document_id: job.document_id,
             page_index: job.page_index,
             target_width: job.target_width,
             target_height: job.target_height,
             rotation: job.rotation,
+            invert_colors,
         };
         if let Some(bitmap) = self.cache.get(&cache_key) {
             self.observability.cache_hit();
@@ -279,9 +267,12 @@ impl<B: PdfBackend> RenderWorker<B> {
             job.target_height,
             job.rotation,
         ) {
-            Ok(bitmap) => {
+            Ok(mut bitmap) => {
                 if self.shutdown_requested() {
                     return false;
+                }
+                if invert_colors {
+                    bitmap.invert_rgb();
                 }
                 let bitmap = self.cache.insert(cache_key, bitmap);
                 self.emit_rendered(job, bitmap)
@@ -628,23 +619,24 @@ mod tests {
     }
 
     #[test]
-    fn worker_buffer_pool_checkout_and_recycle_lifecycle() {
-        let worker = create_test_worker(MemoryBudget::new(1024 * 1024));
-        let buf = worker.checkout_buffer(1024);
-        assert_eq!(buf.len(), 1024);
-        worker.recycle_buffer(buf);
-        let buf2 = worker.checkout_buffer(1024);
-        assert_eq!(buf2.len(), 1024);
-    }
-
-    #[test]
-    fn worker_evicted_bitmaps_are_recycled_into_buffer_pool() {
-        let mut worker = create_test_worker(MemoryBudget::new(8));
+    fn worker_evicts_least_recently_used_bitmap_when_budget_exceeded() {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, _event_rx) = unbounded();
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(8),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        );
         let doc_id = DocumentId::new(1);
-        worker.open_document(doc_id, Path::new("dummy.pdf"), None);
+        assert!(worker.open_document(doc_id, Path::new("dummy.pdf"), None));
 
         // Render page 1 (4 bytes: 1x1 RGBA)
-        worker.render_page(&RenderJob {
+        assert!(worker.render_page(&RenderJob {
             request_id: RequestId::new(1),
             generation: 1,
             document_id: doc_id,
@@ -654,10 +646,10 @@ mod tests {
             rotation: Rotation::Degrees0,
             priority: Priority::Visible,
             kind: RenderKind::Page,
-        });
+        }));
 
         // Render page 2 (4 bytes: 1x1 RGBA) -> total 8 bytes
-        worker.render_page(&RenderJob {
+        assert!(worker.render_page(&RenderJob {
             request_id: RequestId::new(2),
             generation: 1,
             document_id: doc_id,
@@ -667,10 +659,10 @@ mod tests {
             rotation: Rotation::Degrees0,
             priority: Priority::Visible,
             kind: RenderKind::Page,
-        });
+        }));
 
         // Render page 3 (4 bytes: 1x1 RGBA) -> evicts page 1 (budget is 8 bytes)
-        worker.render_page(&RenderJob {
+        assert!(worker.render_page(&RenderJob {
             request_id: RequestId::new(3),
             generation: 1,
             document_id: doc_id,
@@ -680,11 +672,42 @@ mod tests {
             rotation: Rotation::Degrees0,
             priority: Priority::Visible,
             kind: RenderKind::Page,
-        });
+        }));
 
-        // Page 1's 4-byte buffer was evicted and recycled into worker's buffer_pool!
-        let recycled = worker.checkout_buffer(4);
-        assert_eq!(recycled.len(), 4);
+        assert_eq!(worker.cache.current_bytes(), 8);
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc_id,
+                page_index: PageIndex::from_raw(1),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_none());
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc_id,
+                page_index: PageIndex::from_raw(2),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_some());
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc_id,
+                page_index: PageIndex::from_raw(3),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_some());
     }
 
     #[test]
@@ -750,5 +773,65 @@ mod tests {
             ),
             "expected PageRendered to be delivered losslessly"
         );
+    }
+
+    #[test]
+    fn worker_inverts_pixels_in_background_when_invert_colors_is_enabled() {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, event_rx) = unbounded();
+        let invert_flag = Arc::new(AtomicBool::new(false));
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(1024 * 1024),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        )
+        .with_invert_colors(Arc::clone(&invert_flag));
+
+        let doc_id = DocumentId::new(1);
+        assert!(worker.open_document(doc_id, Path::new("dummy.pdf"), None));
+
+        // 1. Render with invert_colors = false -> pixels are [0, 0, 0, 0]
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(1),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::zero(),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+        match event_rx.try_recv() {
+            Ok(RenderEvent::PageRendered { bitmap, .. }) => {
+                assert_eq!(bitmap.pixels(), &[0, 0, 0, 0]);
+            }
+            other => panic!("expected normal PageRendered event, got {other:?}"),
+        }
+
+        // 2. Enable invert_colors = true -> RGB channels become 255, alpha stays 0
+        invert_flag.store(true, Ordering::Release);
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(2),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::zero(),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+        match event_rx.try_recv() {
+            Ok(RenderEvent::PageRendered { bitmap, .. }) => {
+                assert_eq!(bitmap.pixels(), &[255, 255, 255, 0]);
+            }
+            other => panic!("expected inverted PageRendered event, got {other:?}"),
+        }
     }
 }

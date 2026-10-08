@@ -1,4 +1,4 @@
-use barepdf::controllers::bookmark_controller::BookmarkController;
+use barepdf::controllers::bookmark_controller;
 use barepdf_core::preferences::BookmarkEntry;
 use barepdf_core::types::PageIndex;
 
@@ -7,7 +7,7 @@ fn toggle_adds_bookmark_when_missing() {
     let mut bookmarks = Vec::new();
     let page = PageIndex::from_raw(5);
     let added =
-        BookmarkController::toggle_bookmark(&mut bookmarks, page, Some("My Bookmark".to_string()));
+        bookmark_controller::toggle_bookmark(&mut bookmarks, page, Some("My Bookmark".to_string()));
 
     assert!(added);
     assert_eq!(bookmarks.len(), 1);
@@ -23,7 +23,7 @@ fn toggle_removes_bookmark_when_present() {
         created_unix: 0,
     }];
     let page = PageIndex::from_raw(5);
-    let added = BookmarkController::toggle_bookmark(&mut bookmarks, page, None);
+    let added = bookmark_controller::toggle_bookmark(&mut bookmarks, page, None);
 
     assert!(!added);
     assert!(bookmarks.is_empty());
@@ -37,7 +37,7 @@ fn toggle_sorts_bookmarks_by_page() {
         created_unix: 0,
     }];
     let page = PageIndex::from_raw(2);
-    let _ = BookmarkController::toggle_bookmark(&mut bookmarks, page, Some("Page 2".to_string()));
+    let _ = bookmark_controller::toggle_bookmark(&mut bookmarks, page, Some("Page 2".to_string()));
 
     assert_eq!(bookmarks.len(), 2);
     assert_eq!(bookmarks[0].page_index, 2);
@@ -58,7 +58,7 @@ fn remove_bookmark_deletes_by_raw_page() {
             created_unix: 0,
         },
     ];
-    let removed = BookmarkController::remove_bookmark(&mut bookmarks, 3);
+    let removed = bookmark_controller::remove_bookmark(&mut bookmarks, 3);
 
     assert!(removed);
     assert_eq!(bookmarks.len(), 1);
@@ -72,7 +72,7 @@ fn rename_bookmark_changes_title_by_raw_page() {
         title: "Old Title".to_string(),
         created_unix: 0,
     }];
-    let renamed = BookmarkController::rename_bookmark(&mut bookmarks, 4, "New Title".to_string());
+    let renamed = bookmark_controller::rename_bookmark(&mut bookmarks, 4, "New Title".to_string());
 
     assert!(renamed);
     assert_eq!(bookmarks[0].title, "New Title");

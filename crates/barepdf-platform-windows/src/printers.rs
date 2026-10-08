@@ -56,13 +56,15 @@ pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
 
     let valid_count = (count as usize).min(buffer_bytes / std::mem::size_of::<PRINTER_INFO_4W>());
     let info_ptr = buffer.as_ptr().cast::<PRINTER_INFO_4W>();
+    let buffer_start = buffer.as_ptr() as usize;
+    let buffer_end = buffer_start.saturating_add(buffer_bytes);
     for i in 0..valid_count {
         // SAFETY: `info_ptr` is valid for `valid_count` items of PRINTER_INFO_4W.
         let info = unsafe { &*info_ptr.add(i) };
         if !info.pPrinterName.is_null() {
-            // SAFETY: `info.pPrinterName` points into `buffer` populated by `EnumPrintersW` and
-            // remains valid while `buffer` is alive.
-            let name = unsafe { wide_ptr_to_string(info.pPrinterName) };
+            // SAFETY: `wide_ptr_to_string` verifies that `info.pPrinterName` and its
+            // null-terminated UTF-16 sequence lie within `[buffer_start, buffer_end)`.
+            let name = unsafe { wide_ptr_to_string(info.pPrinterName, buffer_start, buffer_end) };
             if !name.is_empty() {
                 let is_default = default_name.as_deref() == Some(&name);
                 printers.push(InstalledPrinter { name, is_default });
@@ -95,22 +97,27 @@ fn get_default_printer_name() -> Option<String> {
     Some(OsString::from_wide(slice).to_string_lossy().into_owned())
 }
 
-unsafe fn wide_ptr_to_string(ptr: *const u16) -> String {
+unsafe fn wide_ptr_to_string(ptr: *const u16, buffer_start: usize, buffer_end: usize) -> String {
     if ptr.is_null() || !ptr.is_aligned() {
         return String::new();
     }
+    let addr = ptr as usize;
+    if addr < buffer_start || addr >= buffer_end {
+        return String::new();
+    }
+    let max_len = ((buffer_end - addr) / std::mem::size_of::<u16>()).min(1024);
     let mut len = 0;
-    while len < 1024 {
-        // SAFETY: Caller guarantees `ptr` points to a readable wide string (or buffer of at least
-        // 1024 `u16` elements if untrusted); `ptr` is non-null and aligned.
+    while len < max_len {
+        // SAFETY: `ptr` is non-null, aligned, and `len < max_len` guarantees `ptr.add(len)`
+        // stays within `[buffer_start, buffer_end)`.
         if unsafe { *ptr.add(len) } == 0 {
-            break;
+            // SAFETY: `ptr` is non-null, aligned, and verified readable for `len` contiguous `u16` units.
+            let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+            return OsString::from_wide(slice).to_string_lossy().into_owned();
         }
         len += 1;
     }
-    // SAFETY: `ptr` is non-null, aligned, and verified readable for `len` contiguous `u16` units.
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-    OsString::from_wide(slice).to_string_lossy().into_owned()
+    String::new()
 }
 
 #[cfg(test)]
@@ -148,24 +155,84 @@ mod tests {
     }
 
     #[test]
-    fn wide_ptr_to_string_rejects_null_and_unaligned_pointers() {
-        // SAFETY: `wide_ptr_to_string` explicitly checks for null before dereferencing.
-        assert_eq!(unsafe { wide_ptr_to_string(std::ptr::null()) }, "");
+    fn wide_ptr_to_string_reads_valid_utf16_within_buffer_bounds() {
+        let mut buffer: Vec<u16> = vec![0xFFFF, 0xFFFF];
+        buffer.extend("BarePDF Printer".encode_utf16());
+        buffer.push(0);
+        buffer.extend([0xAAAA, 0xBBBB]);
 
+        let buffer_start = buffer.as_ptr() as usize;
+        let buffer_end = buffer_start + buffer.len() * std::mem::size_of::<u16>();
+        // SAFETY: Offsetting by 2 elements stays within `buffer`.
+        let name_ptr = unsafe { buffer.as_ptr().add(2) };
+        // SAFETY: `name_ptr` points inside `[buffer_start, buffer_end)` to a null-terminated UTF-16 string.
+        let result = unsafe { wide_ptr_to_string(name_ptr, buffer_start, buffer_end) };
+        assert_eq!(result, "BarePDF Printer");
+    }
+
+    #[test]
+    fn wide_ptr_to_string_rejects_null_and_unaligned_pointers() {
         let buffer = [0x41u8, 0x00, 0x42u8, 0x00, 0x00, 0x00];
+        let buffer_start = buffer.as_ptr() as usize;
+        let buffer_end = buffer_start + buffer.len();
+
+        // SAFETY: `wide_ptr_to_string` explicitly checks for null before dereferencing.
+        let null_res = unsafe { wide_ptr_to_string(std::ptr::null(), buffer_start, buffer_end) };
+        assert_eq!(null_res, "");
+
         // SAFETY: Offsetting by 1 byte stays within `buffer`; pointer is not dereferenced when unaligned.
         let unaligned_ptr = unsafe { buffer.as_ptr().add(1).cast::<u16>() };
         assert!(!unaligned_ptr.is_aligned());
         // SAFETY: `wide_ptr_to_string` explicitly checks alignment before dereferencing.
-        assert_eq!(unsafe { wide_ptr_to_string(unaligned_ptr) }, "");
+        let unaligned_res = unsafe { wide_ptr_to_string(unaligned_ptr, buffer_start, buffer_end) };
+        assert_eq!(unaligned_res, "");
     }
 
     #[test]
-    fn wide_ptr_to_string_limits_reading_to_1024_chars() {
-        let non_terminated = vec![0x0041u16; 2048];
-        // SAFETY: `non_terminated` is a valid aligned slice of 2048 `u16` elements (>= 1024 cap).
-        let result = unsafe { wide_ptr_to_string(non_terminated.as_ptr()) };
-        assert_eq!(result.len(), 1024);
+    fn wide_ptr_to_string_rejects_out_of_bounds_and_unterminated_pointers() {
+        let buffer: Vec<u16> = "Printer\0".encode_utf16().collect();
+        let buffer_start = buffer.as_ptr() as usize;
+        let buffer_end = buffer_start + buffer.len() * std::mem::size_of::<u16>();
+
+        // Pointer before buffer_start
+        // SAFETY: `wide_ptr_to_string` rejects pointers below `buffer_start` before dereferencing.
+        let before_start = unsafe {
+            wide_ptr_to_string(
+                buffer.as_ptr(),
+                buffer_start + std::mem::size_of::<u16>(),
+                buffer_end,
+            )
+        };
+        assert_eq!(before_start, "");
+
+        // Pointer at buffer_end (one past end)
+        // SAFETY: `buffer.as_ptr().add(buffer.len())` is a valid one-past-end pointer and is not dereferenced.
+        let one_past_end = unsafe { buffer.as_ptr().add(buffer.len()) };
+        // SAFETY: `wide_ptr_to_string` rejects pointers `>= buffer_end` before dereferencing.
+        let past_end_res = unsafe { wide_ptr_to_string(one_past_end, buffer_start, buffer_end) };
+        assert_eq!(past_end_res, "");
+
+        // Trailing 1-byte slice (insufficient for a single u16)
+        // SAFETY: `wide_ptr_to_string` checks remaining byte length before dereferencing.
+        let short_res =
+            unsafe { wide_ptr_to_string(buffer.as_ptr(), buffer_start, buffer_start + 1) };
+        assert_eq!(short_res, "");
+
+        // Non-terminated buffer within bounds
+        let non_terminated = [0x0041u16; 16];
+        let nt_start = non_terminated.as_ptr() as usize;
+        let nt_end = nt_start + non_terminated.len() * std::mem::size_of::<u16>();
+        // SAFETY: `non_terminated` is valid for `[nt_start, nt_end)`; missing null terminator is rejected safely.
+        let nt_res = unsafe { wide_ptr_to_string(non_terminated.as_ptr(), nt_start, nt_end) };
+        assert_eq!(nt_res, "");
+
+        // Non-terminated buffer exceeding 1024-char cap
+        let oversized = vec![0x0041u16; 2048];
+        let over_start = oversized.as_ptr() as usize;
+        let over_end = over_start + oversized.len() * std::mem::size_of::<u16>();
+        // SAFETY: `oversized` is valid for `[over_start, over_end)`; missing null terminator within 1024 chars is rejected.
+        let over_res = unsafe { wide_ptr_to_string(oversized.as_ptr(), over_start, over_end) };
+        assert_eq!(over_res, "");
     }
 
     #[test]

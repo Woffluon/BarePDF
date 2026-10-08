@@ -1,4 +1,3 @@
-use barepdf_platform::FileDialogs;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::path::PathBuf;
 
@@ -24,32 +23,37 @@ pub fn ask_yes_no(title: &str, description: &str) -> bool {
         == MessageDialogResult::Yes
 }
 
-impl FileDialogs for WindowsFileDialogs {
-    fn pick_file(&self) -> Option<PathBuf> {
+impl WindowsFileDialogs {
+    #[must_use]
+    pub fn pick_file(&self) -> Option<PathBuf> {
         FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
             .pick_file()
     }
 
-    fn pick_multiple_files(&self) -> Vec<PathBuf> {
+    #[must_use]
+    pub fn pick_multiple_files(&self) -> Vec<PathBuf> {
         FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
             .pick_files()
             .unwrap_or_default()
     }
 
-    fn save_file(&self, default_name: &str) -> Option<PathBuf> {
+    #[must_use]
+    pub fn save_file(&self, default_name: &str) -> Option<PathBuf> {
         FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
             .set_file_name(default_name)
             .save_file()
     }
 
-    fn pick_directory(&self) -> Option<PathBuf> {
+    #[must_use]
+    pub fn pick_directory(&self) -> Option<PathBuf> {
         FileDialog::new().pick_folder()
     }
 
-    fn pick_image_file(&self) -> Option<PathBuf> {
+    #[must_use]
+    pub fn pick_image_file(&self) -> Option<PathBuf> {
         FileDialog::new()
             .add_filter("Image", &["png", "jpg", "jpeg"])
             .pick_file()

@@ -1,4 +1,3 @@
-use crate::buffer_pool::BitmapBufferPool;
 use barepdf_core::{DocumentId, MemoryBudget, PageIndex, Rotation};
 use barepdf_pdf::RawBitmap;
 use lru::LruCache;
@@ -12,36 +11,23 @@ pub struct CacheKey {
     pub target_width: u32,
     pub target_height: u32,
     pub rotation: Rotation,
+    pub invert_colors: bool,
 }
 
 pub struct BitmapCache {
     cache: LruCache<CacheKey, Arc<RawBitmap>>,
     current_bytes: usize,
     budget_bytes: usize,
-    buffer_pool: Option<Arc<BitmapBufferPool>>,
 }
 
 impl BitmapCache {
     #[must_use]
     pub fn new(budget: MemoryBudget) -> Self {
-        Self::with_optional_buffer_pool(budget, None)
-    }
-
-    #[must_use]
-    pub fn with_buffer_pool(budget: MemoryBudget, buffer_pool: Arc<BitmapBufferPool>) -> Self {
-        Self::with_optional_buffer_pool(budget, Some(buffer_pool))
-    }
-
-    fn with_optional_buffer_pool(
-        budget: MemoryBudget,
-        buffer_pool: Option<Arc<BitmapBufferPool>>,
-    ) -> Self {
         Self {
             // High capacity bound; memory byte budget controls eviction
             cache: LruCache::new(NonZeroUsize::new(1000).unwrap_or(NonZeroUsize::MIN)),
             current_bytes: 0,
             budget_bytes: budget.get(),
-            buffer_pool,
         }
     }
 
@@ -57,13 +43,11 @@ impl BitmapCache {
         }
         if let Some(old) = self.cache.pop(&key) {
             self.current_bytes = self.current_bytes.saturating_sub(old.pixels().len());
-            self.recycle_bitmap(old);
         }
         self.evict_for(bitmap_bytes);
 
         if let Some((_, old)) = self.cache.push(key, arc_bitmap.clone()) {
             self.current_bytes = self.current_bytes.saturating_sub(old.pixels().len());
-            self.recycle_bitmap(old);
         }
         self.current_bytes += bitmap_bytes;
         arc_bitmap
@@ -75,7 +59,6 @@ impl BitmapCache {
         {
             if let Some((_, popped)) = self.cache.pop_lru() {
                 self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
-                self.recycle_bitmap(popped);
             }
         }
     }
@@ -84,7 +67,6 @@ impl BitmapCache {
         while self.current_bytes > self.budget_bytes && !self.cache.is_empty() {
             if let Some((_, popped)) = self.cache.pop_lru() {
                 self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
-                self.recycle_bitmap(popped);
             }
         }
     }
@@ -107,15 +89,11 @@ impl BitmapCache {
         {
             if let Some(popped) = self.cache.pop(&key) {
                 self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
-                self.recycle_bitmap(popped);
             }
         }
     }
 
     pub fn clear(&mut self) {
-        while let Some((_, popped)) = self.cache.pop_lru() {
-            self.recycle_bitmap(popped);
-        }
         self.cache.clear();
         self.current_bytes = 0;
     }
@@ -123,20 +101,6 @@ impl BitmapCache {
     #[must_use]
     pub const fn current_bytes(&self) -> usize {
         self.current_bytes
-    }
-
-    #[must_use]
-    pub fn buffer_pool(&self) -> Option<&Arc<BitmapBufferPool>> {
-        self.buffer_pool.as_ref()
-    }
-
-    fn recycle_bitmap(&self, bitmap: Arc<RawBitmap>) {
-        if let Some(pool) = &self.buffer_pool {
-            if let Ok(raw) = Arc::try_unwrap(bitmap) {
-                let (_, _, pixels) = raw.into_parts();
-                pool.recycle(pixels);
-            }
-        }
     }
 }
 
@@ -151,6 +115,7 @@ mod tests {
             target_width: 1,
             target_height: 1,
             rotation: Rotation::Degrees0,
+            invert_colors: false,
         }
     }
 
@@ -187,14 +152,13 @@ mod tests {
     }
 
     #[test]
-    fn evict_document_removes_only_target_document_and_recycles_buffers() {
-        let pool = Arc::new(BitmapBufferPool::new());
-        let mut cache = BitmapCache::with_buffer_pool(MemoryBudget::new(100), pool.clone());
-        cache.insert(key(1), bitmap());
-        cache.insert(key(2), bitmap());
+    fn evict_document_removes_only_target_document_and_drops_bitmaps() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(100));
+        let weak_p1 = Arc::downgrade(&cache.insert(key(1), bitmap()));
+        let weak_p2 = Arc::downgrade(&cache.insert(key(2), bitmap()));
         let mut key_doc2 = key(1);
         key_doc2.document_id = DocumentId::new(2);
-        cache.insert(key_doc2, bitmap());
+        let weak_doc2 = Arc::downgrade(&cache.insert(key_doc2, bitmap()));
 
         assert_eq!(cache.current_bytes(), 12);
         cache.evict_document(DocumentId::new(1));
@@ -202,7 +166,9 @@ mod tests {
         assert!(cache.get(&key(1)).is_none());
         assert!(cache.get(&key(2)).is_none());
         assert!(cache.get(&key_doc2).is_some());
-        assert_eq!(pool.checkout(4).len(), 4);
+        assert!(weak_p1.upgrade().is_none());
+        assert!(weak_p2.upgrade().is_none());
+        assert!(weak_doc2.upgrade().is_some());
     }
 
     #[test]
@@ -227,21 +193,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_with_buffer_pool_recycles_evicted_buffers() {
-        let pool = Arc::new(BitmapBufferPool::new());
-        let mut cache = BitmapCache::with_buffer_pool(MemoryBudget::new(8), pool.clone());
+    fn evicted_and_cleared_bitmaps_are_dropped_immediately() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(8));
 
-        cache.insert(key(1), bitmap());
-        cache.insert(key(2), bitmap());
+        let weak_1 = Arc::downgrade(&cache.insert(key(1), bitmap()));
+        let weak_2 = Arc::downgrade(&cache.insert(key(2), bitmap()));
         assert_eq!(cache.current_bytes(), 8);
+        assert!(weak_1.upgrade().is_some());
 
-        // Inserting key(3) will evict key(1)
-        cache.insert(key(3), bitmap());
+        // Inserting key(3) evicts key(1) and drops its allocation immediately
+        let weak_3 = Arc::downgrade(&cache.insert(key(3), bitmap()));
         assert_eq!(cache.current_bytes(), 8);
+        assert!(weak_1.upgrade().is_none());
+        assert!(weak_2.upgrade().is_some());
+        assert!(weak_3.upgrade().is_some());
 
-        // The evicted bitmap buffer should be in the pool
-        let recycled = pool.checkout(4);
-        assert_eq!(recycled.len(), 4);
+        cache.clear();
+        assert_eq!(cache.current_bytes(), 0);
+        assert!(weak_2.upgrade().is_none());
+        assert!(weak_3.upgrade().is_none());
     }
 
     #[test]
@@ -258,5 +228,31 @@ mod tests {
         assert!(cache.get(&key(1)).is_none());
         assert!(cache.get(&key(2)).is_some());
         assert!(cache.get(&key(3)).is_some());
+    }
+
+    #[test]
+    fn invert_colors_keys_are_cached_independently() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(16));
+        let normal_key = key(1);
+        let mut inverted_key = key(1);
+        inverted_key.invert_colors = true;
+
+        let normal_bmp =
+            RawBitmap::new(1, 1, vec![10, 20, 30, 255]).expect("valid normal RGBA bitmap");
+        let inverted_bmp =
+            RawBitmap::new(1, 1, vec![245, 235, 225, 255]).expect("valid inverted RGBA bitmap");
+
+        cache.insert(normal_key, normal_bmp);
+        cache.insert(inverted_key, inverted_bmp);
+
+        assert_eq!(cache.current_bytes(), 8);
+        assert_eq!(
+            cache.get(&normal_key).map(|b| b.pixels().to_vec()),
+            Some(vec![10, 20, 30, 255])
+        );
+        assert_eq!(
+            cache.get(&inverted_key).map(|b| b.pixels().to_vec()),
+            Some(vec![245, 235, 225, 255])
+        );
     }
 }

@@ -1,0 +1,10 @@
+# Cargo build configuration for BarePDF.
+# Remap workspace source paths out of compiled objects, debuginfo, and macro expansions
+# while keeping compiler/Clippy diagnostic paths intact for developer tooling.
+# Release staging (`packaging/windows/scripts/stage-release.ps1`) additionally remaps
+# machine-specific absolute paths (`$RepoRoot`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$USERPROFILE`).
+[build]
+rustflags = [
+    "--remap-path-prefix=.=/barepdf",
+    "--remap-path-scope=object,debuginfo,macro",
+]

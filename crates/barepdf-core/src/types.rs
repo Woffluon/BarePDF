@@ -1,8 +1,38 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::limits::MAX_DOCUMENT_PAGES;
+
+#[derive(Clone, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+impl fmt::Debug for CancellationToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CancellationToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageCount(u32);
@@ -84,6 +114,11 @@ impl PageIndex {
 
     #[must_use]
     pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
         self.0
     }
 

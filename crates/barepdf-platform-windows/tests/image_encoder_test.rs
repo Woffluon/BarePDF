@@ -1,5 +1,4 @@
-use barepdf_pdf::conversion::{EncodedImageFormat, ImageEncoder};
-use barepdf_pdf::RawBitmap;
+use barepdf_core::{EncodedImageFormat, ImageEncoder, RawBitmap};
 use barepdf_platform_windows::WindowsImageEncoder;
 use tempfile::tempdir;
 

@@ -4,8 +4,7 @@ use std::marker::PhantomData;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use barepdf_pdf::conversion::{EncodedImageFormat, ImageEncodeError, ImageEncoder};
-use barepdf_pdf::RawBitmap;
+use barepdf_core::{EncodedImageFormat, ImageEncodeError, ImageEncoder, RawBitmap};
 use windows::core::{PCWSTR, PWSTR, VARIANT};
 use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Imaging::{
@@ -275,6 +274,7 @@ fn write_jpeg_rows(
 }
 
 fn wic_error(operation: &'static str, error: windows::core::Error) -> ImageEncodeError {
+    tracing::warn!(operation, hresult = ?error.code(), "WIC imaging operation failed");
     ImageEncodeError::new(format!("{operation}: {error}"))
 }
 
@@ -340,6 +340,7 @@ impl ComApartment {
                 _not_send_or_sync: PhantomData,
             })
         } else {
+            tracing::warn!(hresult = ?result, "Failed to initialize COM apartment for WIC");
             Err(ImageEncodeError::new(format!(
                 "could not initialize COM for WIC: {}",
                 windows::core::Error::from_hresult(result)

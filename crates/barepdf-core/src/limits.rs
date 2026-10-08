@@ -105,4 +105,18 @@ mod tests {
         assert_eq!(MAX_OUTLINE_DEPTH, 128);
         assert_eq!(MAX_OUTLINE_ITEMS, 4_096);
     }
+
+    #[test]
+    fn sanitize_render_dimensions_accepts_safe_bounds_and_rejects_zero_or_excess() {
+        assert_eq!(sanitize_render_dimensions(1, 1).unwrap(), (1, 1));
+        assert_eq!(
+            sanitize_render_dimensions(MAX_SAFE_RENDER_DIMENSION, MAX_SAFE_RENDER_DIMENSION)
+                .unwrap(),
+            (MAX_SAFE_RENDER_DIMENSION, MAX_SAFE_RENDER_DIMENSION)
+        );
+        assert!(sanitize_render_dimensions(0, 100).is_err());
+        assert!(sanitize_render_dimensions(100, 0).is_err());
+        assert!(sanitize_render_dimensions(MAX_SAFE_RENDER_DIMENSION + 1, 100).is_err());
+        assert!(sanitize_render_dimensions(100, MAX_SAFE_RENDER_DIMENSION + 1).is_err());
+    }
 }

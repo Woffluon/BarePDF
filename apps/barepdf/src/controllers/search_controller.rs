@@ -4,89 +4,85 @@ use barepdf_core::layout::ContinuousLayout;
 use barepdf_core::search::{SearchMatch, SearchQuery};
 use barepdf_core::types::{PageIndex, PageTextGeometry};
 
-pub struct SearchController;
+#[must_use]
+pub fn execute_search(
+    query: &SearchQuery,
+    geometries: &HashMap<u32, PageTextGeometry>,
+    page_count: u32,
+) -> Vec<SearchMatch> {
+    let mut all_matches = Vec::new();
+    let mut global_index = 0;
 
-impl SearchController {
-    #[must_use]
-    pub fn execute_search(
-        query: &SearchQuery,
-        geometries: &HashMap<u32, PageTextGeometry>,
-        page_count: u32,
-    ) -> Vec<SearchMatch> {
-        let mut all_matches = Vec::new();
-        let mut global_index = 0;
+    for page_idx in 0..page_count {
+        if let Some(geom) = geometries.get(&page_idx) {
+            let ranges = query.find_in_geometry(geom);
+            for range in ranges {
+                let mut glyph_boxes = Vec::new();
+                let start = range.start as usize;
+                let end = range.end as usize;
 
-        for page_idx in 0..page_count {
-            if let Some(geom) = geometries.get(&page_idx) {
-                let ranges = query.find_in_geometry(geom);
-                for range in ranges {
-                    let mut glyph_boxes = Vec::new();
-                    let start = range.start as usize;
-                    let end = range.end as usize;
-
-                    if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
-                        glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
-                    }
-
-                    all_matches.push(SearchMatch {
-                        page_index: PageIndex::from_raw(page_idx),
-                        match_index_in_doc: global_index,
-                        char_range: range,
-                        glyph_boxes,
-                    });
-                    global_index += 1;
+                if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
+                    glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
                 }
+
+                all_matches.push(SearchMatch {
+                    page_index: PageIndex::from_raw(page_idx),
+                    match_index_in_doc: global_index,
+                    char_range: range,
+                    glyph_boxes,
+                });
+                global_index += 1;
             }
         }
-        all_matches
     }
+    all_matches
+}
 
-    #[must_use]
-    pub fn next_match(current: usize, total: usize) -> usize {
-        if total == 0 {
-            0
-        } else {
-            (current + 1) % total
-        }
+#[must_use]
+pub fn next_match(current: usize, total: usize) -> usize {
+    if total == 0 {
+        0
+    } else {
+        (current + 1) % total
     }
+}
 
-    #[must_use]
-    pub fn prev_match(current: usize, total: usize) -> usize {
-        if total == 0 {
-            0
-        } else if current == 0 {
-            total - 1
-        } else {
-            current - 1
-        }
+#[must_use]
+pub fn prev_match(current: usize, total: usize) -> usize {
+    if total == 0 {
+        0
+    } else if current == 0 {
+        total - 1
+    } else {
+        current - 1
     }
+}
 
-    #[must_use]
-    pub fn match_summary(current: usize, total: usize) -> String {
-        if total == 0 {
-            "0 / 0".to_string()
-        } else {
-            format!("{} / {}", current + 1, total)
-        }
+#[must_use]
+pub fn match_summary(current: usize, total: usize) -> String {
+    if total == 0 {
+        "0 / 0".to_string()
+    } else {
+        format!("{} / {}", current + 1, total)
     }
+}
 
-    #[must_use]
-    pub fn get_scroll_target_for_match(
-        match_item: &SearchMatch,
-        layout: &ContinuousLayout,
-    ) -> Option<f32> {
-        if let Some(first_glyph) = match_item.glyph_boxes.first() {
-            let page_offset = layout
-                .pages
-                .iter()
-                .find(|p| p.page_index == match_item.page_index)
-                .map(|p| p.y_offset)
-                .unwrap_or(0.0);
+#[must_use]
+pub fn get_scroll_target_for_match(
+    match_item: &SearchMatch,
+    layout: &ContinuousLayout,
+) -> Option<f32> {
+    if let Some(first_glyph) = match_item.glyph_boxes.first() {
+        let page_offset = layout
+            .pages
+            .iter()
+            .find(|p| p.page_index == match_item.page_index)
+            .map(|p| p.y_offset)
+            .unwrap_or(0.0);
 
-            Some(page_offset + first_glyph.y)
-        } else {
-            None
-        }
+        Some(page_offset + first_glyph.y)
+    } else {
+        None
     }
 }
 
@@ -145,7 +141,7 @@ mod tests {
         );
 
         let query = SearchQuery::new("app".to_string(), false, false).unwrap();
-        let matches = SearchController::execute_search(&query, &geometries, 1);
+        let matches = execute_search(&query, &geometries, 1);
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].page_index.get(), 0);
@@ -158,26 +154,26 @@ mod tests {
     fn execute_search_handles_empty_geometry() {
         let geometries = HashMap::new();
         let query = SearchQuery::new("app".to_string(), false, false).unwrap();
-        let matches = SearchController::execute_search(&query, &geometries, 1);
+        let matches = execute_search(&query, &geometries, 1);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_match_rotation() {
-        assert_eq!(SearchController::next_match(0, 5), 1);
-        assert_eq!(SearchController::next_match(4, 5), 0); // circular
-        assert_eq!(SearchController::next_match(0, 0), 0);
+        assert_eq!(next_match(0, 5), 1);
+        assert_eq!(next_match(4, 5), 0); // circular
+        assert_eq!(next_match(0, 0), 0);
 
-        assert_eq!(SearchController::prev_match(1, 5), 0);
-        assert_eq!(SearchController::prev_match(0, 5), 4); // circular
-        assert_eq!(SearchController::prev_match(0, 0), 0);
+        assert_eq!(prev_match(1, 5), 0);
+        assert_eq!(prev_match(0, 5), 4); // circular
+        assert_eq!(prev_match(0, 0), 0);
     }
 
     #[test]
     fn test_match_summary() {
-        assert_eq!(SearchController::match_summary(0, 0), "0 / 0");
-        assert_eq!(SearchController::match_summary(0, 5), "1 / 5");
-        assert_eq!(SearchController::match_summary(4, 5), "5 / 5");
+        assert_eq!(match_summary(0, 0), "0 / 0");
+        assert_eq!(match_summary(0, 5), "1 / 5");
+        assert_eq!(match_summary(4, 5), "5 / 5");
     }
 
     #[test]
@@ -214,7 +210,7 @@ mod tests {
             max_width: 100,
         };
 
-        let target = SearchController::get_scroll_target_for_match(&match_item, &layout);
+        let target = get_scroll_target_for_match(&match_item, &layout);
         assert_eq!(target, Some(160.0)); // 110.0 + 50.0
     }
 }

@@ -11,6 +11,7 @@ description = "PDF Backend traits and PDFium engine adapter for BarePDF"
 [dependencies]
 barepdf-core = { path = "../barepdf-core" }
 pdfium-render.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

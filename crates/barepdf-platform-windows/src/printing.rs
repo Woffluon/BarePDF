@@ -107,10 +107,23 @@ impl WindowsPrinterDialog {
             PrintOrientation::from_index(orientation_index),
             PrintDuplex::OneSided,
         );
-        let Some(selection) = ffi::show_print_dialog(self.owner, page_count.get(), options)? else {
+        let Some(selection) = ffi::show_print_dialog(self.owner, page_count.get(), options)
+            .inspect_err(|error| {
+                tracing::warn!(job_id = job_id.get(), %error, "Native print dialog failed");
+            })?
+        else {
+            tracing::debug!(job_id = job_id.get(), "User cancelled native print dialog");
             return Ok(None);
         };
-        selection_from_dialog(selection, job_id, page_count, self.target_dpi).map(Some)
+        selection_from_dialog(selection, job_id, page_count, self.target_dpi)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    job_id = job_id.get(),
+                    %error,
+                    "Native print dialog returned invalid selection"
+                );
+            })
+            .map(Some)
     }
 }
 
@@ -180,7 +193,15 @@ impl WindowsPrinterSink {
         duplex: PrintDuplex,
         copies: u16,
     ) -> Result<Self, PrintError> {
-        let device = ffi::create_direct_printer_device(printer_name, orientation, duplex, copies)?;
+        let device = ffi::create_direct_printer_device(printer_name, orientation, duplex, copies)
+            .inspect_err(|error| {
+            tracing::warn!(
+                job_id = job_id.get(),
+                target_dpi,
+                %error,
+                "Failed to create direct Windows printer device"
+            );
+        })?;
         Ok(Self {
             job_id,
             target_dpi,
@@ -204,19 +225,33 @@ impl PrinterSink for WindowsPrinterSink {
             return Err(PrintError::InvalidState);
         }
         let device = self.device.take().ok_or(PrintError::InvalidState)?;
-        self.job = Some(device.start_document(title)?);
+        let job_id = self.job_id.get();
+        self.job = Some(device.start_document(title).inspect_err(|error| {
+            tracing::warn!(job_id, %error, "Failed to start Windows print spool document");
+        })?);
         Ok(())
     }
 
     fn write_page(&mut self, page: PrintPage<'_>) -> Result<(), PrintError> {
+        let job_id = self.job_id.get();
         self.job
             .as_mut()
             .ok_or(PrintError::InvalidState)?
             .write_page(page)
+            .inspect_err(|error| {
+                tracing::warn!(job_id, %error, "Failed to spool page to Windows printer");
+            })
     }
 
     fn finish(mut self: Box<Self>) -> Result<(), PrintError> {
-        self.job.take().ok_or(PrintError::InvalidState)?.finish()
+        let job_id = self.job_id.get();
+        self.job
+            .take()
+            .ok_or(PrintError::InvalidState)?
+            .finish()
+            .inspect_err(|error| {
+                tracing::warn!(job_id, %error, "Failed to finish Windows print spool job");
+            })
     }
 }
 

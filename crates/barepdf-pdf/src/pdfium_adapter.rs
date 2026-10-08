@@ -73,7 +73,11 @@ impl PdfiumEngine {
     ///
     /// Returns a platform error when the sibling `PDFium` library cannot be located or bound.
     pub fn new() -> Result<Self, PdfError> {
-        process_pdfium().map(|pdfium| Self { pdfium })
+        process_pdfium()
+            .map(|pdfium| Self { pdfium })
+            .inspect_err(|error| {
+                tracing::warn!(%error, "Failed to initialize PDFium engine");
+            })
     }
 }
 
@@ -146,6 +150,27 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         target_height: u32,
         rotation: Rotation,
     ) -> Result<RawBitmap, PdfError> {
+        let (target_width, target_height) =
+            barepdf_core::limits::sanitize_render_dimensions(target_width, target_height).map_err(
+                |error| {
+                    tracing::warn!(
+                        page_index = page_index.as_u32(),
+                        target_width,
+                        target_height,
+                        "Rejected out-of-bounds render dimensions"
+                    );
+                    match error {
+                        PdfError::RenderingFailed { reason, .. } => PdfError::RenderingFailed {
+                            page_index: page_index.as_u32(),
+                            reason,
+                        },
+                        other => PdfError::RenderingFailed {
+                            page_index: page_index.as_u32(),
+                            reason: other.to_string(),
+                        },
+                    }
+                },
+            )?;
         let target_width = i32::try_from(target_width).map_err(|_| PdfError::RenderingFailed {
             page_index: page_index.get(),
             reason: "target width exceeds PDFium's supported range".into(),
@@ -176,12 +201,18 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             .rotate(pdfium_rotation, true)
             .limit_render_image_cache_size(true);
 
-        let bitmap =
-            page.render_with_config(&render_config)
-                .map_err(|e| PdfError::RenderingFailed {
-                    page_index: page_index.get(),
-                    reason: e.to_string(),
-                })?;
+        let bitmap = page.render_with_config(&render_config).map_err(|e| {
+            tracing::warn!(
+                page_index = page_index.as_u32(),
+                target_width,
+                target_height,
+                "PDFium page render failed"
+            );
+            PdfError::RenderingFailed {
+                page_index: page_index.get(),
+                reason: e.to_string(),
+            }
+        })?;
 
         let w = u32::try_from(bitmap.width()).map_err(|_| PdfError::RenderingFailed {
             page_index: page_index.get(),
@@ -440,6 +471,10 @@ fn to_pdfium_index(index: PageIndex) -> Result<i32, PdfError> {
 fn map_load_error(error: PdfiumError, password_supplied: bool) -> PdfError {
     match error {
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+            tracing::debug!(
+                password_supplied,
+                "PDFium document open requires or rejected password"
+            );
             if password_supplied {
                 PdfError::IncorrectPassword
             } else {
@@ -447,23 +482,29 @@ fn map_load_error(error: PdfiumError, password_supplied: bool) -> PdfError {
             }
         }
         error @ PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FileError) => {
+            tracing::warn!("PDFium reported file access error while opening document");
             PdfError::FileAccess {
                 source: Arc::new(error),
             }
         }
         error @ PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
+            tracing::warn!("PDFium reported invalid PDF format error while opening document");
             PdfError::InvalidPdf {
                 source: Arc::new(error),
             }
         }
         error @ PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::SecurityError) => {
+            tracing::warn!("PDFium reported unsupported encryption while opening document");
             PdfError::UnsupportedEncryption {
                 source: Arc::new(error),
             }
         }
-        error => PdfError::Backend {
-            source: Arc::new(error),
-        },
+        error => {
+            tracing::warn!("PDFium reported backend error while opening document");
+            PdfError::Backend {
+                source: Arc::new(error),
+            }
+        }
     }
 }
 
@@ -569,7 +610,7 @@ mod tests {
         coalesce_glyphs_into_spans, validate_glyph_count, validate_loaded_page_count,
         validate_outline_limits, RawGlyph, ZeroizingFfiPassword, MAX_TEXT_GLYPHS_PER_PAGE,
     };
-    use barepdf_core::limits::MAX_DOCUMENT_PAGES;
+    use barepdf_core::limits::{sanitize_render_dimensions, MAX_DOCUMENT_PAGES};
     use barepdf_core::{PageIndex, PdfError, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS};
     use pdfium_render::prelude::PdfPageIndex;
 
@@ -584,6 +625,19 @@ mod tests {
     fn glyph_limit_rejects_oversized_page_geometry() {
         assert!(validate_glyph_count(PageIndex::zero(), MAX_TEXT_GLYPHS_PER_PAGE).is_ok());
         assert!(validate_glyph_count(PageIndex::zero(), MAX_TEXT_GLYPHS_PER_PAGE + 1).is_err());
+    }
+
+    #[test]
+    fn render_dimensions_reject_zero_and_oversized_bounds() {
+        assert!(matches!(
+            sanitize_render_dimensions(8193, 100),
+            Err(PdfError::RenderingFailed { .. })
+        ));
+        assert!(matches!(
+            sanitize_render_dimensions(0, 100),
+            Err(PdfError::RenderingFailed { .. })
+        ));
+        assert_eq!(sanitize_render_dimensions(8192, 100).unwrap(), (8192, 100));
     }
 
     #[test]

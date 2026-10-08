@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use barepdf::controllers::search_controller::SearchController;
+use barepdf::controllers::search_controller;
 use barepdf_core::layout::{ContinuousLayout, PageLayoutBox};
 use barepdf_core::search::{SearchMatch, SearchQuery};
 use barepdf_core::types::{GlyphRect, PageIndex, PageTextGeometry};
@@ -54,7 +54,7 @@ fn execute_search_finds_matches_across_pages() {
     );
 
     let query = SearchQuery::new("app".to_string(), false, false).unwrap();
-    let matches = SearchController::execute_search(&query, &geometries, 1);
+    let matches = search_controller::execute_search(&query, &geometries, 1);
 
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].page_index.get(), 0);
@@ -67,26 +67,26 @@ fn execute_search_finds_matches_across_pages() {
 fn execute_search_handles_empty_geometry() {
     let geometries = HashMap::new();
     let query = SearchQuery::new("app".to_string(), false, false).unwrap();
-    let matches = SearchController::execute_search(&query, &geometries, 1);
+    let matches = search_controller::execute_search(&query, &geometries, 1);
     assert!(matches.is_empty());
 }
 
 #[test]
 fn test_match_rotation() {
-    assert_eq!(SearchController::next_match(0, 5), 1);
-    assert_eq!(SearchController::next_match(4, 5), 0); // circular
-    assert_eq!(SearchController::next_match(0, 0), 0);
+    assert_eq!(search_controller::next_match(0, 5), 1);
+    assert_eq!(search_controller::next_match(4, 5), 0); // circular
+    assert_eq!(search_controller::next_match(0, 0), 0);
 
-    assert_eq!(SearchController::prev_match(1, 5), 0);
-    assert_eq!(SearchController::prev_match(0, 5), 4); // circular
-    assert_eq!(SearchController::prev_match(0, 0), 0);
+    assert_eq!(search_controller::prev_match(1, 5), 0);
+    assert_eq!(search_controller::prev_match(0, 5), 4); // circular
+    assert_eq!(search_controller::prev_match(0, 0), 0);
 }
 
 #[test]
 fn test_match_summary() {
-    assert_eq!(SearchController::match_summary(0, 0), "0 / 0");
-    assert_eq!(SearchController::match_summary(0, 5), "1 / 5");
-    assert_eq!(SearchController::match_summary(4, 5), "5 / 5");
+    assert_eq!(search_controller::match_summary(0, 0), "0 / 0");
+    assert_eq!(search_controller::match_summary(0, 5), "1 / 5");
+    assert_eq!(search_controller::match_summary(4, 5), "5 / 5");
 }
 
 #[test]
@@ -123,6 +123,6 @@ fn get_scroll_target_computes_correct_offset() {
         max_width: 100,
     };
 
-    let target = SearchController::get_scroll_target_for_match(&match_item, &layout);
+    let target = search_controller::get_scroll_target_for_match(&match_item, &layout);
     assert_eq!(target, Some(160.0)); // 110.0 + 50.0
 }

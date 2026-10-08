@@ -1,33 +1,8 @@
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use crate::types::{GlyphRect, PageIndex, PageTextGeometry};
 
-#[derive(Clone)]
-pub struct SearchCancellationToken(Arc<AtomicBool>);
-
-impl SearchCancellationToken {
-    #[must_use]
-    pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
-    }
-}
-
-impl Default for SearchCancellationToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub type SearchCancellationToken = crate::CancellationToken;
 
 pub struct SearchQuery {
     pub text: String,

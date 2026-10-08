@@ -10,9 +10,38 @@ $CargoPath = Get-Command "cargo" -ErrorAction SilentlyContinue | Select-Object -
 if (-not $CargoPath) {
     $CargoPath = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
 }
-& $CargoPath build --release -p barepdf -p barepdf-thumbnail --locked
-if ($LASTEXITCODE -ne 0) {
-    throw "Release build failed with exit code $LASTEXITCODE"
+$CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+$RustupHome = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE ".rustup" }
+$RemapFlags = @(
+    "--remap-path-prefix=$($env:USERPROFILE)=/user",
+    "--remap-path-prefix=$RustupHome=/rustup",
+    "--remap-path-prefix=$CargoHome=/cargo",
+    "--remap-path-prefix=$($RepoRoot.Path)=/barepdf",
+    "--remap-path-scope=object,debuginfo,macro"
+)
+$PreviousEncodedRustflags = $env:CARGO_ENCODED_RUSTFLAGS
+$Separator = [char]0x1f
+if ([string]::IsNullOrEmpty($PreviousEncodedRustflags)) {
+    $env:CARGO_ENCODED_RUSTFLAGS = $RemapFlags -join $Separator
+} else {
+    $env:CARGO_ENCODED_RUSTFLAGS = (@($PreviousEncodedRustflags) + $RemapFlags) -join $Separator
+}
+
+try {
+    & $CargoPath build --release -p barepdf --locked
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo release build failed with exit code $LASTEXITCODE"
+    }
+    & $CargoPath build --profile release-unwind -p barepdf-thumbnail --locked
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo release-unwind build for barepdf-thumbnail failed with exit code $LASTEXITCODE"
+    }
+} finally {
+    if ($null -eq $PreviousEncodedRustflags) {
+        Remove-Item Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue
+    } else {
+        $env:CARGO_ENCODED_RUSTFLAGS = $PreviousEncodedRustflags
+    }
 }
 
 $StagedDir = Join-Path $RepoRoot "target\release\staged"
@@ -28,7 +57,7 @@ if (-not (Test-Path $ExePath)) {
 
 Copy-Item $ExePath -Destination (Join-Path $StagedDir "BarePDF.exe")
 
-$ThumbnailDllPath = Join-Path $RepoRoot "target\release\barepdf_thumbnail.dll"
+$ThumbnailDllPath = Join-Path $RepoRoot "target\release-unwind\barepdf_thumbnail.dll"
 if (-not (Test-Path $ThumbnailDllPath)) {
     throw "Thumbnail DLL not found: $ThumbnailDllPath"
 }

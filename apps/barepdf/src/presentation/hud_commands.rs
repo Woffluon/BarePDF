@@ -143,6 +143,7 @@ pub fn handle_hud_query(
         super::window_chrome::sync_window_maximized(window);
     } else if lower.contains("invert") || lower.contains("ters") {
         app.preferences.invert_colors = !app.preferences.invert_colors;
+        scheduler.set_invert_colors(app.preferences.invert_colors);
         window.set_invert_page_colors(app.preferences.invert_colors);
         invalidate_layout_and_render(app, scheduler, window, true);
     } else if lower.contains("sepia") || lower.contains("sepya") {

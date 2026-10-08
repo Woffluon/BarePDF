@@ -684,6 +684,39 @@ impl AppState {
         }
         self.flat_outline.clear();
     }
+
+    pub(crate) fn capture_active_tab_view(
+        &mut self,
+        scroll_y: f32,
+        sidebar_visible: bool,
+        sidebar_tab: i32,
+    ) {
+        let view = crate::application::ViewState {
+            current_page: PageIndex::from_raw(self.current_page),
+            zoom_mode: self.zoom_mode,
+            zoom_factor: self.zoom_factor,
+            rotation: self.rotation,
+            scroll_y,
+            sidebar_visible,
+            sidebar_tab,
+        };
+        self.snapshot_active_tab_layout();
+        if let Some(tab) = self.application.tabs.active_mut() {
+            tab.view = view;
+        }
+    }
+
+    pub(crate) fn apply_active_tab_view(&mut self) -> Option<crate::application::ViewState> {
+        let view = self.application.tabs.active()?.view.clone();
+        self.current_page = view.current_page.get();
+        self.zoom_mode = view.zoom_mode;
+        self.zoom_factor = view.zoom_factor;
+        self.update_cache_budget_for_zoom(self.zoom_factor);
+        self.rotation = view.rotation;
+        self.last_scroll_y = view.scroll_y;
+        self.restore_active_tab_layout();
+        Some(view)
+    }
 }
 
 #[must_use]
@@ -1254,5 +1287,83 @@ mod tests {
         assert_eq!(app.last_eraser_point, None);
         assert!(app.annotation_history.is_empty());
         assert_eq!(app.committed_overlay_cache, None);
+    }
+
+    #[test]
+    fn capture_and_apply_active_tab_view_isolates_full_view_state_across_tabs() {
+        let mut app = AppState::new(UserPreferences::default());
+
+        let doc1 = DocumentId::new(1);
+        DocumentController::begin_open(
+            &mut app.application,
+            doc1,
+            PathBuf::from("tab1.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc1, 20, 10_000);
+        let tab1_id = app.application.tabs.active_id().expect("tab 1 active");
+
+        app.current_page = 7;
+        app.zoom_mode = ZoomMode::Custom(ZoomFactor::new(2.5));
+        app.zoom_factor = ZoomFactor::new(2.5);
+        app.rotation = Rotation::Degrees90;
+        app.page_dimensions = Arc::new(vec![(595.0, 842.0); 20]);
+        app.first_page_dimensions = (595.0, 842.0);
+        app.dimensions_revision = 4;
+        app.next_dimensions_start = 21;
+        app.capture_active_tab_view(-420.0, false, 1);
+
+        let doc2 = DocumentId::new(2);
+        let _ = app
+            .application
+            .tabs
+            .open(PathBuf::from("tab2.pdf"), "tab2".into());
+        let tab2_id = app.application.tabs.active_id().expect("tab 2 active");
+        assert_ne!(tab1_id, tab2_id);
+        DocumentController::begin_open(
+            &mut app.application,
+            doc2,
+            PathBuf::from("tab2.pdf"),
+            Instant::now(),
+        );
+        let _ = DocumentController::opened(&mut app.application, doc2, 8, 10_000);
+
+        app.current_page = 2;
+        app.zoom_mode = ZoomMode::FitWidth;
+        app.zoom_factor = ZoomFactor::new(1.0);
+        app.rotation = Rotation::Degrees270;
+        app.page_dimensions = Arc::new(vec![(612.0, 792.0); 8]);
+        app.first_page_dimensions = (612.0, 792.0);
+        app.dimensions_revision = 2;
+        app.next_dimensions_start = 9;
+        app.capture_active_tab_view(-128.0, true, 2);
+
+        // Switch back to Tab 1 and verify no leakage from Tab 2
+        assert!(app.application.tabs.activate(tab1_id));
+        let view1 = app.apply_active_tab_view().expect("restored tab 1 view");
+        assert_eq!(app.current_page, 7);
+        assert_eq!(app.zoom_mode, ZoomMode::Custom(ZoomFactor::new(2.5)));
+        assert_eq!(app.zoom_factor, ZoomFactor::new(2.5));
+        assert_eq!(app.rotation, Rotation::Degrees90);
+        assert!((app.last_scroll_y - (-420.0)).abs() < f32::EPSILON);
+        assert!((view1.scroll_y - (-420.0)).abs() < f32::EPSILON);
+        assert!(!view1.sidebar_visible);
+        assert_eq!(view1.sidebar_tab, 1);
+        assert_eq!(app.page_dimensions.len(), 20);
+        assert_eq!(app.page_images.budget(), 128 * 1024 * 1024);
+
+        // Switch back to Tab 2 and verify no leakage from Tab 1
+        assert!(app.application.tabs.activate(tab2_id));
+        let view2 = app.apply_active_tab_view().expect("restored tab 2 view");
+        assert_eq!(app.current_page, 2);
+        assert_eq!(app.zoom_mode, ZoomMode::FitWidth);
+        assert_eq!(app.zoom_factor, ZoomFactor::new(1.0));
+        assert_eq!(app.rotation, Rotation::Degrees270);
+        assert!((app.last_scroll_y - (-128.0)).abs() < f32::EPSILON);
+        assert!((view2.scroll_y - (-128.0)).abs() < f32::EPSILON);
+        assert!(view2.sidebar_visible);
+        assert_eq!(view2.sidebar_tab, 2);
+        assert_eq!(app.page_dimensions.len(), 8);
+        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
     }
 }
