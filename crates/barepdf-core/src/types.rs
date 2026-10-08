@@ -743,11 +743,7 @@ fn clip_stroke_at_point(
             }
         } else if surviving.len() == 1 {
             let (start_pt, end_pt) = surviving[0];
-            if current_polyline.is_empty() {
-                current_polyline.push(start_pt);
-                current_polyline.push(end_pt);
-            } else {
-                let last = *current_polyline.last().unwrap();
+            if let Some(&last) = current_polyline.last() {
                 if (start_pt.0 - last.0).hypot(start_pt.1 - last.1) < 1e-5 {
                     current_polyline.push(end_pt);
                 } else {
@@ -755,16 +751,15 @@ fn clip_stroke_at_point(
                     current_polyline.push(start_pt);
                     current_polyline.push(end_pt);
                 }
+            } else {
+                current_polyline.push(start_pt);
+                current_polyline.push(end_pt);
             }
         } else {
             let (part1_start, part1_end) = surviving[0];
             let (part2_start, part2_end) = surviving[1];
 
-            if current_polyline.is_empty() {
-                current_polyline.push(part1_start);
-                current_polyline.push(part1_end);
-            } else {
-                let last = *current_polyline.last().unwrap();
+            if let Some(&last) = current_polyline.last() {
                 if (part1_start.0 - last.0).hypot(part1_start.1 - last.1) < 1e-5 {
                     current_polyline.push(part1_end);
                 } else {
@@ -772,6 +767,9 @@ fn clip_stroke_at_point(
                     current_polyline.push(part1_start);
                     current_polyline.push(part1_end);
                 }
+            } else {
+                current_polyline.push(part1_start);
+                current_polyline.push(part1_end);
             }
             sub_strokes.push(std::mem::take(&mut current_polyline));
             current_polyline.push(part2_start);

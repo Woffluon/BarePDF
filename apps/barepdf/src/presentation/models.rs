@@ -225,19 +225,20 @@ pub(crate) fn render_page_annotation_overlay(
 
     let doc_id = doc_id.unwrap_or_else(|| barepdf_core::DocumentId::new(1));
 
-    let can_use_cache = active_stroke.is_some()
-        && app.committed_overlay_cache.as_ref().is_some_and(|c| {
-            c.document_id == doc_id && c.page == page && c.width == w && c.height == h
-        });
-
-    if can_use_cache {
-        let cached = app.committed_overlay_cache.as_ref().unwrap();
-        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&cached.pixels, w, h);
-        let bytes = buffer.make_mut_bytes();
-        if let Some(stroke) = active_stroke.filter(|s| s.page.get() == page) {
-            draw_ink_stroke(bytes, w, h, stroke);
+    if active_stroke.is_some() {
+        if let Some(cached) = app
+            .committed_overlay_cache
+            .as_ref()
+            .filter(|c| c.document_id == doc_id && c.page == page && c.width == w && c.height == h)
+        {
+            let mut buffer =
+                SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&cached.pixels, w, h);
+            let bytes = buffer.make_mut_bytes();
+            if let Some(stroke) = active_stroke.filter(|s| s.page.get() == page) {
+                draw_ink_stroke(bytes, w, h, stroke);
+            }
+            return Image::from_rgba8(buffer);
         }
-        return Image::from_rgba8(buffer);
     }
 
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
