@@ -38,6 +38,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 "#,
         );
         res.compile()?;
+
+        let out_dir = std::path::PathBuf::from(
+            std::env::var_os("OUT_DIR").ok_or_else(|| std::io::Error::other("OUT_DIR missing"))?,
+        );
+        println!(
+            "cargo:rustc-link-arg-bins={}",
+            out_dir.join("resource.lib").display()
+        );
     }
 
     Ok(())

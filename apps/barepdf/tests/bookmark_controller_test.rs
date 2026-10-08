@@ -77,3 +77,22 @@ fn rename_bookmark_changes_title_by_raw_page() {
     assert!(renamed);
     assert_eq!(bookmarks[0].title, "New Title");
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn executable_embeds_windows_icon_and_version_resources() {
+    let exe_bytes = std::fs::read(env!("CARGO_BIN_EXE_barepdf")).unwrap();
+    let ico_bytes = include_bytes!("../../../assets/app.ico");
+    let first_icon_offset =
+        u32::from_le_bytes([ico_bytes[18], ico_bytes[19], ico_bytes[20], ico_bytes[21]]) as usize;
+    let icon_probe = &ico_bytes[first_icon_offset..first_icon_offset + 64];
+    assert!(exe_bytes.windows(icon_probe.len()).any(|w| w == icon_probe));
+
+    let version_utf16: Vec<u8> = env!("CARGO_PKG_VERSION")
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    assert!(exe_bytes
+        .windows(version_utf16.len())
+        .any(|w| w == version_utf16.as_slice()));
+}
