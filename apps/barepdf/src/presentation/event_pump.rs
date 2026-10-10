@@ -1,6 +1,6 @@
 use super::callbacks::{
     handle_background_ui_event, handle_print_event, handle_tool_event, refresh_merge_files,
-    set_tool_source,
+    set_tool_source, snapshot_active_view,
 };
 use super::state::AppState;
 use super::ui::{
@@ -174,6 +174,24 @@ pub(super) fn start(
             };
             had_activity = true;
             handle_background_ui_event(event, &window, &state, &scheduler);
+        }
+        while let Some(changed_path) = state.borrow().try_recv_file_change() {
+            had_activity = true;
+            let active_match = {
+                let app = state.borrow();
+                app.application
+                    .ready_document()
+                    .map(|doc| doc.path().to_path_buf())
+                    == Some(changed_path.clone())
+            };
+            if active_match {
+                snapshot_active_view(&mut state.borrow_mut(), &window);
+                begin_open(changed_path, None, &state, &scheduler, &window);
+                let lang = state.borrow().preferences.language.resolve();
+                let status_msg = barepdf_i18n::t(lang, "status.reloaded");
+                window.set_status_text(SharedString::from(status_msg));
+                show_banner(&window, status_msg, false);
+            }
         }
         process_view_changes(&window, &state, &scheduler);
         if !worker_terminated {

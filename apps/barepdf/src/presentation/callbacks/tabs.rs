@@ -60,6 +60,11 @@ pub(super) fn connect_tab_callbacks(
         };
         if already_ready {
             let mut app = state_activate.borrow_mut();
+            if let Some(ref p) = path {
+                app.start_file_watcher(p);
+            } else {
+                app.stop_file_watcher();
+            }
             window.set_has_document(true);
             let title = app
                 .application
@@ -193,6 +198,7 @@ pub(crate) fn restore_active_view(app: &mut AppState, window: &AppWindow) {
 }
 
 pub(super) fn reset_empty_document(app: &mut AppState, window: &AppWindow) {
+    app.stop_file_watcher();
     app.current_page = 0;
     app.visible_page_indices.clear();
     app.page_dimensions = Arc::new(Vec::new());

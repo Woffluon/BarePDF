@@ -1,12 +1,14 @@
 import { ThemeTokens } from "../tokens.slint";
 import { TextButton } from "../components/button.slint";
 import { Dialog, DialogFooter } from "../components/dialog.slint";
+import { ZoomSlider } from "../components/slider.slint";
 
 export component SignatureDialog inherits Rectangle {
     in-out property <bool> is-open: false;
     in-out property <int> tab-index: 0;
     in property <image> pad-preview;
     in property <bool> has-preview: false;
+    in-out property <float> pen-thickness: 2.0;
 
     in property <string> text-title: "Create Signature";
     in property <string> text-draw-tab: "Draw";
@@ -22,6 +24,7 @@ export component SignatureDialog inherits Rectangle {
     callback pad-clear();
     callback pick-image();
     callback start-placement();
+    callback pen-thickness-changed(float);
 
     width: 100%;
     height: 100%;
@@ -30,7 +33,7 @@ export component SignatureDialog inherits Rectangle {
         title: root.text-title;
         close-label: root.text-cancel;
         dialog-width: 480px;
-        dialog-height: 360px;
+        dialog-height: 380px;
         close => { root.is-open = false; }
 
         HorizontalLayout {
@@ -49,39 +52,74 @@ export component SignatureDialog inherits Rectangle {
             }
         }
 
-        if root.tab-index == 0 : Rectangle {
+        if root.tab-index == 0 : VerticalLayout {
             vertical-stretch: 1;
-            background: #FFFFFF;
-            border-radius: ThemeTokens.control-radius;
-            border-width: 1px;
-            border-color: ThemeTokens.stroke;
-            clip: true;
-            Image {
-                width: 100%;
-                height: 100%;
-                source: root.pad-preview;
-                image-fit: fill;
-            }
-            TouchArea {
-                width: 100%;
-                height: 100%;
-                mouse-cursor: crosshair;
-                pointer-event(ev) => {
-                    if (ev.button == PointerEventButton.left) {
-                        if (ev.kind == PointerEventKind.down) {
-                            root.pad-pointer-down(self.mouse-x / self.width, self.mouse-y / self.height);
-                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                            root.pad-pointer-up();
+            spacing: 8px;
+            Rectangle {
+                vertical-stretch: 1;
+                background: #FFFFFF;
+                border-radius: ThemeTokens.control-radius;
+                border-width: 1px;
+                border-color: ThemeTokens.stroke;
+                clip: true;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.pad-preview;
+                    image-fit: fill;
+                }
+                TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: crosshair;
+                    pointer-event(ev) => {
+                        if (ev.button == PointerEventButton.left) {
+                            if (ev.kind == PointerEventKind.down) {
+                                root.pad-pointer-down(self.mouse-x / self.width, self.mouse-y / self.height);
+                            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                root.pad-pointer-up();
+                            }
+                        }
+                    }
+                    moved => {
+                        if (self.pressed) {
+                            root.pad-pointer-move(
+                                Math.clamp(self.mouse-x / self.width, 0.0, 1.0),
+                                Math.clamp(self.mouse-y / self.height, 0.0, 1.0)
+                            );
                         }
                     }
                 }
-                moved => {
-                    if (self.pressed) {
-                        root.pad-pointer-move(
-                            Math.clamp(self.mouse-x / self.width, 0.0, 1.0),
-                            Math.clamp(self.mouse-y / self.height, 0.0, 1.0)
-                        );
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: center;
+                height: 24px;
+                Text {
+                    text: "Thickness:";
+                    color: ThemeTokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+                ZoomSlider {
+                    horizontal-stretch: 1;
+                    minimum: 0.5;
+                    maximum: 6.0;
+                    value: root.pen-thickness;
+                    value-changed(v) => {
+                        root.pen-thickness = Math.round(v * 10.0) / 10.0;
+                        root.pen-thickness-changed(root.pen-thickness);
                     }
+                }
+                Text {
+                    min-width: 38px;
+                    text: Math.round(root.pen-thickness * 10.0) / 10.0 + " pt";
+                    color: ThemeTokens.text;
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
                 }
             }
         }

@@ -1,0 +1,50 @@
+name: Feature Request
+description: Propose an idea or enhancement for BarePDF
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        BarePDF focuses on fast, lean, offline document reading with zero telemetry.
+        Enhancement proposals that preserve low memory footprints and clean Windows integration are very welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What limitation or friction does your workflow face today?
+      placeholder: "When viewing large multi-column research papers, I struggle to..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What behavior or capability would address this need?
+      placeholder: "Add an option to toggle..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you tried alternative approaches or third-party workarounds?
+      placeholder: "I currently work around this by..."
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any relevant mockups, reference links, or implementation notes.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched open and closed issues to ensure this idea has not already been proposed.
+          required: true
+        - label: This request aligns with BarePDF's focus on privacy, low memory footprint, and native performance.
+          required: true

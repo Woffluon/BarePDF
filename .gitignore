@@ -92,3 +92,4 @@ mimari_plan
 *.tmp
 *.log
 Output/
+docs/LAUNCH_KIT.md

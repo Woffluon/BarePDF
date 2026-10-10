@@ -10,6 +10,7 @@ mod image_encoder;
 mod printers;
 mod printing;
 mod shell;
+mod watcher;
 mod window_chrome;
 
 pub use clipboard::WindowsClipboard;
@@ -20,6 +21,7 @@ pub use image_encoder::{decode_image_rgba, WindowsImageEncoder};
 pub use printers::{enumerate_installed_printers, InstalledPrinter};
 pub use printing::{PrintOrientation, WindowsPrinterDialog, WindowsPrinterSink};
 pub use shell::open_url;
+pub use watcher::{DocumentFileWatcher, FileChangeWatcher, WindowsDocumentFileWatcher};
 pub use window_chrome::{
     apply_frameless_style, begin_native_drag, from_resize_edge, hit_test_code, is_window_maximized,
     send_window_command, WindowCommand, WindowHit,

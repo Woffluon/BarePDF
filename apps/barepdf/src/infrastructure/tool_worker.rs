@@ -74,9 +74,22 @@ pub(crate) enum ToolOperation {
         format: ConversionFormat,
         dpi: ConversionDpi,
     },
+    Crop {
+        source: PathBuf,
+        crops: Vec<barepdf_core::PageCropRect>,
+        output: PathBuf,
+    },
+    Reorder {
+        source: PathBuf,
+        new_order: Vec<barepdf_core::PageIndex>,
+        output: PathBuf,
+    },
     #[cfg(test)]
     Test,
 }
+
+#[allow(dead_code)]
+pub(crate) type ToolTask = ToolOperation;
 
 #[derive(Debug)]
 pub(crate) struct ToolRequest {
@@ -826,6 +839,50 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
                     other => ToolFailure::Failed(format_error_with_source(&other)),
                 })
         }
+        ToolOperation::Crop {
+            source,
+            crops,
+            output,
+        } => {
+            let backend = new_backend()?;
+            preflight(&backend, source, request.password_for(source))?;
+            let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
+            PdfOperations::crop_pages_with_password(
+                source,
+                crops,
+                staged.path(),
+                request.password_for(source),
+            )
+            .map_err(|error| operation_error(Some(source), error))?;
+            check_cancel(request)?;
+            persist_file(staged, output)?;
+            Ok(ToolOutcome::Pdf {
+                output: output.clone(),
+            })
+        }
+        ToolOperation::Reorder {
+            source,
+            new_order,
+            output,
+        } => {
+            let backend = new_backend()?;
+            preflight(&backend, source, request.password_for(source))?;
+            let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
+            PdfOperations::reorder_pages_with_password(
+                source,
+                new_order,
+                staged.path(),
+                request.password_for(source),
+            )
+            .map_err(|error| operation_error(Some(source), error))?;
+            check_cancel(request)?;
+            persist_file(staged, output)?;
+            Ok(ToolOutcome::Pdf {
+                output: output.clone(),
+            })
+        }
         #[cfg(test)]
         ToolOperation::Test => Ok(ToolOutcome::Test),
     }
@@ -908,8 +965,8 @@ fn unique_output_directory(parent: &Path, base_name: &str) -> Result<PathBuf, To
 #[cfg(test)]
 mod tests {
     use super::{
-        persist_file, ExecutionResult, SecretPassword, ToolEvent, ToolJobKey, ToolWorker,
-        ToolWorkerError,
+        persist_file, ExecutionResult, SecretPassword, ToolEvent, ToolJobKey, ToolOperation,
+        ToolTask, ToolWorker, ToolWorkerError,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1090,5 +1147,29 @@ mod tests {
         // We do NOT drain the event here; immediately shut down
         let mut worker = worker;
         assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
+    fn tool_task_supports_crop_and_reorder() {
+        use barepdf_core::{PageCropRect, PageIndex};
+        let crop_op = ToolTask::Crop {
+            source: PathBuf::from("in.pdf"),
+            crops: vec![PageCropRect {
+                page_index: 0,
+                left: 10.0,
+                bottom: 10.0,
+                right: 100.0,
+                top: 100.0,
+            }],
+            output: PathBuf::from("crop.pdf"),
+        };
+        assert!(matches!(crop_op, ToolOperation::Crop { .. }));
+
+        let reorder_op = ToolTask::Reorder {
+            source: PathBuf::from("in.pdf"),
+            new_order: vec![PageIndex::from_raw(1), PageIndex::from_raw(0)],
+            output: PathBuf::from("reorder.pdf"),
+        };
+        assert!(matches!(reorder_op, ToolOperation::Reorder { .. }));
     }
 }

@@ -311,3 +311,314 @@ fn wave2_smooth_ink_points_subdivides_strokes() {
     assert_eq!(smoothed.first().copied(), Some((0.0, 0.0)));
     assert_eq!(smoothed.last().copied(), Some((1.0, 0.0)));
 }
+
+#[test]
+fn add_free_text_annotation_adds_to_document_annotations() {
+    use crate::application::{DocumentState, ReadyDocument};
+    use crate::presentation::callbacks::drawing::add_free_text_annotation;
+    use crate::presentation::state::AppState;
+    use barepdf_core::{DocumentId, PageCount, UserPreferences};
+    use std::time::Instant;
+
+    let mut app = AppState::new(UserPreferences::default());
+    let doc_id = DocumentId::new(1);
+    app.application
+        .tabs
+        .open(PathBuf::from("test.pdf"), "test.pdf".to_string());
+    if let Some(tab) = app.application.tabs.active_mut() {
+        tab.document = Some(DocumentState::Ready(ReadyDocument {
+            id: doc_id,
+            path: PathBuf::from("test.pdf"),
+            page_count: PageCount::new(1).unwrap(),
+            started_at: Instant::now(),
+        }));
+    }
+    app.first_page_dimensions = (600.0, 800.0);
+    app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0)]);
+
+    add_free_text_annotation(
+        &mut app,
+        0,
+        0.1,
+        0.2,
+        "Hello Typewriter".to_string(),
+        14.0,
+        [0, 0, 0, 255],
+    );
+
+    let ann = app.annotations.get(&doc_id).expect("annotations exist");
+    assert_eq!(ann.free_texts.len(), 1);
+    let ft = &ann.free_texts[0];
+    assert_eq!(ft.text, "Hello Typewriter");
+    assert_eq!(ft.page_index, 0);
+    assert!((ft.x - 60.0).abs() < 1.0);
+    assert!((ft.y - 640.0).abs() < 1.0);
+}
+
+#[test]
+fn app_state_file_watcher_lifecycle_and_channel() {
+    use crate::presentation::state::AppState;
+    use barepdf_core::UserPreferences;
+
+    let mut app = AppState::new(UserPreferences::default());
+    assert!(app.file_watcher.is_none());
+
+    let temp_file = tempfile::NamedTempFile::new().expect("temp file");
+    app.start_file_watcher(temp_file.path());
+    assert!(app.file_watcher.is_some());
+
+    app.notify_file_changed(temp_file.path().to_path_buf());
+    assert_eq!(
+        app.try_recv_file_change(),
+        Some(temp_file.path().to_path_buf())
+    );
+
+    app.stop_file_watcher();
+    assert!(app.file_watcher.is_none());
+}
+
+#[test]
+fn drawing_tool_selection_is_mutually_exclusive() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::presentation::callbacks::drawing::sync_drawing_tool_ui;
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::UserPreferences;
+
+        let mut app = AppState::new(UserPreferences::default());
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+
+        // Initially pan_mode is true
+        assert!(app.pan_mode);
+        assert!(!app.drawing_eraser);
+        assert!(!app.drawing_typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        assert!(window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Activate Pen -> Pan/Eraser/Typewriter false
+        app.activate_drawing_tool(DrawingTool::Pen);
+        assert!(!app.pan_mode);
+        assert!(!app.drawing_eraser);
+        assert!(!app.drawing_typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        assert!(!window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Activate Eraser -> Eraser true, Pan/Typewriter false
+        app.activate_drawing_tool(DrawingTool::Eraser);
+        assert!(!app.pan_mode);
+        assert!(app.drawing_eraser);
+        assert!(!app.drawing_typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        assert!(!window.get_pan_mode_active());
+        assert!(window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Activate Typewriter -> Typewriter true, Pan/Eraser false
+        app.activate_drawing_tool(DrawingTool::Typewriter);
+        assert!(!app.pan_mode);
+        assert!(!app.drawing_eraser);
+        assert!(app.drawing_typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        assert!(!window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(window.get_drawing_typewriter_active());
+
+        // Activate Pan -> Pan true, Eraser/Typewriter false
+        app.activate_drawing_tool(DrawingTool::Pan);
+        assert!(app.pan_mode);
+        assert!(!app.drawing_eraser);
+        assert!(!app.drawing_typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        assert!(window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+    });
+}
+
+#[test]
+fn select_drawing_tool_callback_switches_all_tools() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::presentation::callbacks::drawing::sync_drawing_tool_ui;
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::UserPreferences;
+        use slint::ComponentHandle;
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+
+        let weak = window.as_weak();
+        let state_tool = state.clone();
+        window.on_select_drawing_tool(move |tool_id| {
+            let mut app = state_tool.borrow_mut();
+            match tool_id {
+                0 => app.activate_drawing_tool(DrawingTool::Pan),
+                1 => app.activate_drawing_tool(DrawingTool::Pen),
+                2 => app.activate_drawing_tool(DrawingTool::Eraser),
+                3 => app.activate_drawing_tool(DrawingTool::Typewriter),
+                _ => app.activate_drawing_tool(DrawingTool::Pen),
+            }
+            if let Some(window) = weak.upgrade() {
+                sync_drawing_tool_ui(&app, &window);
+            }
+        });
+
+        // Select Pan (0)
+        window.invoke_select_drawing_tool(0);
+        assert!(window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Select Pen (1)
+        window.invoke_select_drawing_tool(1);
+        assert!(!window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Select Eraser (2)
+        window.invoke_select_drawing_tool(2);
+        assert!(!window.get_pan_mode_active());
+        assert!(window.get_drawing_eraser_active());
+        assert!(!window.get_drawing_typewriter_active());
+
+        // Select Typewriter (3)
+        window.invoke_select_drawing_tool(3);
+        assert!(!window.get_pan_mode_active());
+        assert!(!window.get_drawing_eraser_active());
+        assert!(window.get_drawing_typewriter_active());
+    });
+}
+
+#[test]
+fn typewriter_pointer_down_opens_dialog_and_custom_text_note_inserts() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::application::{DocumentState, ReadyDocument};
+        use crate::presentation::callbacks::drawing::{
+            add_free_text_annotation, sync_drawing_tool_ui,
+        };
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::{DocumentId, InkColor, PageCount, PageIndex, UserPreferences};
+        use slint::ComponentHandle;
+        use std::path::PathBuf;
+        use std::time::Instant;
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let doc_id = DocumentId::new(42);
+        {
+            let mut app = state.borrow_mut();
+            app.application
+                .tabs
+                .open(PathBuf::from("doc.pdf"), "doc.pdf".to_string());
+            if let Some(tab) = app.application.tabs.active_mut() {
+                tab.document = Some(DocumentState::Ready(ReadyDocument {
+                    id: doc_id,
+                    path: PathBuf::from("doc.pdf"),
+                    page_count: PageCount::new(2).unwrap(),
+                    started_at: Instant::now(),
+                }));
+            }
+            app.first_page_dimensions = (600.0, 800.0);
+            app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0), (600.0, 800.0)]);
+            app.activate_drawing_tool(DrawingTool::Typewriter);
+            app.drawing_color = InkColor::Blue;
+        }
+
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        sync_drawing_tool_ui(&state.borrow(), &window);
+        assert!(window.get_drawing_typewriter_active());
+
+        let weak = window.as_weak();
+        let state_draw_down = state.clone();
+        window.on_drawing_pointer_down(move |page, nx, ny| {
+            if page < 0 {
+                return;
+            }
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let app = state_draw_down.borrow();
+            let Some(_doc_id) = app.active_document() else {
+                return;
+            };
+            let page_idx = PageIndex::from_raw(page as u32);
+            let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+            if app.pan_mode {
+                return;
+            }
+            if app.drawing_typewriter {
+                let color_index = match app.drawing_color {
+                    barepdf_core::InkColor::Black => 0,
+                    barepdf_core::InkColor::Red => 1,
+                    barepdf_core::InkColor::Blue => 2,
+                    barepdf_core::InkColor::Yellow => 3,
+                };
+                window.set_text_note_page_index(page_idx.get() as i32);
+                window.set_text_note_norm_x(pt.0);
+                window.set_text_note_norm_y(pt.1);
+                window.set_text_note_content("".into());
+                window.set_text_note_color_index(color_index);
+                window.set_text_note_dialog_open(true);
+            }
+        });
+
+        let weak = window.as_weak();
+        let state_free_text = state.clone();
+        window.on_request_add_free_text(move |page_idx, nx, ny, text, font_size, color_index| {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return;
+            }
+            let mut app = state_free_text.borrow_mut();
+            app.activate_drawing_tool(DrawingTool::Typewriter);
+            sync_drawing_tool_ui(&app, &window);
+            let color = match color_index {
+                1 => [230, 50, 50, 255],
+                2 => [30, 100, 220, 255],
+                3 => [220, 180, 20, 255],
+                _ => [0, 0, 0, 255],
+            };
+            add_free_text_annotation(
+                &mut app,
+                page_idx as usize,
+                nx,
+                ny,
+                text.to_string(),
+                font_size,
+                color,
+            );
+        });
+
+        // Pointer down on page 1 at (0.25, 0.40)
+        assert!(!window.get_text_note_dialog_open());
+        window.invoke_drawing_pointer_down(1, 0.25, 0.40);
+
+        // Dialog should now be open with page 1, coords, and Blue color (index 2)
+        assert!(window.get_text_note_dialog_open());
+        assert_eq!(window.get_text_note_page_index(), 1);
+        assert!((window.get_text_note_norm_x() - 0.25).abs() < 1e-4);
+        assert!((window.get_text_note_norm_y() - 0.40).abs() < 1e-4);
+        assert_eq!(window.get_text_note_color_index(), 2);
+        assert!(!state.borrow().annotations.contains_key(&doc_id));
+
+        // Submit custom note
+        window.invoke_request_add_free_text(1, 0.25, 0.40, "Custom Reviewed Text".into(), 18.0, 2);
+
+        let app = state.borrow();
+        let ann = app.annotations.get(&doc_id).expect("annotations exist");
+        assert_eq!(ann.free_texts.len(), 1);
+        let ft = &ann.free_texts[0];
+        assert_eq!(ft.page_index, 1);
+        assert_eq!(ft.text, "Custom Reviewed Text");
+        assert!((ft.font_size - 18.0).abs() < 1e-4);
+        assert_eq!(ft.color_rgba, [30, 100, 220, 255]);
+    });
+}

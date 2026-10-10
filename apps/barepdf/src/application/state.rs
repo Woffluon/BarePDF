@@ -5,10 +5,10 @@ use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReadyDocument {
-    pub(super) id: DocumentId,
-    pub(super) path: PathBuf,
-    pub(super) page_count: PageCount,
-    pub(super) started_at: Instant,
+    pub(crate) id: DocumentId,
+    pub(crate) path: PathBuf,
+    pub(crate) page_count: PageCount,
+    pub(crate) started_at: Instant,
 }
 
 impl ReadyDocument {

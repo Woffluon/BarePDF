@@ -29,6 +29,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tempfile.workspace = true
 ureq.workspace = true
+uuid = { version = "1.24", features = ["v4"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres.workspace = true

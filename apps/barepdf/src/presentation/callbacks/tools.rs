@@ -658,6 +658,160 @@ pub(super) fn connect_tools_callbacks(
     });
 
     let weak = window.as_weak();
+    let state_crop_exec = state.clone();
+    let dialogs_crop_exec = dialogs.clone();
+    window.on_request_crop_pages_execute(
+        move |range_str, left_str, bottom_str, right_str, top_str| {
+            let (source_path, page_count) = {
+                let app = state_crop_exec.borrow();
+                let lang = app.preferences.language.resolve();
+                let Some(source) = current_tool_source(&app) else {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                            lang,
+                            "tools.error.no_files",
+                        )));
+                    }
+                    return;
+                };
+                (source, app.page_count())
+            };
+
+            let left = left_str.trim().parse::<f32>().unwrap_or(36.0);
+            let bottom = bottom_str.trim().parse::<f32>().unwrap_or(36.0);
+            let right = right_str.trim().parse::<f32>().unwrap_or(576.0);
+            let top = top_str.trim().parse::<f32>().unwrap_or(756.0);
+
+            let pages = selected_tool_pages(&range_str, page_count);
+            let target_pages: Vec<u32> = if pages.is_empty() {
+                (1..=page_count).collect()
+            } else {
+                pages
+            };
+
+            let crops: Vec<barepdf_core::PageCropRect> = target_pages
+                .into_iter()
+                .map(|p| barepdf_core::PageCropRect {
+                    page_index: p.saturating_sub(1) as usize,
+                    left,
+                    bottom,
+                    right,
+                    top,
+                })
+                .collect();
+
+            let default_name = format!(
+                "{}_cropped.pdf",
+                source_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "document".to_string())
+            );
+            let Some(output_path) = dialogs_crop_exec.save_file(&default_name) else {
+                return;
+            };
+
+            if let Some(window) = weak.upgrade() {
+                set_tool_source(&mut state_crop_exec.borrow_mut(), source_path.clone());
+                queue_tool_operation(
+                    ToolOperation::Crop {
+                        source: source_path,
+                        crops,
+                        output: output_path,
+                    },
+                    &state_crop_exec,
+                    &window,
+                );
+            }
+        },
+    );
+
+    let weak = window.as_weak();
+    let state_reorder_exec = state.clone();
+    let dialogs_reorder_exec = dialogs.clone();
+    window.on_request_reorder_pages_execute(move |order_str| {
+        let (source_path, page_count) = {
+            let app = state_reorder_exec.borrow();
+            let lang = app.preferences.language.resolve();
+            let Some(source) = current_tool_source(&app) else {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(barepdf_i18n::t(
+                        lang,
+                        "tools.error.no_files",
+                    )));
+                }
+                return;
+            };
+            (source, app.page_count())
+        };
+
+        let trimmed = order_str.trim();
+        let parsed_indices: Result<Vec<u32>, _> = trimmed
+            .split([',', ' '])
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().parse::<u32>())
+            .collect();
+
+        let Ok(indices) = parsed_indices else {
+            if let Some(window) = weak.upgrade() {
+                window.set_tools_error(SharedString::from(
+                    "Invalid page order. Enter comma-separated page numbers.",
+                ));
+            }
+            return;
+        };
+
+        if indices.len() != page_count as usize {
+            if let Some(window) = weak.upgrade() {
+                window.set_tools_error(SharedString::from(format!(
+                    "Order must contain exactly {} pages (found {}).",
+                    page_count,
+                    indices.len()
+                )));
+            }
+            return;
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut new_order = Vec::with_capacity(indices.len());
+        for &idx in &indices {
+            if idx < 1 || idx > page_count || !seen.insert(idx) {
+                if let Some(window) = weak.upgrade() {
+                    window.set_tools_error(SharedString::from(
+                        "Order contains invalid or duplicate page numbers.",
+                    ));
+                }
+                return;
+            }
+            new_order.push(barepdf_core::PageIndex::from_raw(idx - 1));
+        }
+
+        let default_name = format!(
+            "{}_reordered.pdf",
+            source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string())
+        );
+        let Some(output_path) = dialogs_reorder_exec.save_file(&default_name) else {
+            return;
+        };
+
+        if let Some(window) = weak.upgrade() {
+            set_tool_source(&mut state_reorder_exec.borrow_mut(), source_path.clone());
+            queue_tool_operation(
+                ToolOperation::Reorder {
+                    source: source_path,
+                    new_order,
+                    output: output_path,
+                },
+                &state_reorder_exec,
+                &window,
+            );
+        }
+    });
+
+    let weak = window.as_weak();
     let state_reorder = state.clone();
     window.on_request_merge_reorder(move |from, to| {
         if from < 0 || to < 0 {

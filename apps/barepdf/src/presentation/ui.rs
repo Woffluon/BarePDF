@@ -421,6 +421,7 @@ pub(crate) fn handle_render_event(
             };
             let page_count = ready.page_count().get();
             let path = ready.path().to_path_buf();
+            app.start_file_watcher(&path);
             let restored_view = app
                 .application
                 .tabs
@@ -959,7 +960,9 @@ pub(crate) fn ensure_layout(app: &mut AppState) {
     } else {
         app.page_dimensions.as_slice()
     };
-    let effective_viewport_width = if app.viewing_mode == ViewingMode::TwoPageSpread {
+    let effective_viewport_width = if app.viewing_mode == ViewingMode::TwoPageSpread
+        || app.viewing_mode == ViewingMode::BookMode
+    {
         app.viewport_width.saturating_sub(64).max(2) / 2
     } else {
         app.viewport_width.saturating_sub(32).max(1)
@@ -984,6 +987,16 @@ pub(crate) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u3
     }
     if app.viewing_mode == ViewingMode::TwoPageSpread {
         let base = app.current_page & !1;
+        if base + 1 < app.page_count() {
+            return vec![base, base + 1];
+        }
+        return vec![base.min(app.page_count().saturating_sub(1))];
+    }
+    if app.viewing_mode == ViewingMode::BookMode {
+        if app.current_page == 0 {
+            return vec![0];
+        }
+        let base = 1 + ((app.current_page - 1) & !1);
         if base + 1 < app.page_count() {
             return vec![base, base + 1];
         }
@@ -1548,6 +1561,7 @@ pub(crate) fn normalize_viewing_mode(mode: ViewingMode) -> ViewingMode {
     match mode {
         ViewingMode::SinglePage => ViewingMode::SinglePage,
         ViewingMode::TwoPageSpread => ViewingMode::TwoPageSpread,
+        ViewingMode::BookMode => ViewingMode::BookMode,
         _ => ViewingMode::ContinuousVertical,
     }
 }
@@ -1580,6 +1594,7 @@ pub(crate) fn view_mode_index(mode: ViewingMode) -> i32 {
     match mode {
         ViewingMode::SinglePage => 1,
         ViewingMode::TwoPageSpread => 2,
+        ViewingMode::BookMode => 3,
         _ => 0,
     }
 }
@@ -1590,6 +1605,7 @@ pub(crate) fn view_mode_label(mode: ViewingMode, language: ResolvedLanguage) -> 
         match mode {
             ViewingMode::SinglePage => "view.mode.single",
             ViewingMode::TwoPageSpread => "view.mode.two_page",
+            ViewingMode::BookMode => "view.mode.book",
             _ => "view.mode.continuous",
         },
     )
@@ -1763,6 +1779,10 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_tools_rotation_270, "tools.rotation.270");
     set_text!(set_text_tools_convert, "tools.convert");
     set_text!(set_text_tools_convert_desc, "tools.convert.desc");
+    set_text!(set_text_tools_crop, "tools.crop");
+    set_text!(set_text_tools_crop_desc, "tools.crop.desc");
+    set_text!(set_text_tools_reorder, "tools.reorder");
+    set_text!(set_text_tools_reorder_desc, "tools.organizer.desc");
     set_text!(set_text_tools_drop_merge, "tools.drop.merge");
     set_text!(set_text_tools_drop_split, "tools.drop.split");
     set_text!(set_text_tools_drop_delete, "tools.drop.delete");
@@ -1854,10 +1874,10 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_view_modes_normalize_to_continuous() {
+    fn supported_view_modes_preserve_book_mode() {
         assert_eq!(
             normalize_viewing_mode(ViewingMode::BookMode),
-            ViewingMode::ContinuousVertical
+            ViewingMode::BookMode
         );
         assert_eq!(
             normalize_viewing_mode(ViewingMode::TwoPageSpread),
@@ -1866,6 +1886,11 @@ mod tests {
         assert_eq!(
             normalize_viewing_mode(ViewingMode::SinglePage),
             ViewingMode::SinglePage
+        );
+        assert_eq!(view_mode_index(ViewingMode::BookMode), 3);
+        assert_eq!(
+            view_mode_label(ViewingMode::BookMode, ResolvedLanguage::English),
+            "Book View"
         );
     }
 
@@ -2021,41 +2046,49 @@ mod tests {
 
     #[test]
     fn visible_page_indices_skips_prefetch_at_high_zoom() {
-        let mut app = AppState::new(UserPreferences::default());
-        let doc_id = DocumentId::new(1);
-        crate::application::DocumentController::begin_open(
-            &mut app.application,
-            doc_id,
-            PathBuf::from("test.pdf"),
-            Instant::now(),
-        );
-        let _ = crate::application::DocumentController::opened(
-            &mut app.application,
-            doc_id,
-            10,
-            10_000,
-        );
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let mut app = AppState::new(UserPreferences::default());
+            let doc_id = DocumentId::new(1);
+            crate::application::DocumentController::begin_open(
+                &mut app.application,
+                doc_id,
+                PathBuf::from("test.pdf"),
+                Instant::now(),
+            );
+            let _ = crate::application::DocumentController::opened(
+                &mut app.application,
+                doc_id,
+                10,
+                10_000,
+            );
 
-        app.page_dimensions = Arc::new(vec![(600.0, 800.0); 10]);
-        app.viewport_width = 800;
-        app.viewport_height = 600;
-        app.layout =
-            ContinuousLayout::compute(&app.page_dimensions, 800, 600, ZoomMode::FitPage, 1.0, 10.0);
-        app.current_page = 4;
-        let window = AppWindow::new().unwrap();
-        window.set_current_scroll_y(-app.layout.pages[4].y_offset);
+            app.page_dimensions = Arc::new(vec![(600.0, 800.0); 10]);
+            app.viewport_width = 800;
+            app.viewport_height = 600;
+            app.layout = ContinuousLayout::compute(
+                &app.page_dimensions,
+                800,
+                600,
+                ZoomMode::FitPage,
+                1.0,
+                10.0,
+            );
+            app.current_page = 4;
+            let window = AppWindow::new().unwrap();
+            window.set_current_scroll_y(-app.layout.pages[4].y_offset);
 
-        // At zoom < 3.0 (default 1.0), ±1 neighbors are included
-        app.zoom_factor = ZoomFactor::new(1.0);
-        let normal_indices = visible_page_indices(&app, &window);
-        assert!(normal_indices.contains(&3));
-        assert!(normal_indices.contains(&4));
-        assert!(normal_indices.contains(&5));
+            // At zoom < 3.0 (default 1.0), ±1 neighbors are included
+            app.zoom_factor = ZoomFactor::new(1.0);
+            let normal_indices = visible_page_indices(&app, &window);
+            assert!(normal_indices.contains(&3));
+            assert!(normal_indices.contains(&4));
+            assert!(normal_indices.contains(&5));
 
-        // At zoom >= 3.0, off-screen ±1 neighbors are skipped
-        app.zoom_factor = ZoomFactor::new(3.0);
-        let high_zoom_indices = visible_page_indices(&app, &window);
-        // Page 4 is visible; neighbors 3 and 5 are not prefetched if not in viewport
-        assert_eq!(high_zoom_indices, vec![4]);
+            // At zoom >= 3.0, off-screen ±1 neighbors are skipped
+            app.zoom_factor = ZoomFactor::new(3.0);
+            let high_zoom_indices = visible_page_indices(&app, &window);
+            // Page 4 is visible; neighbors 3 and 5 are not prefetched if not in viewport
+            assert_eq!(high_zoom_indices, vec![4]);
+        });
     }
 }

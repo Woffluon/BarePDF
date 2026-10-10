@@ -773,6 +773,7 @@ fn test_save_with_annotations_embeds_highlights_strokes_and_signatures() {
                 w_norm: 0.3,
                 h_norm: 0.12,
                 payload: SignaturePayload::Drawn(vec![vec![(0.0, 0.5), (0.5, 0.2), (1.0, 0.8)]]),
+                stroke_width: 2.0,
             },
             SignatureStamp {
                 page: idx(1),
@@ -787,8 +788,10 @@ fn test_save_with_annotations_embeds_highlights_strokes_and_signatures() {
                         255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
                     ],
                 },
+                stroke_width: 2.0,
             },
         ],
+        free_texts: Vec::new(),
     };
 
     PdfOperations::save_with_annotations(&source, &annotations, &output)
@@ -825,6 +828,7 @@ fn test_save_with_annotations_atomic_write_preserves_original_on_failure() {
         highlights: Vec::new(),
         strokes: Vec::new(),
         signatures: Vec::new(),
+        free_texts: Vec::new(),
     };
 
     let result = PdfOperations::save_with_annotations(&source, &annotations, &output);
@@ -938,7 +942,9 @@ fn test_save_with_annotations_rejects_malformed_signature_images() {
                 w_norm: 0.2,
                 h_norm: 0.1,
                 payload,
+                stroke_width: 2.0,
             }],
+            free_texts: Vec::new(),
         };
 
         let result = PdfOperations::save_with_annotations(&source, &annotations, &output);
@@ -948,4 +954,266 @@ fn test_save_with_annotations_rejects_malformed_signature_images() {
         );
         assert!(!output.exists());
     }
+}
+
+// ---------------------------------------------------------------------------
+// crop_pages tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_crop_pages_modifies_page_dimensions() {
+    use barepdf_core::PageCropRect;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("src.pdf");
+    let output = dir.path().join("cropped.pdf");
+
+    create_test_pdf(&src, 2); // page 0: 100x200, page 1: 200x400
+
+    let crops = vec![
+        PageCropRect {
+            page_index: 0,
+            left: 10.0,
+            bottom: 20.0,
+            right: 80.0,
+            top: 120.0,
+        },
+        PageCropRect {
+            page_index: 1,
+            left: 20.0,
+            bottom: 40.0,
+            right: 150.0,
+            top: 300.0,
+        },
+    ];
+
+    PdfOperations::crop_pages(&src, &crops, &output).expect("crop succeeds");
+
+    let (count, dims, _) = inspect_pdf(&output);
+    assert_eq!(count, 2);
+    assert_eq!(dims[0], (70.0, 100.0));
+    assert_eq!(dims[1], (130.0, 260.0));
+}
+
+#[test]
+fn test_crop_pages_empty_crops_preserves_document() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("src.pdf");
+    let output = dir.path().join("crop_empty.pdf");
+
+    create_test_pdf(&src, 2);
+
+    PdfOperations::crop_pages(&src, &[], &output).expect("empty crop succeeds");
+
+    let (count, dims, _) = inspect_pdf(&output);
+    assert_eq!(count, 2);
+    assert_eq!(dims[0], (100.0, 200.0));
+    assert_eq!(dims[1], (200.0, 400.0));
+}
+
+#[test]
+fn test_crop_pages_out_of_bounds_fails() {
+    use barepdf_core::PageCropRect;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("src.pdf");
+    let output = dir.path().join("crop_oob.pdf");
+
+    create_test_pdf(&src, 2);
+
+    let crops = vec![PageCropRect {
+        page_index: 5,
+        left: 10.0,
+        bottom: 20.0,
+        right: 80.0,
+        top: 120.0,
+    }];
+
+    let result = PdfOperations::crop_pages(&src, &crops, &output);
+    assert!(result.is_err());
+    assert!(!output.exists());
+}
+
+#[test]
+fn test_crop_pages_invalid_box_fails() {
+    use barepdf_core::PageCropRect;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("src.pdf");
+    let output = dir.path().join("crop_inv.pdf");
+
+    create_test_pdf(&src, 2);
+
+    let invalid_horizontal = vec![PageCropRect {
+        page_index: 0,
+        left: 80.0,
+        bottom: 20.0,
+        right: 10.0,
+        top: 120.0,
+    }];
+    assert!(PdfOperations::crop_pages(&src, &invalid_horizontal, &output).is_err());
+    assert!(!output.exists());
+
+    let invalid_vertical = vec![PageCropRect {
+        page_index: 0,
+        left: 10.0,
+        bottom: 120.0,
+        right: 80.0,
+        top: 20.0,
+    }];
+    assert!(PdfOperations::crop_pages(&src, &invalid_vertical, &output).is_err());
+    assert!(!output.exists());
+}
+
+#[test]
+fn test_crop_pages_non_existent_source_fails() {
+    use barepdf_core::PageCropRect;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("missing.pdf");
+    let output = dir.path().join("cropped.pdf");
+
+    let crops = vec![PageCropRect {
+        page_index: 0,
+        left: 10.0,
+        bottom: 20.0,
+        right: 80.0,
+        top: 120.0,
+    }];
+
+    let result = PdfOperations::crop_pages(&src, &crops, &output);
+    assert!(matches!(result, Err(PdfError::FileNotFound(_))));
+}
+
+#[test]
+fn test_crop_pages_in_place_succeeds() {
+    use barepdf_core::PageCropRect;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("in_place.pdf");
+    create_test_pdf(&src, 1);
+
+    let crops = vec![PageCropRect {
+        page_index: 0,
+        left: 10.0,
+        bottom: 10.0,
+        right: 60.0,
+        top: 80.0,
+    }];
+
+    PdfOperations::crop_pages(&src, &crops, &src).expect("in-place crop succeeds");
+    let (count, dims, _) = inspect_pdf(&src);
+    assert_eq!(count, 1);
+    assert_eq!(dims[0], (50.0, 70.0));
+}
+
+// ---------------------------------------------------------------------------
+// free_text annotation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_save_with_annotations_flattens_free_text() {
+    use barepdf_core::{DocumentAnnotations, FreeTextAnnotation};
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("free_text_src.pdf");
+    let output = dir.path().join("free_text_out.pdf");
+    create_test_pdf(&source, 1);
+
+    let mut annotations = DocumentAnnotations::default();
+    annotations.free_texts.push(FreeTextAnnotation {
+        id: uuid::Uuid::new_v4(),
+        page_index: 0,
+        x: 5.0,
+        y: 50.0,
+        text: "Hello BarePDF FreeText".to_string(),
+        font_size: 6.0,
+        color_rgba: [0, 0, 0, 255],
+    });
+
+    PdfOperations::save_with_annotations(&source, &annotations, &output)
+        .expect("save free text annotation succeeds");
+
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
+    let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdfium = Pdfium::default();
+    let doc = pdfium
+        .load_pdf_from_file(&output, None)
+        .expect("load output");
+    let page = doc.pages().get(0).expect("get page 0");
+    let text = page.text().expect("page text").all();
+    assert!(
+        text.contains("Hello BarePDF FreeText"),
+        "expected text on page to contain 'Hello BarePDF FreeText', got: {text}"
+    );
+}
+
+#[test]
+fn test_save_with_annotations_flattens_multiline_free_text() {
+    use barepdf_core::{DocumentAnnotations, FreeTextAnnotation};
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("multiline_src.pdf");
+    let output = dir.path().join("multiline_out.pdf");
+    create_test_pdf(&source, 1);
+
+    let mut annotations = DocumentAnnotations::default();
+    annotations.free_texts.push(FreeTextAnnotation {
+        id: uuid::Uuid::new_v4(),
+        page_index: 0,
+        x: 20.0,
+        y: 100.0,
+        text: "Line One\nLine Two".to_string(),
+        font_size: 12.0,
+        color_rgba: [255, 0, 0, 255],
+    });
+
+    PdfOperations::save_with_annotations(&source, &annotations, &output)
+        .expect("save multiline free text annotation succeeds");
+
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
+    let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdfium = Pdfium::default();
+    let doc = pdfium
+        .load_pdf_from_file(&output, None)
+        .expect("load output");
+    let page = doc.pages().get(0).expect("get page 0");
+    let text = page.text().expect("page text").all();
+    assert!(
+        text.contains("Line One") && text.contains("Line Two"),
+        "expected text on page to contain 'Line One' and 'Line Two', got: {text}"
+    );
+}
+
+#[test]
+fn signature_custom_stroke_width_is_preserved() {
+    use barepdf_core::{DocumentAnnotations, SignaturePayload, SignatureStamp};
+
+    let dir = tempdir().expect("tempdir");
+    let source = dir.path().join("sig_stroke.pdf");
+    let output = dir.path().join("sig_stroke_out.pdf");
+    create_test_pdf(&source, 1);
+
+    let custom_stroke = 4.5;
+    let annotations = DocumentAnnotations {
+        highlights: Vec::new(),
+        strokes: Vec::new(),
+        signatures: vec![SignatureStamp {
+            page: idx(0),
+            x_norm: 0.2,
+            y_norm: 0.3,
+            w_norm: 0.4,
+            h_norm: 0.15,
+            payload: SignaturePayload::Drawn(vec![vec![(0.0, 0.0), (0.5, 0.5), (1.0, 0.0)]]),
+            stroke_width: custom_stroke,
+        }],
+        free_texts: Vec::new(),
+    };
+
+    assert_eq!(annotations.signatures[0].stroke_width, 4.5);
+
+    // Saving document with custom signature stroke succeeds
+    PdfOperations::save_with_annotations(&source, &annotations, &output)
+        .expect("save with custom signature stroke succeeds");
+    assert!(output.exists());
 }

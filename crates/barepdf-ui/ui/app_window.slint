@@ -3,6 +3,7 @@ import { ThemeTokens } from "./tokens.slint";
 import {
     SelectionBox,
     OverlayRectData,
+    FreeTextItem,
     BookmarkItem,
     PageItem,
     ThumbnailItem,
@@ -23,6 +24,7 @@ import { SearchBar } from "./components/search_bar.slint";
 import { PasswordDialog as PasswordPopover } from "./dialogs/password_dialog.slint";
 import { PrintPreviewDialog as PrintPreview } from "./dialogs/print_preview_dialog.slint";
 import { SignatureDialog } from "./dialogs/signature_dialog.slint";
+import { TextAnnotationDialog } from "./dialogs/text_annotation_dialog.slint";
 import { ToolsModal } from "./dialogs/tools_dialog.slint";
 
 export {
@@ -30,6 +32,7 @@ export {
     TabItem,
     SelectionBox,
     OverlayRectData,
+    FreeTextItem,
     BookmarkItem,
     PageItem,
     ThumbnailItem,
@@ -257,6 +260,10 @@ export component AppWindow inherits Window {
     in property <string> text-tools-rotation-270: "90° Counter-Clockwise";
     in property <string> text-tools-convert: "Convert PDF";
     in property <string> text-tools-convert-desc: "Export pages or text in a format that suits your workflow.";
+    in property <string> text-tools-crop: "Crop Pages";
+    in property <string> text-tools-crop-desc: "Crop margins or custom areas from pages";
+    in property <string> text-tools-reorder: "Reorder Pages";
+    in property <string> text-tools-reorder-desc: "Rearrange page sequence in document";
     in property <string> text-tools-drop-merge: "Drop PDFs to add to the merge";
     in property <string> text-tools-drop-split: "Drop a PDF to split";
     in property <string> text-tools-drop-delete: "Drop a PDF to delete pages";
@@ -288,6 +295,7 @@ export component AppWindow inherits Window {
     in-out property <string> text-context-fit-page: "Fit Page";
     in-out property <string> text-draw-pen: "Pen";
     in-out property <string> text-draw-eraser: "Eraser";
+    in-out property <string> text-draw-typewriter: "Type";
     in-out property <string> text-draw-undo: "Undo";
     in-out property <string> text-draw-redo: "Redo";
     in-out property <string> text-draw-clear: "Clear";
@@ -306,9 +314,10 @@ export component AppWindow inherits Window {
     in-out property <bool> drawing-mode-active: false;
     in-out property <bool> pan-mode-active: true;
     in-out property <bool> drawing-eraser-active: false;
+    in-out property <bool> drawing-typewriter-active: false;
     in-out property <int> drawing-eraser-size-index: 1;
     in-out property <float> drawing-eraser-diameter-norm: 0.05;
-    in-out property <bool> drawing-toolbar-at-bottom: true;
+    in-out property <bool> drawing-toolbar-at-bottom: false;
     in-out property <bool> drawing-can-undo: false;
     in-out property <bool> drawing-can-redo: false;
     in-out property <int> drawing-color-index: 0;
@@ -320,6 +329,14 @@ export component AppWindow inherits Window {
     in-out property <int> current-annotation-page-index: 0;
     in-out property <[image]> page-annotation-overlays: [];
     in-out property <[OverlayRectData]> current-page-overlay-rects: [];
+    in-out property <[FreeTextItem]> page-free-texts: [];
+    in-out property <bool> text-note-dialog-open: false;
+    in-out property <int> text-note-page-index: 0;
+    in-out property <float> text-note-norm-x: 0.0;
+    in-out property <float> text-note-norm-y: 0.0;
+    in-out property <string> text-note-content: "";
+    in-out property <float> text-note-font-size: 14.0;
+    in-out property <int> text-note-color-index: 0;
 
     in-out property <bool> has-second-spread-page: false;
     in-out property <image> second-page-image;
@@ -336,6 +353,7 @@ export component AppWindow inherits Window {
     in-out property <image> sign-pad-preview;
     in-out property <image> signature-preview-image;
     in-out property <bool> sign-has-preview: false;
+    in-out property <float> sign-pen-thickness: 2.0;
     in-out property <bool> signature-placement-active: false;
     in-out property <int> signature-placement-page: 0;
     in-out property <float> signature-box-x: 0.35;
@@ -413,6 +431,8 @@ export component AppWindow inherits Window {
     callback request-delete-pages-execute(string);
     callback request-rotate-pages-execute(string, int);
     callback request-convert-execute(int, int, int, string);
+    callback request-crop-pages-execute(string, string, string, string, string);
+    callback request-reorder-pages-execute(string);
     callback request-tool-drop(data-transfer, int);
     callback request-submit-tool-password(string);
     callback request-cancel-tool-password();
@@ -428,6 +448,7 @@ export component AppWindow inherits Window {
     callback rotate-view-ccw();
     callback toggle-drawing-mode();
     callback toggle-pan-mode();
+    callback select-drawing-tool(int);
     callback set-drawing-eraser(bool);
     callback set-drawing-eraser-size(int);
     callback set-drawing-color(int);
@@ -442,6 +463,7 @@ export component AppWindow inherits Window {
     callback drawing-pointer-down(int, float, float);
     callback drawing-pointer-move(int, float, float);
     callback drawing-pointer-up(int, float, float);
+    callback request-add-free-text(int, float, float, string, float, int);
     callback page-right-clicked(int, float, float, length, length);
     callback context-highlight-selection();
     callback context-find-selection();
@@ -456,6 +478,7 @@ export component AppWindow inherits Window {
     callback signature-resize-move(float, float);
     callback signature-apply();
     callback signature-cancel();
+    callback sign-pen-thickness-changed(float);
 
     changed page-selection-range => { root.tools-page-range = root.page-selection-range; }
     changed tools-page-range => { root.page-selection-range = root.tools-page-range; }
@@ -1307,8 +1330,8 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if root.has-document && (root.view-mode == 1 || root.view-mode == 2) : spread-scroll := ScrollView {
-                    property <bool> show-second: root.view-mode == 2 && (root.has-second-spread-page || root.visible-pages.length > 1);
+                if root.has-document && (root.view-mode == 1 || root.view-mode == 2 || root.view-mode == 3) : spread-scroll := ScrollView {
+                    property <bool> show-second: (root.view-mode == 2 || root.view-mode == 3) && (root.has-second-spread-page || root.visible-pages.length > 1);
                     property <length> second-w: root.visible-pages.length > 1 ? root.visible-pages[1].width : root.second-page-width;
                     property <length> second-h: root.visible-pages.length > 1 ? root.visible-pages[1].height : root.second-page-height;
                     property <int> first-idx: root.visible-pages.length > 0 ? root.visible-pages[0].page-index : root.current-annotation-page-index;
@@ -1358,10 +1381,18 @@ export component AppWindow inherits Window {
                                 x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
                             }
                         }
+                        for ft in root.page-free-texts : Text {
+                            visible: ft.page_index == spread-scroll.first-idx;
+                            x: parent.width * ft.x_ratio;
+                            y: parent.height * ft.y_ratio;
+                            text: ft.text;
+                            font-size: ft.font_size;
+                            color: ft.color;
+                        }
                         page-touch-1 := TouchArea {
                             property <length> pan-last-abs-y: 0px;
                             property <length> pan-last-abs-x: 0px;
-                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            mouse-cursor: (root.drawing-mode-active && !root.pan-mode-active) ? (root.drawing-typewriter-active ? text : crosshair) : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                     root.page-right-clicked(
@@ -1373,7 +1404,7 @@ export component AppWindow inherits Window {
                                     );
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-down(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active) {
                                         self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1383,14 +1414,14 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-up(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-up(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
                                     }
                                 }
                                 if (event.kind == PointerEventKind.move) {
-                                    if (root.drawing-mode-active && self.pressed) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active && self.pressed) {
                                         root.drawing-pointer-move(spread-scroll.first-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active && self.pressed) {
                                         let current-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1407,7 +1438,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             scroll-event(event) => {
-                                if (root.drawing-mode-active) {
+                                if (root.drawing-mode-active && !root.pan-mode-active) {
                                     return accept;
                                 }
                                 if (event.modifiers.control) {
@@ -1418,7 +1449,7 @@ export component AppWindow inherits Window {
                                 return reject;
                             }
                         }
-                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-1.has-hover || page-touch-1.pressed) : Rectangle {
+                        if root.drawing-mode-active && !root.pan-mode-active && root.drawing-eraser-active && (page-touch-1.has-hover || page-touch-1.pressed) : Rectangle {
                             property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
                             x: page-touch-1.mouse-x - self.diameter / 2;
                             y: page-touch-1.mouse-y - self.diameter / 2;
@@ -1511,10 +1542,18 @@ export component AppWindow inherits Window {
                                 x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B;
                             }
                         }
+                        for ft in root.page-free-texts : Text {
+                            visible: ft.page_index == spread-scroll.second-idx;
+                            x: parent.width * ft.x_ratio;
+                            y: parent.height * ft.y_ratio;
+                            text: ft.text;
+                            font-size: ft.font_size;
+                            color: ft.color;
+                        }
                         page-touch-2 := TouchArea {
                             property <length> pan-last-abs-y: 0px;
                             property <length> pan-last-abs-x: 0px;
-                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            mouse-cursor: (root.drawing-mode-active && !root.pan-mode-active) ? (root.drawing-typewriter-active ? text : crosshair) : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                     root.page-right-clicked(
@@ -1526,7 +1565,7 @@ export component AppWindow inherits Window {
                                     );
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-down(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active) {
                                         self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1536,14 +1575,14 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-up(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-up(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
                                     }
                                 }
                                 if (event.kind == PointerEventKind.move) {
-                                    if (root.drawing-mode-active && self.pressed) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active && self.pressed) {
                                         root.drawing-pointer-move(spread-scroll.second-idx, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active && self.pressed) {
                                         let current-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1560,7 +1599,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             scroll-event(event) => {
-                                if (root.drawing-mode-active) {
+                                if (root.drawing-mode-active && !root.pan-mode-active) {
                                     return accept;
                                 }
                                 if (event.modifiers.control) {
@@ -1571,7 +1610,7 @@ export component AppWindow inherits Window {
                                 return reject;
                             }
                         }
-                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch-2.has-hover || page-touch-2.pressed) : Rectangle {
+                        if root.drawing-mode-active && !root.pan-mode-active && root.drawing-eraser-active && (page-touch-2.has-hover || page-touch-2.pressed) : Rectangle {
                             property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
                             x: page-touch-2.mouse-x - self.diameter / 2;
                             y: page-touch-2.mouse-y - self.diameter / 2;
@@ -1685,10 +1724,18 @@ export component AppWindow inherits Window {
                         }
                         for box in page.selection-boxes : Rectangle { x: box.x; y: box.y; width: box.width; height: box.height; background: ThemeTokens.selection; }
                         for highlight in page.search-highlights : Rectangle { x: highlight.x; y: highlight.y; width: highlight.width; height: highlight.height; background: #FFE066.with-alpha(0.5); border-width: 1px; border-color: #FF922B; }
+                        for ft in root.page-free-texts : Text {
+                            visible: ft.page_index == page.page-index;
+                            x: parent.width * ft.x_ratio;
+                            y: parent.height * ft.y_ratio;
+                            text: ft.text;
+                            font-size: ft.font_size;
+                            color: ft.color;
+                        }
                         page-touch := TouchArea {
                             property <length> pan-last-abs-y: 0px;
                             property <length> pan-last-abs-x: 0px;
-                            mouse-cursor: root.drawing-mode-active ? crosshair : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
+                            mouse-cursor: (root.drawing-mode-active && !root.pan-mode-active) ? (root.drawing-typewriter-active ? text : crosshair) : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                     root.page-right-clicked(
@@ -1700,7 +1747,7 @@ export component AppWindow inherits Window {
                                     );
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-down(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active) {
                                         self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1710,14 +1757,14 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
-                                    if (root.drawing-mode-active) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-up(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
                                     }
                                 }
                                 if (event.kind == PointerEventKind.move) {
-                                    if (root.drawing-mode-active && self.pressed) {
+                                    if (root.drawing-mode-active && !root.pan-mode-active && self.pressed) {
                                         root.drawing-pointer-move(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active && self.pressed) {
                                         let current-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1734,7 +1781,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             scroll-event(event) => {
-                                if (root.drawing-mode-active) {
+                                if (root.drawing-mode-active && !root.pan-mode-active) {
                                     return accept;
                                 }
                                 if (event.modifiers.control) {
@@ -1745,7 +1792,7 @@ export component AppWindow inherits Window {
                                 return reject;
                             }
                         }
-                        if root.drawing-mode-active && root.drawing-eraser-active && (page-touch.has-hover || page-touch.pressed) : Rectangle {
+                        if root.drawing-mode-active && !root.pan-mode-active && root.drawing-eraser-active && (page-touch.has-hover || page-touch.pressed) : Rectangle {
                             property <length> diameter: parent.width * root.drawing-eraser-diameter-norm;
                             x: page-touch.mouse-x - self.diameter / 2;
                             y: page-touch.mouse-y - self.diameter / 2;
@@ -1863,7 +1910,12 @@ export component AppWindow inherits Window {
                             min-width: 44px;
                             text: root.text-toolbar-pan;
                             active: root.pan-mode-active;
-                            clicked => { root.toggle-pan-mode(); }
+                            clicked => {
+                                root.pan-mode-active = true;
+                                root.drawing-eraser-active = false;
+                                root.drawing-typewriter-active = false;
+                                root.select-drawing-tool(0);
+                            }
                         }
 
                         if root.drawing-mode-active : HorizontalLayout {
@@ -1872,15 +1924,37 @@ export component AppWindow inherits Window {
                                 height: 40px;
                                 min-width: 44px;
                                 text: root.text-draw-pen;
-                                active: !root.drawing-eraser-active;
-                                clicked => { root.drawing-eraser-active = false; root.set-drawing-eraser(false); }
+                                active: !root.pan-mode-active && !root.drawing-eraser-active && !root.drawing-typewriter-active;
+                                clicked => {
+                                    root.pan-mode-active = false;
+                                    root.drawing-eraser-active = false;
+                                    root.drawing-typewriter-active = false;
+                                    root.select-drawing-tool(1);
+                                }
                             }
                             TextButton {
                                 height: 40px;
                                 min-width: 44px;
                                 text: root.text-draw-eraser;
-                                active: root.drawing-eraser-active;
-                                clicked => { root.drawing-eraser-active = true; root.set-drawing-eraser(true); }
+                                active: !root.pan-mode-active && root.drawing-eraser-active;
+                                clicked => {
+                                    root.pan-mode-active = false;
+                                    root.drawing-eraser-active = true;
+                                    root.drawing-typewriter-active = false;
+                                    root.select-drawing-tool(2);
+                                }
+                            }
+                            TextButton {
+                                height: 40px;
+                                min-width: 44px;
+                                text: root.text-draw-typewriter;
+                                active: !root.pan-mode-active && root.drawing-typewriter-active;
+                                clicked => {
+                                    root.pan-mode-active = false;
+                                    root.drawing-eraser-active = false;
+                                    root.drawing-typewriter-active = true;
+                                    root.select-drawing-tool(3);
+                                }
                             }
 
                             Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
@@ -2200,6 +2274,10 @@ export component AppWindow inherits Window {
                     text-convert-all: root.text-tools-convert-all;
                     text-convert-custom: root.text-tools-convert-custom;
                     btn-convert-all: root.text-tools-btn-convert-all;
+                    text-crop: root.text-tools-crop;
+                    text-crop-desc: root.text-tools-crop-desc;
+                    text-reorder: root.text-tools-reorder;
+                    text-reorder-desc: root.text-tools-reorder-desc;
                     text-merge-drag-hint: root.text-tools-merge-drag-hint;
                     text-merge-dragged-hint: root.text-tools-merge-dragged-hint;
 
@@ -2217,6 +2295,8 @@ export component AppWindow inherits Window {
                     delete-submit(range) => { root.request-delete-pages-execute(range); }
                     rotate-submit(range, rot) => { root.request-rotate-pages-execute(range, rot); }
                     convert-submit(format, dpi, quality, range) => { root.request-convert-execute(format, dpi, quality, range); }
+                    crop-submit(range, left, bottom, right, top) => { root.request-crop-pages-execute(range, left, bottom, right, top); }
+                    reorder-submit(order) => { root.request-reorder-pages-execute(order); }
                     drop-files(data, tool-id) => { root.request-tool-drop(data, tool-id); }
                     select-page(page, ctrl, shift) => { root.request-select-page-range(page, ctrl, shift); }
                     select-all-pages => { root.request-select-all-tool-pages(); }
@@ -2534,6 +2614,8 @@ export component AppWindow inherits Window {
         tab-index <=> root.sign-tab-index;
         pad-preview: root.sign-pad-preview;
         has-preview: root.sign-has-preview;
+        pen-thickness <=> root.sign-pen-thickness;
+        pen-thickness-changed(val) => { root.sign-pen-thickness-changed(val); }
         text-title: root.text-sign-title;
         text-draw-tab: root.text-sign-draw-tab;
         text-image-tab: root.text-sign-image-tab;
@@ -2547,6 +2629,21 @@ export component AppWindow inherits Window {
         pad-clear => { root.sign-pad-clear(); }
         pick-image => { root.sign-pick-image(); }
         start-placement => { root.sign-start-placement(); }
+    }
+
+    // Text Note Annotation Modal
+    if root.text-note-dialog-open : TextAnnotationDialog {
+        is-open <=> root.text-note-dialog-open;
+        text-content <=> root.text-note-content;
+        font-size <=> root.text-note-font-size;
+        color-index <=> root.text-note-color-index;
+        close => {
+            root.text-note-dialog-open = false;
+        }
+        insert(text, size, color) => {
+            root.text-note-dialog-open = false;
+            root.request-add-free-text(root.text-note-page-index, root.text-note-norm-x, root.text-note-norm-y, text, size, color);
+        }
     }
 
     // Frameless Window 6px Resize Edge Strips (active in Normal unmaximized mode)

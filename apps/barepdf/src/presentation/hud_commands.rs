@@ -58,6 +58,26 @@ pub const ALL_HUD_COMMANDS: &[HudCommandItem] = &[
         title: "Zoom: Fit Entire Page",
         subtitle: "Scale document page to fit window",
     },
+    HudCommandItem {
+        id: "view_book",
+        title: "View Mode: Book Mode",
+        subtitle: "Two pages with first page as cover",
+    },
+    HudCommandItem {
+        id: "view_continuous",
+        title: "View Mode: Continuous",
+        subtitle: "Scroll pages vertically",
+    },
+    HudCommandItem {
+        id: "view_single",
+        title: "View Mode: Single Page",
+        subtitle: "Display one page at a time",
+    },
+    HudCommandItem {
+        id: "view_two_page",
+        title: "View Mode: Two Pages",
+        subtitle: "Side-by-side spread view",
+    },
 ];
 
 fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
@@ -135,45 +155,109 @@ pub fn handle_hud_query(
     let lower = trimmed.to_lowercase();
     window.set_command_palette_open(false);
 
-    if lower.contains("zen") || lower.contains("fullscreen") || lower == "f11" {
+    if lower == "zen" || lower.contains("zen") || lower.contains("fullscreen") || lower == "f11" {
         let new_mode = app.request_toggle_fullscreen();
         let enabled = new_mode == barepdf_core::WindowMode::FullScreen;
         window.set_window_mode(if enabled { 1 } else { 0 });
         window.window().set_fullscreen(enabled);
         super::window_chrome::sync_window_maximized(window);
-    } else if lower.contains("invert") || lower.contains("ters") {
+    } else if lower == "invert_colors" || lower.contains("invert") || lower.contains("ters") {
         app.preferences.invert_colors = !app.preferences.invert_colors;
         scheduler.set_invert_colors(app.preferences.invert_colors);
         window.set_invert_page_colors(app.preferences.invert_colors);
         invalidate_layout_and_render(app, scheduler, window, true);
-    } else if lower.contains("sepia") || lower.contains("sepya") {
+    } else if lower == "tint_sepia" || lower.contains("sepia") || lower.contains("sepya") {
         app.preferences.paper_tint = 1;
         window.set_paper_tint(1);
         invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower.contains("night") || lower.contains("gece") || lower.contains("dark") {
+    } else if lower == "tint_night"
+        || lower.contains("night")
+        || lower.contains("gece")
+        || lower.contains("dark")
+    {
         app.preferences.paper_tint = 2;
         window.set_paper_tint(2);
         invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower.contains("amber") || lower.contains("kehribar") {
+    } else if lower == "tint_amber" || lower.contains("amber") || lower.contains("kehribar") {
         app.preferences.paper_tint = 3;
         window.set_paper_tint(3);
         invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower.contains("normal") || lower.contains("orijinal") || lower.contains("original") {
+    } else if lower == "tint_normal"
+        || lower.contains("normal")
+        || lower.contains("orijinal")
+        || lower.contains("original")
+    {
         app.preferences.paper_tint = 0;
         window.set_paper_tint(0);
         invalidate_layout_and_render(app, scheduler, window, false);
     } else if let action @ HudAction::RequestPrint = parse_hud_action(&lower) {
         return action;
-    } else if lower.contains("fit width") || lower.contains("geni") {
+    } else if lower == "fit_width" || lower.contains("fit width") || lower.contains("geni") {
         app.zoom_mode = barepdf_core::ZoomMode::FitWidth;
         app.preferences.zoom_mode = barepdf_core::ZoomMode::FitWidth;
         window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
         invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower.contains("fit page") || lower.contains("sayfa s") {
+    } else if lower == "fit_page" || lower.contains("fit page") || lower.contains("sayfa s") {
         app.zoom_mode = barepdf_core::ZoomMode::FitPage;
         app.preferences.zoom_mode = barepdf_core::ZoomMode::FitPage;
         window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
         invalidate_layout_and_render(app, scheduler, window, false);
+    } else if lower == "view_book" || lower.contains("book") || lower.contains("kitap") {
+        app.viewing_mode = barepdf_core::ViewingMode::BookMode;
+        app.preferences.viewing_mode = barepdf_core::ViewingMode::BookMode;
+        app.layout_key = None;
+        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
+        window.set_view_mode_label(slint::SharedString::from(
+            crate::presentation::ui::view_mode_label(
+                app.viewing_mode,
+                app.preferences.language.resolve(),
+            ),
+        ));
+        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
+    } else if lower == "view_two_page"
+        || lower.contains("two page")
+        || lower.contains("çift")
+        || lower.contains("spread")
+    {
+        app.viewing_mode = barepdf_core::ViewingMode::TwoPageSpread;
+        app.preferences.viewing_mode = barepdf_core::ViewingMode::TwoPageSpread;
+        app.layout_key = None;
+        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
+        window.set_view_mode_label(slint::SharedString::from(
+            crate::presentation::ui::view_mode_label(
+                app.viewing_mode,
+                app.preferences.language.resolve(),
+            ),
+        ));
+        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
+    } else if lower == "view_single" || lower.contains("single page") || lower.contains("tek sayfa")
+    {
+        app.viewing_mode = barepdf_core::ViewingMode::SinglePage;
+        app.preferences.viewing_mode = barepdf_core::ViewingMode::SinglePage;
+        app.layout_key = None;
+        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
+        window.set_view_mode_label(slint::SharedString::from(
+            crate::presentation::ui::view_mode_label(
+                app.viewing_mode,
+                app.preferences.language.resolve(),
+            ),
+        ));
+        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
+    } else if lower == "view_continuous"
+        || lower.contains("continuous")
+        || lower.contains("sürekli")
+    {
+        app.viewing_mode = barepdf_core::ViewingMode::ContinuousVertical;
+        app.preferences.viewing_mode = barepdf_core::ViewingMode::ContinuousVertical;
+        app.layout_key = None;
+        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
+        window.set_view_mode_label(slint::SharedString::from(
+            crate::presentation::ui::view_mode_label(
+                app.viewing_mode,
+                app.preferences.language.resolve(),
+            ),
+        ));
+        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
     } else if !trimmed.is_empty() {
         crate::presentation::ui::show_banner(window, format!("Unknown command: {trimmed}"), false);
     }
@@ -240,5 +324,32 @@ mod tests {
         }
 
         assert!(print_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn hud_commands_all_registered_ids_execute_cleanly() {
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let mut app = AppState::new(barepdf_core::UserPreferences::default());
+            let engine = barepdf_pdf::PdfiumEngine::new().expect("pdf engine");
+            let scheduler =
+                RenderScheduler::spawn(engine, barepdf_core::MemoryBudget::new(1024 * 1024));
+            let window = AppWindow::new().expect("slint app window");
+
+            for item in ALL_HUD_COMMANDS {
+                let action = execute_hud_command(&mut app, &scheduler, &window, item.id);
+                if item.id == "print" {
+                    assert_eq!(action, HudAction::RequestPrint);
+                } else {
+                    assert_eq!(action, HudAction::None);
+                }
+                let banner = window.get_banner_text();
+                assert!(
+                    !banner.starts_with("Unknown command"),
+                    "command ID '{}' failed to match and produced banner: {}",
+                    item.id,
+                    banner
+                );
+            }
+        });
     }
 }

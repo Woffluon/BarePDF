@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use barepdf_core::{
-    pages_to_remove_to_retained_pages, validate_page_selection, PageCount, PageIndex, PdfError,
-    Rotation,
+    pages_to_remove_to_retained_pages, validate_page_selection, PageCount, PageCropRect, PageIndex,
+    PdfError, Rotation,
 };
 use pdfium_render::prelude::*;
 
@@ -458,7 +458,116 @@ impl PdfOperations {
         Ok(())
     }
 
-    /// Flattens highlights, ink strokes, and signature stamps into the PDF and writes to output.
+    /// Crops specified pages in source PDF according to crops and writes to output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded,
+    /// any crop page index is out of bounds, crop dimensions are invalid, or output cannot be saved.
+    pub fn crop_pages(
+        source: &Path,
+        crops: &[PageCropRect],
+        output: &Path,
+    ) -> Result<(), PdfError> {
+        Self::crop_pages_with_password(source, crops, output, None)
+    }
+
+    /// Crops specified pages in source PDF using an optional borrowed source password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded with the password,
+    /// any crop page index is out of bounds, crop dimensions are invalid, or output cannot be saved.
+    pub fn crop_pages_with_password(
+        source: &Path,
+        crops: &[PageCropRect],
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
+        if !source.is_file() {
+            return Err(PdfError::FileNotFound(source.display().to_string()));
+        }
+
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let pdfium = process_pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
+
+        let total_pages = doc.pages().len();
+        let _ = validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
+
+        for crop in crops {
+            if crop.page_index >= total_pages as usize {
+                return Err(PdfError::InvalidPdfReason(format!(
+                    "Page index {} is out of bounds (document has {} pages)",
+                    crop.page_index + 1,
+                    total_pages
+                )));
+            }
+            if crop.left >= crop.right || crop.bottom >= crop.top {
+                return Err(PdfError::InvalidPdfReason(format!(
+                    "Invalid crop box dimensions for page {}: left={}, bottom={}, right={}, top={}",
+                    crop.page_index + 1,
+                    crop.left,
+                    crop.bottom,
+                    crop.right,
+                    crop.top
+                )));
+            }
+        }
+
+        for crop in crops {
+            let p_u32 = u32::try_from(crop.page_index).map_err(|_| {
+                PdfError::InvalidPdfReason("Crop page index exceeds supported range".into())
+            })?;
+            let p_idx = to_pdfium_raw_page_index(p_u32)?;
+            let mut page = doc.pages_mut().get(p_idx).map_err(map_pdfium_error)?;
+            let rect = PdfRect::new_from_values(crop.bottom, crop.left, crop.top, crop.right);
+            page.boundaries_mut()
+                .set_crop(rect)
+                .map_err(map_pdfium_error)?;
+            page.boundaries_mut()
+                .set_media(rect)
+                .map_err(map_pdfium_error)?;
+        }
+
+        let bytes = doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
+        Ok(())
+    }
+
+    /// Flattens annotations into the PDF and writes to output. Alias for `save_with_annotations`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded, or output file cannot be saved.
+    pub fn save_annotations(
+        source: &Path,
+        annotations: &barepdf_core::DocumentAnnotations,
+        output: &Path,
+    ) -> Result<(), PdfError> {
+        Self::save_with_annotations(source, annotations, output)
+    }
+
+    /// Flattens annotations into the PDF using an optional password. Alias for `save_with_annotations_with_password`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if source file is missing, cannot be loaded with the password, or output file cannot be saved.
+    pub fn save_annotations_with_password(
+        source: &Path,
+        annotations: &barepdf_core::DocumentAnnotations,
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<(), PdfError> {
+        Self::save_with_annotations_with_password(source, annotations, output, password)
+    }
+
+    /// Flattens highlights, ink strokes, signature stamps, and free text annotations into the PDF and writes to output.
     ///
     /// # Errors
     ///
@@ -496,6 +605,12 @@ impl PdfOperations {
         let total_pages = doc.pages().len();
         let _ = validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
 
+        let font_token = if annotations.free_texts.is_empty() {
+            None
+        } else {
+            Some(doc.fonts_mut().helvetica())
+        };
+
         for p_idx in 0..total_pages {
             let Ok(p_u32) = u32::try_from(p_idx) else {
                 continue;
@@ -504,7 +619,11 @@ impl PdfOperations {
             let has_highlights = annotations.highlights.iter().any(|h| h.page == page_idx);
             let has_strokes = annotations.strokes.iter().any(|s| s.page == page_idx);
             let has_signatures = annotations.signatures.iter().any(|s| s.page == page_idx);
-            if !has_highlights && !has_strokes && !has_signatures {
+            let has_free_texts = annotations
+                .free_texts
+                .iter()
+                .any(|ft| ft.page_index == p_idx as usize);
+            if !has_highlights && !has_strokes && !has_signatures && !has_free_texts {
                 continue;
             }
 
@@ -582,7 +701,7 @@ impl PdfOperations {
                                 PdfPoints::new(x0),
                                 PdfPoints::new(y0),
                                 Some(PdfColor::new(20, 20, 40, 255)),
-                                Some(PdfPoints::new(2.0)),
+                                Some(PdfPoints::new(sig.stroke_width.max(0.5))),
                                 None,
                             )
                             .map_err(map_pdfium_error)?;
@@ -627,6 +746,37 @@ impl PdfOperations {
                             .map_err(map_pdfium_error)?;
                         page.objects_mut()
                             .add_image_object(img_obj)
+                            .map_err(map_pdfium_error)?;
+                    }
+                }
+            }
+
+            if let Some(font) = font_token {
+                for ft in annotations
+                    .free_texts
+                    .iter()
+                    .filter(|ft| ft.page_index == p_idx as usize)
+                {
+                    let lines: Vec<&str> = if ft.text.is_empty() {
+                        vec![""]
+                    } else {
+                        ft.text.lines().collect()
+                    };
+                    let [r, g, b, a] = ft.color_rgba;
+                    let color = PdfColor::new(r, g, b, a);
+                    let font_size_pts = PdfPoints::new(ft.font_size.max(1.0));
+                    let line_height = ft.font_size.max(1.0) * 1.2;
+
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        let line_y = ft.y - (line_idx as f32 * line_height);
+                        let mut text_obj = PdfPageTextObject::new(&doc, *line, font, font_size_pts)
+                            .map_err(map_pdfium_error)?;
+                        text_obj.set_fill_color(color).map_err(map_pdfium_error)?;
+                        text_obj
+                            .translate(PdfPoints::new(ft.x), PdfPoints::new(line_y))
+                            .map_err(map_pdfium_error)?;
+                        page.objects_mut()
+                            .add_text_object(text_obj)
                             .map_err(map_pdfium_error)?;
                     }
                 }

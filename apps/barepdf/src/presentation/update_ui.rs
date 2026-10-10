@@ -149,7 +149,7 @@ fn available_update_ui(
         )
     } else {
         format!(
-            "{} v{} — {}",
+            "{} v{}: {}",
             barepdf_i18n::t(language, "updates.status.available"),
             update.version(),
             note

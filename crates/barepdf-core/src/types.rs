@@ -564,6 +564,10 @@ pub enum SignaturePayload {
     },
 }
 
+const fn default_signature_stroke_width() -> f32 {
+    2.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignatureStamp {
     pub page: PageIndex,
@@ -573,6 +577,28 @@ pub struct SignatureStamp {
     pub w_norm: f32,
     pub h_norm: f32,
     pub payload: SignaturePayload,
+    #[serde(default = "default_signature_stroke_width")]
+    pub stroke_width: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FreeTextAnnotation {
+    pub id: uuid::Uuid,
+    pub page_index: usize,
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    pub font_size: f32,
+    pub color_rgba: [u8; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PageCropRect {
+    pub page_index: usize,
+    pub left: f32,
+    pub bottom: f32,
+    pub right: f32,
+    pub top: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -580,12 +606,17 @@ pub struct DocumentAnnotations {
     pub strokes: Vec<InkStroke>,
     pub highlights: Vec<HighlightQuad>,
     pub signatures: Vec<SignatureStamp>,
+    #[serde(default)]
+    pub free_texts: Vec<FreeTextAnnotation>,
 }
 
 impl DocumentAnnotations {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.strokes.is_empty() && self.highlights.is_empty() && self.signatures.is_empty()
+        self.strokes.is_empty()
+            && self.highlights.is_empty()
+            && self.signatures.is_empty()
+            && self.free_texts.is_empty()
     }
 }
 
@@ -1163,5 +1194,111 @@ mod tests {
             cap_history.undo_stack[0].strokes[0].page,
             PageIndex::from_raw(10)
         );
+    }
+
+    #[test]
+    fn free_text_annotation_and_crop_rect_properties() {
+        let id = uuid::Uuid::new_v4();
+        let annotation = FreeTextAnnotation {
+            id,
+            page_index: 2,
+            x: 72.0,
+            y: 144.0,
+            text: "Hello BarePDF".to_string(),
+            font_size: 14.0,
+            color_rgba: [255, 0, 0, 255],
+        };
+
+        assert_eq!(annotation.id, id);
+        assert_eq!(annotation.page_index, 2);
+        assert_eq!(annotation.x, 72.0);
+        assert_eq!(annotation.y, 144.0);
+        assert_eq!(annotation.text, "Hello BarePDF");
+        assert_eq!(annotation.font_size, 14.0);
+        assert_eq!(annotation.color_rgba, [255, 0, 0, 255]);
+
+        let serialized = serde_json::to_string(&annotation).expect("serialization succeeds");
+        let deserialized: FreeTextAnnotation =
+            serde_json::from_str(&serialized).expect("deserialization succeeds");
+        assert_eq!(annotation, deserialized);
+
+        let crop = PageCropRect {
+            page_index: 0,
+            left: 10.0,
+            bottom: 20.0,
+            right: 500.0,
+            top: 700.0,
+        };
+        assert_eq!(crop.page_index, 0);
+        assert_eq!(crop.left, 10.0);
+        assert_eq!(crop.bottom, 20.0);
+        assert_eq!(crop.right, 500.0);
+        assert_eq!(crop.top, 700.0);
+
+        let crop_serialized = serde_json::to_string(&crop).expect("crop serialization succeeds");
+        let crop_deserialized: PageCropRect =
+            serde_json::from_str(&crop_serialized).expect("crop deserialization succeeds");
+        assert_eq!(crop, crop_deserialized);
+    }
+
+    #[test]
+    fn document_annotations_free_text_and_backward_compatibility() {
+        let mut annotations = DocumentAnnotations::default();
+        assert!(annotations.is_empty());
+        assert!(annotations.free_texts.is_empty());
+
+        let id = uuid::Uuid::nil();
+        annotations.free_texts.push(FreeTextAnnotation {
+            id,
+            page_index: 0,
+            x: 10.0,
+            y: 20.0,
+            text: "Note".to_string(),
+            font_size: 12.0,
+            color_rgba: [0, 0, 0, 255],
+        });
+        assert!(!annotations.is_empty());
+
+        // Backward compatibility: old JSON without free_texts field deserializes cleanly
+        let legacy_json = r#"{"strokes":[],"highlights":[],"signatures":[]}"#;
+        let legacy_deserialized: DocumentAnnotations =
+            serde_json::from_str(legacy_json).expect("legacy JSON deserialization succeeds");
+        assert!(legacy_deserialized.is_empty());
+        assert!(legacy_deserialized.free_texts.is_empty());
+
+        // Full round-trip
+        let serialized = serde_json::to_string(&annotations).expect("serialization succeeds");
+        let roundtrip: DocumentAnnotations =
+            serde_json::from_str(&serialized).expect("deserialization succeeds");
+        assert_eq!(annotations, roundtrip);
+    }
+
+    #[test]
+    fn signature_stamp_stroke_width_serialization_and_default() {
+        let json_without_stroke = r#"{
+            "page": 0,
+            "x_norm": 0.1,
+            "y_norm": 0.2,
+            "w_norm": 0.3,
+            "h_norm": 0.4,
+            "payload": { "Drawn": [[[0.0, 0.0], [1.0, 1.0]]] }
+        }"#;
+        let stamp: SignatureStamp =
+            serde_json::from_str(json_without_stroke).expect("deserialization succeeds");
+        assert_eq!(stamp.stroke_width, 2.0);
+
+        let stamp_custom = SignatureStamp {
+            page: PageIndex::zero(),
+            x_norm: 0.1,
+            y_norm: 0.2,
+            w_norm: 0.3,
+            h_norm: 0.4,
+            payload: SignaturePayload::Drawn(vec![vec![(0.0, 0.0), (1.0, 1.0)]]),
+            stroke_width: 5.5,
+        };
+        let serialized = serde_json::to_string(&stamp_custom).expect("serialization succeeds");
+        let roundtrip: SignatureStamp =
+            serde_json::from_str(&serialized).expect("deserialization succeeds");
+        assert_eq!(roundtrip.stroke_width, 5.5);
     }
 }

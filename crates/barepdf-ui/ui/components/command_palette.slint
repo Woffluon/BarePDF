@@ -41,6 +41,7 @@ export component CommandPalette inherits Rectangle {
         drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
         drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
         drop-shadow-color: ThemeTokens.overlay-shadow;
+        clip: true;
 
         TouchArea {}
 
@@ -73,35 +74,46 @@ export component CommandPalette inherits Rectangle {
             }
 
             // Command suggestions list
-            for title[idx] in root.command-titles : Rectangle {
-                height: 32px;
-                border-radius: ThemeTokens.control-radius;
-                background: item-touch.pressed ? ThemeTokens.control-pressed
-                    : (item-touch.has-hover ? ThemeTokens.control-hover : #00000000);
-                animate background { duration: ThemeTokens.motion-fast; }
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: root.command-titles.length * 36px;
 
-                HorizontalLayout {
-                    padding-left: ThemeTokens.space-2;
-                    padding-right: ThemeTokens.space-2;
-                    alignment: space-between;
+                VerticalLayout {
+                    y: 0px;
+                    height: parent.viewport-height;
+                    spacing: 4px;
 
-                    Text {
-                        text: title;
-                        color: ThemeTokens.text;
-                        font-size: 12px;
-                        vertical-alignment: center;
+                    for title[idx] in root.command-titles : Rectangle {
+                        height: 32px;
+                        border-radius: ThemeTokens.control-radius;
+                        background: item-touch.pressed ? ThemeTokens.control-pressed
+                            : (item-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                        animate background { duration: ThemeTokens.motion-fast; }
+
+                        HorizontalLayout {
+                            padding-left: ThemeTokens.space-2;
+                            padding-right: ThemeTokens.space-2;
+                            alignment: space-between;
+
+                            Text {
+                                text: title;
+                                color: ThemeTokens.text;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+
+                            if idx < root.command-subtitles.length : Text {
+                                text: root.command-subtitles[idx];
+                                color: ThemeTokens.text-muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        item-touch := TouchArea {
+                            clicked => { root.command-selected(idx); }
+                        }
                     }
-
-                    if idx < root.command-subtitles.length : Text {
-                        text: root.command-subtitles[idx];
-                        color: ThemeTokens.text-muted;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                    }
-                }
-
-                item-touch := TouchArea {
-                    clicked => { root.command-selected(idx); }
                 }
             }
         }

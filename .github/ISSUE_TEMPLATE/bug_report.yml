@@ -1,0 +1,86 @@
+name: Bug Report
+description: File a bug report to help fix an issue in BarePDF
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue. Before submitting, please check that you are testing the latest stable release.
+  - type: input
+    id: version
+    attributes:
+      label: BarePDF Version
+      description: Which version of BarePDF are you using? (Check Help -> About, or run BarePDF.exe --version)
+      placeholder: "e.g. 1.17.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Windows Version
+      description: Which Windows build are you running?
+      options:
+        - Windows 11 (24H2 or newer)
+        - Windows 11 (23H2 or older)
+        - Windows 10 (22H2)
+        - Windows Server
+        - Other (specify in details below)
+    validations:
+      required: true
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Installation Type
+      description: How is BarePDF installed on your system?
+      options:
+        - Windows Installer (Setup EXE)
+        - Portable Archive (ZIP)
+        - WinGet Package
+        - Built from source
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: List the exact steps to reproduce the issue.
+      placeholder: |
+        1. Open BarePDF
+        2. Load sample document 'example.pdf'
+        3. Scroll to page 4
+        4. Notice rendering glitch or crash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: "Page 4 should render cleanly without layout jitter."
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include error messages or crash symptoms.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, Console Output, or Screenshots
+      description: Paste any terminal logs or upload non-confidential screenshots / sample PDFs.
+      placeholder: Paste command line output or drag files here.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues to verify this has not been reported already.
+          required: true
+        - label: This report does not include confidential documents or sensitive personal data.
+          required: true

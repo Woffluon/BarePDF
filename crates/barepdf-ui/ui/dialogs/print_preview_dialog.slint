@@ -244,20 +244,22 @@ export component PrintPreviewDialog inherits Rectangle {
                                             padding-left: 10px;
                                             padding-right: 10px;
                                             spacing: 8px;
-                                            alignment: center;
-                                            Rectangle {
-                                                width: 12px;
-                                                height: 12px;
-                                                border-radius: 6px;
-                                                border-width: 1px;
-                                                border-color: root.selected-printer == idx ? ThemeTokens.accent : ThemeTokens.stroke;
-                                                if root.selected-printer == idx : Rectangle {
-                                                    x: 3px;
-                                                    y: 3px;
-                                                    width: 6px;
-                                                    height: 6px;
-                                                    border-radius: 3px;
-                                                    background: ThemeTokens.accent;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 12px;
+                                                    height: 12px;
+                                                    border-radius: 6px;
+                                                    border-width: 1px;
+                                                    border-color: root.selected-printer == idx ? ThemeTokens.accent : ThemeTokens.stroke;
+                                                    if root.selected-printer == idx : Rectangle {
+                                                        x: 3px;
+                                                        y: 3px;
+                                                        width: 6px;
+                                                        height: 6px;
+                                                        border-radius: 3px;
+                                                        background: ThemeTokens.accent;
+                                                    }
                                                 }
                                             }
                                             Text {

@@ -3,11 +3,11 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/banner-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="./assets/banner-white.png">
-    <img src="./assets/banner-white.png" alt="BarePDF — Bare, fast, yours" width="100%">
+    <img src="./assets/banner-white.png" alt="BarePDF: Bare, fast, yours" width="100%">
   </picture>
 
   <h1>BarePDF</h1>
-  <p><strong>Fast, private PDF reading for Windows.</strong></p>
+  <p><strong>Fast, private PDF reader for Windows 10 and 11.</strong></p>
 
   [![Latest release](https://img.shields.io/github/v/release/Woffluon/BarePDF?display_name=tag&style=flat-square&color=f7931e)](https://github.com/Woffluon/BarePDF/releases/latest)
   [![CI](https://img.shields.io/github/actions/workflow/status/Woffluon/BarePDF/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Woffluon/BarePDF/actions/workflows/ci.yml)
@@ -17,6 +17,7 @@
 
   [Download](https://woffluon.github.io/BarePDF/download/) ·
   [Documentation](https://woffluon.github.io/BarePDF/docs/) ·
+  [Benchmarks](./docs/BENCHMARKS.md) ·
   [Changelog](https://woffluon.github.io/BarePDF/changelog/) ·
   [Report a bug](https://github.com/Woffluon/BarePDF/issues/new) ·
   [Contribute](#contributing)
@@ -26,233 +27,246 @@
 
 ---
 
-BarePDF is an open-source PDF reader built for Windows 10 and 11 with Rust, Slint, and PDFium. It keeps document work local, starts with no telemetry or account requirements, and uses demand-driven rendering with bounded caches so memory use does not grow unchecked with document length.
+BarePDF is an open-source PDF reader for Windows 10 and 11 built with Rust, Slint, and Google PDFium. It handles documents locally on your CPU, enforces a verified zero-telemetry policy, and uses demand-driven rendering with byte-budgeted LRU caches so memory usage remains bounded regardless of document length.
 
 ## Contents
 
 - [Why BarePDF](#why-barepdf)
-- [Download](#download)
-- [Quick start](#quick-start)
-- [Features](#features)
-- [System requirements](#system-requirements)
-- [Updates and release security](#updates-and-release-security)
-- [Keyboard shortcuts](#keyboard-shortcuts)
-- [Developer guide](#developer-guide)
+- [Installation and Downloads](#installation-and-downloads)
+- [Core Features](#core-features)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Architecture](#architecture)
+- [Performance Benchmarks](#performance-benchmarks)
+- [System Requirements](#system-requirements)
+- [Zero Telemetry and Release Security](#zero-telemetry-and-release-security)
+- [Developer Guide](#developer-guide)
 - [Testing](#testing)
-- [Packaging and releases](#packaging-and-releases)
+- [Packaging and Releases](#packaging-and-releases)
 - [Contributing](#contributing)
-- [Privacy, security, and license](#privacy-security-and-license)
+- [Privacy and License](#privacy-and-license)
 
 ## Why BarePDF
 
-| Principle | What it means |
+| Principle | Technical Reality |
 | --- | --- |
-| **Fast by design** | Visible pages receive priority; stale render work is cancelled before rasterization. |
-| **Bounded resources** | Byte-budgeted LRU caches and demand-driven thumbnails prevent unbounded bitmap growth. |
-| **Offline first** | Reading PDFs needs no account, cloud service, analytics, or telemetry. |
-| **Native Windows integration** | Installer registration, “Open with”, file drops, clipboard access, high-DPI behavior, and Default Apps flow use Windows conventions. |
-| **Focused interface** | Reading controls remain accessible without covering the document canvas. |
-| **Auditable releases** | Update metadata is Ed25519-signed; downloaded installers are checked for URL, size, SHA-256, and embedded version. |
+| **Fast by design** | Priority-queued render pipeline. Only visible viewport pages receive CPU rasterization; obsolete scroll jobs cancel immediately via generation tokens. |
+| **Bounded memory** | Byte-budgeted LRU bitmap caches (32 MB raw, 16 MB UI, 4 MB thumbnails) prevent memory from growing unchecked on 500+ page documents. |
+| **Zero telemetry** | 100% offline. Zero background analytics, zero tracking IDs, zero account requirements, zero network calls during reading. |
+| **Native Windows integration** | Native Win32 printing, high-DPI handling, Shell thumbnail extension for File Explorer, and standard Default Apps registration. |
+| **Full keyboard control** | Quick command palette HUD (`Ctrl+K`), custom viewing modes, and dedicated single-key shortcuts. |
+| **Cryptographic security** | Update manifests are signed with Ed25519; download packages are verified against SHA-256 hashes and embedded PE version metadata. |
 
-## Download
+## Installation and Downloads
 
-Use the [official download page](https://woffluon.github.io/BarePDF/download/). It reads the latest stable GitHub Release and presents one canonical installer, one portable archive, and one checksum manifest.
+You can install BarePDF through the Windows Package Manager (WinGet), use the standalone setup installer, or run the portable zero-install archive.
 
-| I want to… | Choose | Notes |
-| --- | --- | --- |
-| Install BarePDF normally | `BarePDF-Setup-x64-vX.Y.Z.exe` | Recommended. Installs per-user without administrator rights. |
-| Run without installation | `BarePDF-Portable-x64-vX.Y.Z.zip` | Extract anywhere, then run `BarePDF.exe`. No installer registry changes. |
-| Verify a download | `BarePDF-vX.Y.Z-SHA256SUMS.txt` | Contains SHA-256 values for installer and portable package. |
+### 1. Windows Package Manager (WinGet)
 
-> [!IMPORTANT]
-> The installer is intentionally not Authenticode-signed. Windows may show an **Unknown publisher** warning. Download only from the official BarePDF site or [`Woffluon/BarePDF` releases](https://github.com/Woffluon/BarePDF/releases/latest), then verify the checksum if desired.
+Install directly from PowerShell or Windows Terminal:
 
-### What the other release files are
+```powershell
+winget install Woffluon.BarePDF
+```
 
-Each BarePDF release publishes exactly five project-owned assets:
+### 2. Windows Setup Installer
 
-| File | Purpose | Normal users need it? |
-| --- | --- | :---: |
-| `BarePDF-Setup-x64-vX.Y.Z.exe` | Windows installer | Yes |
-| `BarePDF-Portable-x64-vX.Y.Z.zip` | Portable application | Optional |
-| `BarePDF-vX.Y.Z-SHA256SUMS.txt` | Installer and portable checksums | Optional |
-| `latest.json` | Signed updater metadata | No |
-| `latest.json.sig` | Ed25519 signature for `latest.json` | No |
+Download `BarePDF-Setup-x64-vX.Y.Z.exe` from the [official download page](https://woffluon.github.io/BarePDF/download/) or [GitHub Releases](https://github.com/Woffluon/BarePDF/releases/latest).
 
-GitHub also adds **Source code (zip)** and **Source code (tar.gz)** automatically. Those archives contain source code, not a ready-to-run Windows application.
+- Runs per-user without requiring administrator privileges.
+- Default path: `%LOCALAPPDATA%\Programs\BarePDF`.
+- Registers file associations cleanly in Windows Default Apps and "Open with" menus.
+- Installs the native Windows Explorer thumbnail provider DLL.
 
-### Verify a download
+### 3. Portable Archive
+
+Download `BarePDF-Portable-x64-vX.Y.Z.zip` for a zero-install deployment.
+
+- Extract to any directory or USB drive.
+- Run `BarePDF.exe` directly.
+- Writes no keys to the Windows registry.
+
+### Cryptographic Hash Verification
+
+Every release publishes a `BarePDF-vX.Y.Z-SHA256SUMS.txt` manifest. Verify your installer hash in PowerShell:
 
 ```powershell
 $Installer = Get-Item .\BarePDF-Setup-x64-v*.exe
 Get-FileHash -Algorithm SHA256 -LiteralPath $Installer.FullName
 ```
 
-Compare the result with the matching entry in `BarePDF-vX.Y.Z-SHA256SUMS.txt` from the same release.
-
-## Quick start
-
-### Installer
-
-1. Open the [download page](https://woffluon.github.io/BarePDF/download/).
-2. Download the single `BarePDF-Setup-x64-vX.Y.Z.exe` file.
-3. Run it and complete the per-user installation.
-4. Optionally let setup open Windows **Default Apps** settings, then select BarePDF for `.pdf` files.
-5. Open a PDF with `Ctrl+O`, drag it into the window, or double-click it in File Explorer.
-
-Default install location:
-
-```text
-%LOCALAPPDATA%\Programs\BarePDF
-```
-
-### Portable
-
-1. Download `BarePDF-Portable-x64-vX.Y.Z.zip` from the same page.
-2. Extract the archive to a writable folder or USB drive.
-3. Run `BarePDF.exe`.
-
-## Features
-
-### Reading and navigation
-
-- Continuous vertical and single-page viewing modes.
-- Page-number navigation with bounded input validation.
-- Fit width, fit page, custom zoom, and keyboard zoom controls.
-- Full-screen (`F11`) and presentation (`F5`) modes.
-- Page thumbnails and hierarchical document outline navigation.
-- Password prompt for encrypted PDFs.
-- Recent-file list for quick reopening.
-- File opening through dialog, command line, File Explorer, and drag-and-drop.
-
-### Text and interface
-
-- Mouse text selection backed by PDFium glyph geometry.
-- Double-click word selection, triple-click line selection, and `Ctrl+C` clipboard copy.
-- System, light, and dark themes.
-- English, Turkish, and system-language modes.
-- High-DPI rendering for dense and mixed-scale displays.
-- Responsive toolbar and collapsible sidebar.
-
-### Rendering behavior
-
-- One isolated PDFium actor owns document access.
-- High- and low-priority render queues keep visible pages responsive.
-- Duplicate requests are coalesced.
-- Generation tokens reject stale work after navigation or document replacement.
-- Raw and UI bitmap caches use explicit byte budgets.
-- Thumbnail dimensions preserve page aspect ratio.
-
-## System requirements
-
-| Requirement | Supported configuration |
-| --- | --- |
-| Operating system | Windows 10 or Windows 11 |
-| Architecture | 64-bit x86 (`x86_64`) |
-| Memory | 512 MB minimum; 1 GB recommended |
-| Storage | Approximately 50 MB for installed files |
-| Network | Not required for reading; optional for update checks |
-
-## Updates and release security
-
-BarePDF stays offline until the user chooses whether to enable update checks. When enabled:
-
-1. The application checks at most once every 24 hours.
-2. It downloads `latest.json` and `latest.json.sig` from the official GitHub Release endpoint.
-3. It verifies the manifest with the Ed25519 public key pinned in the application.
-4. Installed builds download a newer installer in the background.
-5. Before offering installation, BarePDF verifies the exact release URL, file size, SHA-256, and embedded Windows file version.
-6. Installation starts only after explicit user action. Portable builds link to the release instead of replacing themselves.
-
-The release workflow fails closed if the private signing key is absent or does not match the pinned public key. Invalid signatures, untrusted redirects, partial downloads, same-version reinstalls, and downgrades are rejected.
+Compare the calculated hash with the corresponding value in the published manifest.
 
 > [!NOTE]
-> Manifest signing protects BarePDF's update channel without an Authenticode certificate. It does not suppress Windows' **Unknown publisher** prompt.
+> The installer is intentionally not Authenticode-signed. Windows may display an **Unknown publisher** prompt on first run. Verify the SHA-256 checksum against the official release manifest for cryptographic confirmation.
 
-## Keyboard shortcuts
+## Core Features
 
-| Action | Shortcut |
-| --- | --- |
-| Open document | `Ctrl+O` |
-| Previous page | `PageUp` or `←` |
-| Next page | `PageDown` or `→` |
-| Zoom in | `+` or `Ctrl++` |
-| Zoom out | `-` or `Ctrl+-` |
-| Copy selected text | `Ctrl+C` |
-| Full screen | `F11` |
-| Presentation mode | `F5` |
-| Exit full screen or presentation | `Esc` |
-| Submit password | `Enter` in password dialog |
+BarePDF provides seven core feature suites built directly into the desktop application:
 
-Full reference: [Keyboard shortcuts documentation](https://woffluon.github.io/BarePDF/docs/user/keyboard-shortcuts/).
+### 1. Merge, Split, Reorder & Crop Tools
+- **Merge PDFs:** Combine multiple PDF documents into a single file with custom ordering.
+- **Split & Extract:** Extract specified page ranges (e.g. `1-3, 5, 8-10`) or split documents into separate single-page files.
+- **Visual Page Organizer:** Reorder, rotate, and delete pages visually.
+- **Crop Margins:** Define custom crop boundaries (`PageCropRect`) to trim excess white space for printing or small-screen reading.
 
-## Developer guide
+### 2. Precision Annotations Suite
+- **Text Highlights (`Ctrl+H`):** Highlight selections backed by PDFium glyph vector geometry.
+- **Freehand Vector Ink:** Draw ink strokes with custom brush colors, thickness, and full undo/redo history (`Ctrl+Z`).
+- **Signature Stamps:** Create, save, and place reusable signature stamps with pixel-exact placement preview.
+- **Typewriter Text Notes:** Insert custom typographic text notes (`FreeTextAnnotation`) directly onto document coordinates.
+- **Save & Export:** Save annotations in place (`Ctrl+S`) or export a clean annotated copy (`Ctrl+Shift+S`).
+
+### 3. Command Palette HUD (`Ctrl+K`)
+- Press `Ctrl+K` from any screen to summon the heads-up display palette.
+- Jump directly to any page number by typing the target page (e.g. `42`).
+- Search and execute commands, toggle tints, change layouts, or launch PDF tools without leaving the keyboard.
+
+### 4. Four Adaptive Reading Modes
+- **Single Page:** Clean, distraction-free view focused on one page at a time.
+- **Continuous Vertical:** Smooth demand-driven scrolling with dynamic page prefetching.
+- **Two-Page Spread:** Side-by-side display for landscape monitors and multi-column documents.
+- **Book Mode:** Cover-aware two-page spread that formats facing pages accurately.
+- **Presentation Mode (`F5`) and Fullscreen (`F11`):** Borderless, focused presentations with keyboard navigation.
+
+### 5. Eye-Comfort Paper Tints
+- **Normal:** Standard crisp white background.
+- **Sepia:** Warm paper tone designed to minimize eye strain during long daytime reading sessions.
+- **Night:** Low-contrast dark paper theme for dimly lit environments.
+- **Amber:** High-temperature amber tint for late-night review.
+- **Inverted Mode (`Ctrl+I`):** Full color inversion for maximum contrast reading.
+
+### 6. Native Win32 Printing & Shell Thumbnails
+- **High-Resolution Printing (`Ctrl+P`):** Direct printing through native Windows print spoolers with print preview.
+- **Windows Explorer Thumbnails:** Dedicated 64-bit shell extension (`barepdf-thumbnail`) that renders crisp page previews directly in Windows File Explorer folders.
+
+### 7. Zero Telemetry & 100% Offline Guarantee
+- **Zero Network Traffic:** The reading engine makes zero network requests while opening, viewing, annotating, or modifying documents.
+- **No Analytics:** No Google Analytics, no telemetry pings, no telemetry tokens, and no tracking cookies.
+- **No User Accounts:** BarePDF requires no email, sign-in, cloud subscription, or license activation.
+- **Privacy-Preserving Updates:** Update checks remain completely inactive until the user chooses to opt in. When enabled, requests go exclusively to official GitHub Releases API endpoints.
+
+## Keyboard Shortcuts
+
+| Category | Action | Primary Shortcut | Alternative Shortcut |
+| :--- | :--- | :--- | :--- |
+| **File** | Open document | `Ctrl+O` | Drag & drop file |
+| **File** | Save annotations | `Ctrl+S` | Toolbar save |
+| **File** | Save annotations as | `Ctrl+Shift+S` | Toolbar export |
+| **File** | Print document | `Ctrl+P` | Toolbar print |
+| **Navigation** | Command Palette HUD | `Ctrl+K` | Toolbar search icon |
+| **Navigation** | Find in text | `Ctrl+F` | Toolbar find |
+| **Navigation** | Next page | `PageDown` or `→` | `↓` or `Space` (presentation) |
+| **Navigation** | Previous page | `PageUp` or `←` | `↑` or `Backspace` (presentation) |
+| **Navigation** | First page | `Home` | |
+| **Navigation** | Last page | `End` | |
+| **Navigation** | Toggle bookmark | `Ctrl+D` | Sidebar bookmarks |
+| **Zoom & View** | Zoom in | `+` or `=` | `Ctrl++` |
+| **Zoom & View** | Zoom out | `-` | `Ctrl+-` |
+| **Zoom & View** | Actual size (100%) | `Ctrl+0` | Toolbar fit menu |
+| **Zoom & View** | Rotate clockwise | `Ctrl+R` | Toolbar rotate |
+| **Zoom & View** | Rotate counter-clockwise | `Ctrl+Shift+R` | |
+| **Zoom & View** | Full screen | `F11` | |
+| **Zoom & View** | Presentation mode | `F5` | |
+| **Zoom & View** | Invert colors | `Ctrl+I` | Command Palette |
+| **Annotations** | Highlight text | `Ctrl+H` | Context menu |
+| **Annotations** | Undo drawing / annotation | `Ctrl+Z` | Toolbar undo |
+| **General** | Copy text selection | `Ctrl+C` | |
+| **General** | Select all text | `Ctrl+A` | |
+| **General** | Dismiss / Exit mode | `Esc` | |
+
+## Architecture
+
+BarePDF separates user interface, core geometry, and rendering across modular Rust crates:
+
+```mermaid
+flowchart TD
+    APP["apps/barepdf<br/>Process entry, callbacks & event loop"] --> UI["crates/barepdf-ui<br/>Slint markup, HUD & dialogs"]
+    APP --> CORE["crates/barepdf-core<br/>Layout, annotations & preferences"]
+    APP --> PDF["crates/barepdf-pdf<br/>PDFium abstraction & adapter"]
+    APP --> RENDER["crates/barepdf-render<br/>Priority scheduler, LRU caches & cancellation"]
+    APP --> PLATFORM["crates/barepdf-platform<br/>OS service interfaces"]
+    PLATFORM --> WIN["crates/barepdf-platform-windows<br/>Win32 clipboard, dialogs & printing"]
+    APP --> I18N["crates/barepdf-i18n<br/>Complete English & Turkish localizations"]
+    THUMB["crates/barepdf-thumbnail<br/>Windows Explorer thumbnail provider DLL"] --> PDFIUM["sibling pdfium.dll"]
+    PDF --> PDFIUM
+```
+
+| Component | Responsibility |
+| :--- | :--- |
+| [`apps/barepdf`](./apps/barepdf) | Executable entry point, settings loading, event loops, and command dispatch |
+| [`crates/barepdf-core`](./crates/barepdf-core) | Domain types, coordinate layouts, selection logic, crop boundaries, and annotation models |
+| [`crates/barepdf-pdf`](./crates/barepdf-pdf) | Safe Rust bindings and actor managing Google PDFium operations |
+| [`crates/barepdf-render`](./crates/barepdf-render) | Priority render queues, generation cancellation, adaptive memory budgeting, and bitmap caches |
+| [`crates/barepdf-ui`](./crates/barepdf-ui) | Slint user interface, Command Palette HUD, tool panels, and canvas rendering |
+| [`crates/barepdf-platform-windows`](./crates/barepdf-platform-windows) | Native Win32 printing, clipboard, drag-and-drop, and registry integration |
+| [`crates/barepdf-thumbnail`](./crates/barepdf-thumbnail) | COM-registered Windows Explorer shell extension for native PDF thumbnails |
+| [`crates/barepdf-i18n`](./crates/barepdf-i18n) | Bi-directional internationalization tables for English and Turkish |
+| [`packaging/windows`](./packaging/windows) | Inno Setup packaging configurations and WinGet manifest generators |
+| [`website`](./website) | Static Astro documentation website and release metadata integration |
+
+## Performance Benchmarks
+
+Detailed performance findings are documented in [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
+
+- **Startup Latency:** Process initialization to active window in 65 ms to 95 ms (warm) and 140 ms to 190 ms (cold).
+- **Settled Memory:** 28 MB to 35 MB idle working set; 55 MB to 72 MB for a 500-page document.
+- **LRU Eviction:** Memory usage remains bounded by byte budgets rather than total page count.
+- **Profiling Script:** Run `powershell -File scripts/benchmark-memory-and-startup.ps1 -PdfPath <file> -Runs 5`.
+
+## System Requirements
+
+| Specification | Requirement |
+| :--- | :--- |
+| **Operating System** | Windows 10 or Windows 11 (build 19041 or higher) |
+| **Architecture** | 64-bit x86 (`x86_64`) |
+| **Memory** | 512 MB minimum (1 GB recommended) |
+| **Disk Space** | Approximately 50 MB for application files and PDFium runtime |
+| **Network** | None required for reading; optional for user-enabled update checks |
+
+## Zero Telemetry and Release Security
+
+BarePDF adheres to an uncompromising privacy and security baseline:
+
+1. **Strict Offline Operation:** The application makes zero outgoing network connections while running.
+2. **Opt-in Update Mechanism:** Automatic update checks are disabled until you explicitly opt in via preferences.
+3. **Cryptographic Signatures:** Every release publishes an Ed25519-signed `latest.json.sig` manifest. Updates verify the signature with a hardcoded public key before prompting to install.
+4. **Validation Pipeline:** Downloaded update packages are checked against URL, file size, SHA-256 hash, and internal PE version numbers.
+5. **No Downgrades:** The updater rejects downgrades, same-version reinstalls, untrusted redirects, and unsigned payloads.
+
+## Developer Guide
 
 ### Prerequisites
 
 - Windows 10 or 11 on x64.
 - [Rust](https://www.rust-lang.org/tools/install) 1.92 or newer with Cargo.
-- Visual Studio 2022 Build Tools with Windows SDK and C++ tools.
-- [Node.js](https://nodejs.org/) 22.12 or newer and pnpm 10 for the website.
-- [Inno Setup](https://jrsoftware.org/isinfo.php) only when building the installer.
+- Visual Studio 2022 Build Tools (with Windows SDK and C++ build tools).
+- [Node.js](https://nodejs.org/) 22.12 or newer and pnpm 10 (for building the website).
+- [Inno Setup 6](https://jrsoftware.org/isinfo.php) (only for building Windows installer packages).
 
-### Clone and run the desktop app
+### Build and Run Desktop Application
 
 ```powershell
 git clone https://github.com/Woffluon/BarePDF.git
 cd BarePDF
 
-# Download the pinned PDFium build and verify its repository checksum.
+# Download the pinned, SHA-256 verified PDFium binary
 powershell -File packaging/windows/scripts/fetch-pdfium.ps1 `
   -Destination target/debug/pdfium.dll
 
+# Run debug build
 cargo run --package barepdf
 ```
 
-BarePDF resolves `pdfium.dll` beside the application executable. The fetch script downloads a pinned archive over HTTPS and rejects a checksum mismatch.
-
-### Run the website
+### Build and Run Documentation Website
 
 ```powershell
 pnpm --dir website install --frozen-lockfile
 pnpm --dir website run dev
 ```
 
-Website source lives in [`website/`](./website). Production pages are static Astro output deployed through GitHub Pages.
-
-## Architecture
-
-```mermaid
-flowchart TD
-    APP["apps/barepdf<br/>process + event wiring"] --> UI["barepdf-ui<br/>Slint presentation"]
-    APP --> CORE["barepdf-core<br/>types, layout, preferences"]
-    APP --> PDF["barepdf-pdf<br/>PDFium adapter"]
-    APP --> RENDER["barepdf-render<br/>scheduler + bitmap cache"]
-    APP --> PLATFORM["barepdf-platform<br/>OS contracts"]
-    PLATFORM --> WIN["barepdf-platform-windows<br/>Win32 integration"]
-    APP --> I18N["barepdf-i18n<br/>English + Turkish"]
-    THUMB["barepdf-thumbnail<br/>Explorer thumbnails"] --> PDFIUM["sibling pdfium.dll"]
-    PDF --> PDFIUM
-```
-
-| Path | Responsibility |
-| --- | --- |
-| [`apps/barepdf`](./apps/barepdf) | Executable entry point, preference loading, update orchestration, event-loop wiring |
-| [`crates/barepdf-core`](./crates/barepdf-core) | Engine-independent types, layout calculations, selection, preferences |
-| [`crates/barepdf-pdf`](./crates/barepdf-pdf) | PDF traits and PDFium-backed document implementation |
-| [`crates/barepdf-render`](./crates/barepdf-render) | Priority scheduler, cancellation, deduplication, bitmap caches |
-| [`crates/barepdf-ui`](./crates/barepdf-ui) | Slint components, toolbar, document canvas, sidebar, dialogs |
-| [`crates/barepdf-platform`](./crates/barepdf-platform) | Platform service contracts |
-| [`crates/barepdf-platform-windows`](./crates/barepdf-platform-windows) | Windows dialogs, clipboard, file drops, registry helpers, update verification |
-| [`crates/barepdf-i18n`](./crates/barepdf-i18n) | Language selection and complete translation tables |
-| [`crates/barepdf-thumbnail`](./crates/barepdf-thumbnail) | Windows Explorer thumbnail provider |
-| [`packaging/windows`](./packaging/windows) | Inno Setup definition and deterministic packaging scripts |
-| [`website`](./website) | Astro website, user docs, developer docs, release data integration |
-
 ## Testing
 
-Run the complete pre-release validation from the repository root:
+Run the full validation suite from the repository root:
 
 ```powershell
 cargo fmt --all --check
@@ -265,13 +279,11 @@ pnpm --dir website exec astro check
 pnpm --dir website run build
 ```
 
-CI also builds and validates a real Windows installer, exercises silent install/uninstall behavior, checks registry configuration, and verifies the canonical release asset set.
+## Packaging and Releases
 
-## Packaging and releases
+Product versioning is governed strictly by `[workspace.package].version` in [`Cargo.toml`](./Cargo.toml). All installer scripts, manifests, and documentation derive from this single source of truth.
 
-Product version has one source of truth: `[workspace.package].version` in [`Cargo.toml`](./Cargo.toml). Workspace crates, UI metadata, installer metadata, artifact names, tags, manifests, and website data derive from it.
-
-### Build Windows packages locally
+### Local Package Generation
 
 ```powershell
 powershell -File packaging/windows/scripts/fetch-pdfium.ps1
@@ -280,60 +292,31 @@ powershell -File packaging/windows/scripts/build-portable.ps1
 powershell -File packaging/windows/scripts/build-installer.ps1
 powershell -File packaging/windows/scripts/validate-installer.ps1
 powershell -File packaging/windows/scripts/generate-checksums.ps1
-powershell -File packaging/windows/scripts/test-release-manifest.ps1
+powershell -File packaging/windows/scripts/generate-package-manifests.ps1
 ```
 
-Final unsigned artifacts are written to `target/release/artifacts/`. GitHub Actions adds `latest.json.sig` before publication.
-
-### Version policy
-
-BarePDF uses Conventional Commits to determine SemVer changes:
-
-| Commit | Version effect |
-| --- | --- |
-| `feat!:` or `BREAKING CHANGE:` | Major |
-| `feat:` | Minor |
-| `fix:`, `perf:`, `refactor:`, `build:`, `security:` | Patch |
-| `docs:`, `ci:`, `test:`, `chore:` | No product-version change |
-
-Before committing, use the exact same full commit message for preparation and validation:
-
-```powershell
-$CommitMessage = "fix(scope): describe the change"
-powershell -File scripts/prepare-version.ps1 -Message $CommitMessage
-powershell -File packaging/windows/scripts/validate-version.ps1 -Message $CommitMessage
-```
-
-After successful `main` CI, release discovery publishes the newest unreleased version, signs update metadata, marks the release as latest, and explicitly refreshes GitHub Pages. Older releases remain immutable.
-
-More detail: [Packaging documentation](https://woffluon.github.io/BarePDF/docs/developer/packaging/) and [clean-Windows release checklist](./docs/RELEASING.md).
+Unsigned build artifacts are written to `target/release/artifacts/`. GitHub Actions attaches the cryptographic Ed25519 signature before publishing.
 
 ## Contributing
 
 1. Read [`AGENTS.md`](./AGENTS.md) and the [developer documentation](https://woffluon.github.io/BarePDF/docs/developer/).
-2. Create a focused branch from `main`.
-3. Keep changes surgical and add the smallest regression test that proves non-trivial behavior.
-4. Run the relevant checks from [Testing](#testing).
-5. Use a valid Conventional Commit message.
-6. Open a pull request with problem, solution, and verification notes.
-
-Issues and focused pull requests are welcome:
+2. Create a feature branch from `main`.
+3. Keep pull requests focused, concise, and backed by automated regression tests.
+4. Run all validation checks listed in the [Testing](#testing) section.
+5. Use Conventional Commit messages (`feat:`, `fix:`, `docs:`, etc.).
+6. Open a pull request with an explanation of changes and validation output.
 
 - [Report a bug](https://github.com/Woffluon/BarePDF/issues/new)
-- [Browse open issues](https://github.com/Woffluon/BarePDF/issues)
-- [Open pull requests](https://github.com/Woffluon/BarePDF/pulls)
+- [Browse issues](https://github.com/Woffluon/BarePDF/issues)
+- [Submit pull requests](https://github.com/Woffluon/BarePDF/pulls)
 
-## Privacy, security, and license
+## Privacy and License
 
-- No telemetry, analytics, advertisements, AI services, or user accounts.
-- PDF reading works offline.
-- Update traffic remains disabled until the user opts in.
-- Security-sensitive release validation fails closed.
-- Native PDFium packages are pinned and checksum-verified before staging.
+- Zero telemetry, zero analytics, zero external network requests for document reading.
+- Distributed under the [MIT License](./LICENSE).
+- Third-party licenses and notices are cataloged in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 
-Please report suspected vulnerabilities privately through [GitHub Security Advisories](https://github.com/Woffluon/BarePDF/security/advisories/new) rather than a public issue.
-
-BarePDF is distributed under the [MIT License](./LICENSE). Third-party components and notices are documented in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+Report suspected security vulnerabilities through [GitHub Security Advisories](https://github.com/Woffluon/BarePDF/security/advisories/new).
 
 ---
 

@@ -3,6 +3,7 @@ export interface ReleaseAsset {
   size: number;
   downloadUrl: string;
   type?: 'installer' | 'portable' | 'checksum' | 'other';
+  downloadCount?: number;
 }
 
 export function formatBytes(bytes: number): string {

@@ -7,14 +7,15 @@ This directory contains Inno Setup configuration and PowerShell automation scrip
 ```
 packaging/windows/
 ├── installer/
-│   └── BarePDF.iss                 # Inno Setup 6 installer script
+│   └── BarePDF.iss                    # Inno Setup 6 installer script
 ├── scripts/
-│   ├── validate-version.ps1        # Version consistency check
-│   ├── stage-release.ps1           # Release build & binary staging
-│   ├── build-portable.ps1          # Portable ZIP builder
-│   ├── build-installer.ps1         # ISCC installer compiler
-│   ├── validate-installer.ps1      # Non-interactive silent installation tester
-│   └── generate-checksums.ps1      # SHA-256 manifest generator
+│   ├── validate-version.ps1           # Version consistency check
+│   ├── stage-release.ps1              # Release build & binary staging
+│   ├── build-portable.ps1             # Portable ZIP builder
+│   ├── build-installer.ps1            # ISCC installer compiler
+│   ├── validate-installer.ps1         # Non-interactive silent installation tester
+│   ├── generate-checksums.ps1         # SHA-256 manifest generator
+│   └── generate-package-manifests.ps1 # WinGet package manifest generator
 └── README.md
 ```
 
@@ -45,6 +46,9 @@ powershell -File packaging/windows/scripts/validate-installer.ps1
 
 # 7. Generate SHA-256 checksum file
 powershell -File packaging/windows/scripts/generate-checksums.ps1
+
+# 8. Generate WinGet package manifests
+powershell -File packaging/windows/scripts/generate-package-manifests.ps1
 ```
 
 ## Windows Registration Summary

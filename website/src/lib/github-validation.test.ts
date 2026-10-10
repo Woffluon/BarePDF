@@ -9,6 +9,8 @@ import {
 } from './github-validation.ts';
 import {
   MAX_API_RESPONSE_BYTES,
+  VERIFIED_DOWNLOAD_BASELINE,
+  getDownloadMetrics,
   getLatestRelease,
   readBoundedJson,
 } from './github.ts';
@@ -161,6 +163,45 @@ test('rejects oversized GitHub API responses before buffering or parsing', async
       });
     const fallback = await getLatestRelease();
     assert.equal(fallback.state, 'fallback');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('download metrics parses releases and falls back safely', async () => {
+  assert.equal(VERIFIED_DOWNLOAD_BASELINE.totalDownloads, 149);
+  assert.equal(VERIFIED_DOWNLOAD_BASELINE.installerDownloads, 104);
+  assert.equal(VERIFIED_DOWNLOAD_BASELINE.portableDownloads, 45);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    // Failure falls back to verified baseline
+    globalThis.fetch = async () => new Response('Internal error', { status: 500 });
+    const metricsFallback = await getDownloadMetrics();
+    assert.equal(metricsFallback.isFallback, true);
+    assert.equal(metricsFallback.totalDownloads, 149);
+
+    // Mocked releases response parses asset download counts
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify([
+          {
+            draft: false,
+            prerelease: false,
+            assets: [
+              { name: 'BarePDF-Setup-x64-v1.17.1.exe', download_count: 150 },
+              { name: 'BarePDF-Portable-x64-v1.17.1.zip', download_count: 50 },
+            ],
+          },
+        ]),
+        { status: 200 },
+      );
+    const parsed = await getDownloadMetrics();
+    assert.equal(parsed.isFallback, false);
+    assert.equal(parsed.installerDownloads, 150);
+    assert.equal(parsed.portableDownloads, 50);
+    assert.equal(parsed.totalDownloads, 200);
+    assert.equal(parsed.latestReleaseDownloads, 200);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -1,0 +1,181 @@
+import { ThemeTokens } from "../tokens.slint";
+import { TextButton } from "../components/button.slint";
+import { Dialog, DialogFooter } from "../components/dialog.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component TextAnnotationDialog inherits Rectangle {
+    in-out property <bool> is-open: false;
+    in-out property <string> text-content: "";
+    in-out property <float> font-size: 14.0;
+    in-out property <int> color-index: 0; // 0: Black, 1: Red, 2: Blue, 3: Yellow
+    in property <string> title: "Add Text Note";
+    in property <string> placeholder: "Type your text here…";
+    in property <string> btn-cancel: "Cancel";
+    in property <string> btn-insert: "Add Note";
+
+    callback insert(string, float, int);
+    callback close();
+
+    public function focus-input() {
+        input-field.focus();
+    }
+
+    function handle-submit() {
+        if (root.text-content != "") {
+            root.insert(root.text-content, root.font-size, root.color-index);
+            root.is-open = false;
+            root.close();
+        }
+    }
+
+    width: 100%;
+    height: 100%;
+    forward-focus: modal-scope;
+
+    init => {
+        input-field.focus();
+    }
+
+    modal-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+        forward-focus: input-field;
+        key-pressed(event) => {
+            if (event.text == "\u{001b}") {
+                root.is-open = false;
+                root.close();
+                return accept;
+            }
+            return reject;
+        }
+
+        Dialog {
+            title: root.title;
+            close-label: root.btn-cancel;
+            dialog-width: 440px;
+            dialog-height: 280px;
+            close => {
+                root.is-open = false;
+                root.close();
+            }
+
+            VerticalLayout {
+                spacing: 14px;
+
+                VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "Text Content";
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: ThemeTokens.text-muted;
+                    }
+                    input-field := LineEdit {
+                        text <=> root.text-content;
+                        placeholder-text: root.placeholder;
+                        accessible-label: root.placeholder;
+                        accepted => { root.handle-submit(); }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    // Font size selector
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Font Size";
+                            font-size: 11px;
+                            font-weight: 500;
+                            color: ThemeTokens.text-muted;
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            TextButton {
+                                compact: true;
+                                text: "12pt";
+                                active: root.font-size == 12.0;
+                                clicked => { root.font-size = 12.0; }
+                            }
+                            TextButton {
+                                compact: true;
+                                text: "14pt";
+                                active: root.font-size == 14.0;
+                                clicked => { root.font-size = 14.0; }
+                            }
+                            TextButton {
+                                compact: true;
+                                text: "18pt";
+                                active: root.font-size == 18.0;
+                                clicked => { root.font-size = 18.0; }
+                            }
+                            TextButton {
+                                compact: true;
+                                text: "24pt";
+                                active: root.font-size == 24.0;
+                                clicked => { root.font-size = 24.0; }
+                            }
+                        }
+                    }
+
+                    // Color swatches (0: Black, 1: Red, 2: Blue, 3: Yellow)
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Color";
+                            font-size: 11px;
+                            font-weight: 500;
+                            color: ThemeTokens.text-muted;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for swatch-color[cidx] in [#181a1f, #e03131, #1971c2, #f59f00] : Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: ThemeTokens.control-radius;
+                                background: root.color-index == cidx ? ThemeTokens.selection : #00000000;
+                                border-width: root.color-index == cidx ? 1px : 0px;
+                                border-color: ThemeTokens.accent;
+                                accessible-role: button;
+
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 4px;
+                                    background: swatch-color;
+                                    border-width: 1px;
+                                    border-color: ThemeTokens.stroke;
+                                }
+
+                                TouchArea {
+                                    clicked => { root.color-index = cidx; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                DialogFooter {
+                    TextButton {
+                        text: root.btn-cancel;
+                        clicked => {
+                            root.is-open = false;
+                            root.close();
+                        }
+                    }
+                    TextButton {
+                        text: root.btn-insert;
+                        primary: true;
+                        enabled: root.text-content != "";
+                        clicked => { root.handle-submit(); }
+                    }
+                }
+            }
+        }
+    }
+}

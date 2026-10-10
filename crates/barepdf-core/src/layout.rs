@@ -46,10 +46,14 @@ pub fn calculate_page_pairings(
             }
         }
         ViewingMode::BookMode => {
-            // First page is cover page standing alone
+            // First page is cover page standing alone (on the right in LTR, on the left in RTL)
+            let (cover_left, cover_right) = match reading_direction {
+                ReadingDirection::LeftToRight => (None, Some(PageIndex::from_raw(0))),
+                ReadingDirection::RightToLeft => (Some(PageIndex::from_raw(0)), None),
+            };
             pairings.push(PagePairing {
-                left: Some(PageIndex::from_raw(0)),
-                right: None,
+                left: cover_left,
+                right: cover_right,
             });
 
             let mut i = 1;
@@ -327,6 +331,56 @@ mod tests {
         let pairs =
             calculate_page_pairings(ViewingMode::BookMode, ReadingDirection::LeftToRight, count);
         assert_eq!(pairs.len(), 3);
+        assert_eq!(
+            pairs[0],
+            PagePairing {
+                left: None,
+                right: Some(PageIndex::from_raw(0)),
+            }
+        );
+        assert_eq!(
+            pairs[1],
+            PagePairing {
+                left: Some(PageIndex::from_raw(1)),
+                right: Some(PageIndex::from_raw(2)),
+            }
+        );
+        assert_eq!(
+            pairs[2],
+            PagePairing {
+                left: Some(PageIndex::from_raw(3)),
+                right: Some(PageIndex::from_raw(4)),
+            }
+        );
+    }
+
+    #[test]
+    fn test_book_mode_rtl() {
+        let count = PageCount::new(5).unwrap();
+        let pairs =
+            calculate_page_pairings(ViewingMode::BookMode, ReadingDirection::RightToLeft, count);
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(
+            pairs[0],
+            PagePairing {
+                left: Some(PageIndex::from_raw(0)),
+                right: None,
+            }
+        );
+        assert_eq!(
+            pairs[1],
+            PagePairing {
+                left: Some(PageIndex::from_raw(2)),
+                right: Some(PageIndex::from_raw(1)),
+            }
+        );
+        assert_eq!(
+            pairs[2],
+            PagePairing {
+                left: Some(PageIndex::from_raw(4)),
+                right: Some(PageIndex::from_raw(3)),
+            }
+        );
     }
 
     #[test]

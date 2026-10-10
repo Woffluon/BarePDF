@@ -175,6 +175,9 @@ const ENGLISH_GENERAL: &[(&str, &str)] = &[
     ("action.retry", "Retry"),
     ("action.dismiss", "Dismiss"),
     ("status.loading", "Loading"),
+    ("status.reloaded", "Reloaded document"),
+    ("document.reloaded", "Reloaded document"),
+    ("toolbar.book", "Book View"),
 ];
 
 const TURKISH_GENERAL: &[(&str, &str)] = &[
@@ -299,6 +302,9 @@ const TURKISH_GENERAL: &[(&str, &str)] = &[
     ("action.retry", "Tekrar dene"),
     ("action.dismiss", "Kapat"),
     ("status.loading", "Yükleniyor"),
+    ("status.reloaded", "Belge güncellendi"),
+    ("document.reloaded", "Belge güncellendi"),
+    ("toolbar.book", "Kitap Görünümü"),
 ];
 
 const ENGLISH_PRINT: &[(&str, &str)] = &[
@@ -400,6 +406,17 @@ const ENGLISH_TOOLS: &[(&str, &str)] = &[
         "tools.rotate.desc",
         "Rotate pages by 90°, 180°, or 270° and save the result.",
     ),
+    ("tools.crop", "Crop Pages"),
+    (
+        "tools.crop.desc",
+        "Crop margins or custom areas from pages.",
+    ),
+    ("tools.organizer", "Visual Organizer"),
+    (
+        "tools.organizer.desc",
+        "Reorder, rotate, or delete pages visually.",
+    ),
+    ("tools.reorder", "Reorder Pages"),
     ("tools.btn.add_files", "Add Files…"),
     ("tools.btn.move_up", "Move Up"),
     ("tools.btn.move_down", "Move Down"),
@@ -499,6 +516,17 @@ const TURKISH_TOOLS: &[(&str, &str)] = &[
         "tools.rotate.desc",
         "Sayfaları 90°, 180° veya 270° döndürüp kaydedin.",
     ),
+    ("tools.crop", "Sayfaları Kırp"),
+    (
+        "tools.crop.desc",
+        "Sayfalardan kenar boşluklarını veya özel alanları kırpın.",
+    ),
+    ("tools.organizer", "Sayfa Düzenleyici"),
+    (
+        "tools.organizer.desc",
+        "Sayfaları görsel olarak yeniden sıralayın, döndürün veya silin.",
+    ),
+    ("tools.reorder", "Sayfa Düzenleyici"),
     ("tools.btn.add_files", "Dosya Ekle…"),
     ("tools.btn.move_up", "Yukarı Taşı"),
     ("tools.btn.move_down", "Aşağı Taşı"),
@@ -594,6 +622,13 @@ const ENGLISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("toolbar.rotate", "Rotate (Ctrl+R)"),
     ("toolbar.draw", "Draw"),
     ("toolbar.sign", "Sign"),
+    ("toolbar.text", "Text"),
+    ("toolbar.typewriter", "Typewriter / Text"),
+    ("toolbar.crop", "Crop Pages"),
+    ("toolbar.organizer", "Visual Organizer"),
+    ("draw.text", "Typewriter / Text"),
+    ("draw.typewriter", "Typewriter / Text"),
+    ("annotation.typewriter", "Typewriter / Text"),
     ("context.find", "Find in Document"),
     ("context.highlight", "Highlight"),
     ("context.rotate_cw", "Rotate Clockwise"),
@@ -620,6 +655,13 @@ const TURKISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("toolbar.rotate", "Döndür (Ctrl+R)"),
     ("toolbar.draw", "Çizim"),
     ("toolbar.sign", "İmzala"),
+    ("toolbar.text", "Metin Ekle"),
+    ("toolbar.typewriter", "Metin Ekle"),
+    ("toolbar.crop", "Sayfaları Kırp"),
+    ("toolbar.organizer", "Sayfa Düzenleyici"),
+    ("draw.text", "Metin Ekle"),
+    ("draw.typewriter", "Metin Ekle"),
+    ("annotation.typewriter", "Metin Ekle"),
     ("context.find", "Belgede Bul"),
     ("context.highlight", "Vurgula"),
     ("context.rotate_cw", "Saat Yönünde Döndür"),
@@ -963,6 +1005,40 @@ mod tests {
         ] {
             assert_eq!(t(ResolvedLanguage::English, removed_key), "");
             assert_eq!(t(ResolvedLanguage::Turkish, removed_key), "");
+        }
+    }
+
+    #[test]
+    fn wave_0_strings_are_localized() {
+        let cases = [
+            ("view.mode.book", "Book View", "Kitap Görünümü"),
+            ("toolbar.book", "Book View", "Kitap Görünümü"),
+            ("tools.crop", "Crop Pages", "Sayfaları Kırp"),
+            ("toolbar.crop", "Crop Pages", "Sayfaları Kırp"),
+            ("tools.organizer", "Visual Organizer", "Sayfa Düzenleyici"),
+            ("toolbar.organizer", "Visual Organizer", "Sayfa Düzenleyici"),
+            ("tools.reorder", "Reorder Pages", "Sayfa Düzenleyici"),
+            ("toolbar.typewriter", "Typewriter / Text", "Metin Ekle"),
+            ("draw.text", "Typewriter / Text", "Metin Ekle"),
+            ("status.reloaded", "Reloaded document", "Belge güncellendi"),
+            (
+                "document.reloaded",
+                "Reloaded document",
+                "Belge güncellendi",
+            ),
+        ];
+
+        for (key, en, tr) in cases {
+            assert_eq!(
+                t(ResolvedLanguage::English, key),
+                en,
+                "English mismatch for {key}"
+            );
+            assert_eq!(
+                t(ResolvedLanguage::Turkish, key),
+                tr,
+                "Turkish mismatch for {key}"
+            );
         }
     }
 }

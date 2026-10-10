@@ -7,7 +7,7 @@ use super::ui::{
 use barepdf_core::{InkStroke, SignaturePayload, ViewingMode};
 use barepdf_i18n::{t, ResolvedLanguage};
 use barepdf_render::RenderKind;
-use barepdf_ui::{AppWindow, PageItem, TabItem, ThumbnailItem};
+use barepdf_ui::{AppWindow, FreeTextItem, PageItem, TabItem, ThumbnailItem};
 use slint::{Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 pub(crate) const PAGE_ANNOTATION_BUDGET: usize = 8 * 1024 * 1024;
@@ -85,10 +85,30 @@ pub(crate) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
     }
     window.set_visible_pages(ModelRc::new(model));
 
-    let first_page = if app.viewing_mode == ViewingMode::TwoPageSpread {
-        app.current_page & !1
-    } else {
-        app.current_page
+    let (first_page, second_page) = match app.viewing_mode {
+        ViewingMode::TwoPageSpread => {
+            let first = app.current_page & !1;
+            let second = if first + 1 < app.page_count() {
+                Some(first + 1)
+            } else {
+                None
+            };
+            (first, second)
+        }
+        ViewingMode::BookMode => {
+            if app.current_page == 0 {
+                (0, None)
+            } else {
+                let first = 1 + ((app.current_page - 1) & !1);
+                let second = if first + 1 < app.page_count() {
+                    Some(first + 1)
+                } else {
+                    None
+                };
+                (first, second)
+            }
+        }
+        _ => (app.current_page, None),
     };
     if let Some(page) = app.layout.pages.get(first_page as usize) {
         window.set_page_display_width(page.width as f32);
@@ -105,23 +125,18 @@ pub(crate) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
         )));
     }
 
-    if app.viewing_mode == ViewingMode::TwoPageSpread {
-        let second_page = first_page + 1;
-        if second_page < app.page_count() {
-            window.set_has_second_spread_page(true);
-            window.set_second_page_index(second_page as i32);
-            if let Some(second_layout) = app.layout.pages.get(second_page as usize) {
-                window.set_second_page_width(second_layout.width as f32);
-                window.set_second_page_height(second_layout.height as f32);
-            }
-            let second_image = app
-                .active_document()
-                .and_then(|doc| app.page_images.get(doc, second_page, RenderKind::Page))
-                .unwrap_or_default();
-            window.set_second_page_image(second_image);
-        } else {
-            window.set_has_second_spread_page(false);
+    if let Some(second_page) = second_page {
+        window.set_has_second_spread_page(true);
+        window.set_second_page_index(second_page as i32);
+        if let Some(second_layout) = app.layout.pages.get(second_page as usize) {
+            window.set_second_page_width(second_layout.width as f32);
+            window.set_second_page_height(second_layout.height as f32);
         }
+        let second_image = app
+            .active_document()
+            .and_then(|doc| app.page_images.get(doc, second_page, RenderKind::Page))
+            .unwrap_or_default();
+        window.set_second_page_image(second_image);
     } else {
         window.set_has_second_spread_page(false);
     }
@@ -142,6 +157,43 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
     let has_unsaved = doc_annotations.is_some_and(|a| !a.is_empty());
     window.set_has_unsaved_annotations(has_unsaved);
 
+    let free_texts_model = if let Some(ann) = doc_annotations {
+        let items: Vec<FreeTextItem> = ann
+            .free_texts
+            .iter()
+            .map(|ft| {
+                let (pw, ph) = app
+                    .page_dimensions
+                    .get(ft.page_index)
+                    .copied()
+                    .unwrap_or(app.first_page_dimensions);
+                let x_ratio = if pw > 0.0 {
+                    (ft.x / pw).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let y_ratio = if ph > 0.0 {
+                    ((ph - ft.y) / ph).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let [r, g, b, a] = ft.color_rgba;
+                FreeTextItem {
+                    page_index: ft.page_index as i32,
+                    x_ratio,
+                    y_ratio,
+                    text: SharedString::from(ft.text.as_str()),
+                    font_size: ft.font_size,
+                    color: slint::Color::from_argb_u8(a, r, g, b),
+                }
+            })
+            .collect();
+        ModelRc::new(VecModel::from(items))
+    } else {
+        ModelRc::new(VecModel::default())
+    };
+    window.set_page_free_texts(free_texts_model);
+
     if let Some(stroke) = app.active_stroke.clone() {
         let stroke_page = stroke.page.get();
         window.set_current_annotation_page_index(stroke_page as i32);
@@ -149,14 +201,40 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
         window.set_current_page_has_annotation_overlay(overlay.size().width > 0);
         window.set_current_page_annotation_overlay(overlay);
 
-        if app.viewing_mode == ViewingMode::TwoPageSpread {
-            let first_page = app.current_page & !1;
-            let other_page = if stroke_page == first_page {
-                first_page + 1
-            } else {
-                first_page
+        if app.viewing_mode == ViewingMode::TwoPageSpread
+            || app.viewing_mode == ViewingMode::BookMode
+        {
+            let (first_page, second_page) = match app.viewing_mode {
+                ViewingMode::TwoPageSpread => {
+                    let first = app.current_page & !1;
+                    let second = if first + 1 < app.page_count() {
+                        Some(first + 1)
+                    } else {
+                        None
+                    };
+                    (first, second)
+                }
+                ViewingMode::BookMode => {
+                    if app.current_page == 0 {
+                        (0, None)
+                    } else {
+                        let first = 1 + ((app.current_page - 1) & !1);
+                        let second = if first + 1 < app.page_count() {
+                            Some(first + 1)
+                        } else {
+                            None
+                        };
+                        (first, second)
+                    }
+                }
+                _ => (app.current_page, None),
             };
-            if other_page < app.page_count() {
+            if let Some(second_page) = second_page {
+                let other_page = if stroke_page == first_page {
+                    second_page
+                } else {
+                    first_page
+                };
                 let second_overlay = render_page_annotation_overlay(app, other_page, None);
                 window.set_second_page_has_annotation_overlay(second_overlay.size().width > 0);
                 window.set_second_page_annotation_overlay(second_overlay);
@@ -168,10 +246,30 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
         return;
     }
 
-    let first_page = if app.viewing_mode == ViewingMode::TwoPageSpread {
-        app.current_page & !1
-    } else {
-        app.current_page
+    let (first_page, second_page) = match app.viewing_mode {
+        ViewingMode::TwoPageSpread => {
+            let first = app.current_page & !1;
+            let second = if first + 1 < app.page_count() {
+                Some(first + 1)
+            } else {
+                None
+            };
+            (first, second)
+        }
+        ViewingMode::BookMode => {
+            if app.current_page == 0 {
+                (0, None)
+            } else {
+                let first = 1 + ((app.current_page - 1) & !1);
+                let second = if first + 1 < app.page_count() {
+                    Some(first + 1)
+                } else {
+                    None
+                };
+                (first, second)
+            }
+        }
+        _ => (app.current_page, None),
     };
     window.set_current_annotation_page_index(first_page as i32);
 
@@ -179,8 +277,8 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
     window.set_current_page_has_annotation_overlay(current_overlay.size().width > 0);
     window.set_current_page_annotation_overlay(current_overlay);
 
-    if app.viewing_mode == ViewingMode::TwoPageSpread && first_page + 1 < app.page_count() {
-        let second_overlay = render_page_annotation_overlay(app, first_page + 1, None);
+    if let Some(second_page) = second_page {
+        let second_overlay = render_page_annotation_overlay(app, second_page, None);
         window.set_second_page_has_annotation_overlay(second_overlay.size().width > 0);
         window.set_second_page_annotation_overlay(second_overlay);
     } else {
@@ -341,6 +439,7 @@ pub(crate) fn render_signature_pad_preview(
     strokes: &[Vec<(f32, f32)>],
     active: Option<&Vec<(f32, f32)>>,
     uploaded: Option<&(u32, u32, Vec<u8>)>,
+    stroke_width: f32,
 ) -> Image {
     if let Some((w, h, rgba)) = uploaded {
         if *w > 0 && *h > 0 && rgba.len() == (*w * *h * 4) as usize {
@@ -355,6 +454,7 @@ pub(crate) fn render_signature_pad_preview(
     const H: u32 = 160;
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(W, H);
     let bytes = buffer.make_mut_bytes();
+    let radius = stroke_width.max(0.5);
     for line in strokes {
         draw_normalized_polyline_in_box(
             bytes,
@@ -363,7 +463,7 @@ pub(crate) fn render_signature_pad_preview(
             (0, 0, W as i32, H as i32),
             line,
             (20, 20, 40, 255),
-            2.0,
+            radius,
         );
     }
     if let Some(line) = active {
@@ -374,7 +474,7 @@ pub(crate) fn render_signature_pad_preview(
             (0, 0, W as i32, H as i32),
             line,
             (20, 20, 40, 255),
-            2.0,
+            radius,
         );
     }
     Image::from_rgba8(buffer)

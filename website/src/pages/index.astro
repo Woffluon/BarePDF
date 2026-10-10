@@ -2,16 +2,18 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Hero from '../components/Hero.astro';
 import AppScreenshot from '../components/AppScreenshot.astro';
+import DownloadMetricCard from '../components/DownloadMetricCard.astro';
 import FeatureGrid from '../components/FeatureGrid.astro';
 import Philosophy from '../components/Philosophy.astro';
 import CommitList from '../components/CommitList.astro';
-import { getLatestRelease, getRecentCommits } from '../lib/github';
+import { getLatestRelease, getRecentCommits, getDownloadMetrics } from '../lib/github';
 
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-// Fetch latest release & recent commits at build time
+// Fetch latest release, recent commits, and download metrics at build time
 const latestRelease = await getLatestRelease();
 const recentCommits = await getRecentCommits(5);
+const downloadMetrics = await getDownloadMetrics();
 ---
 
 <BaseLayout
@@ -22,6 +24,10 @@ const recentCommits = await getRecentCommits(5);
   <Hero release={latestRelease} />
 
   <AppScreenshot />
+
+  <div class="container">
+    <DownloadMetricCard metrics={downloadMetrics} />
+  </div>
 
   <FeatureGrid />
 

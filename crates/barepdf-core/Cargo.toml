@@ -12,6 +12,7 @@ description = "Core domain types, layout algorithms, commands, and preferences f
 serde.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+uuid = { version = "1.24", features = ["v4", "serde"] }
 barepdf-i18n = { path = "../barepdf-i18n" }
 
 [dev-dependencies]

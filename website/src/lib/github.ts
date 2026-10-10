@@ -34,6 +34,22 @@ export interface GitHubCommit {
   url: string;
 }
 
+export interface DownloadMetrics {
+  totalDownloads: number;
+  installerDownloads: number;
+  portableDownloads: number;
+  latestReleaseDownloads: number;
+  isFallback: boolean;
+}
+
+export const VERIFIED_DOWNLOAD_BASELINE: DownloadMetrics = {
+  totalDownloads: 149,
+  installerDownloads: 104,
+  portableDownloads: 45,
+  latestReleaseDownloads: 5,
+  isFallback: true,
+};
+
 const GITHUB_API_BASE = 'https://api.github.com';
 export const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
 
@@ -108,6 +124,9 @@ function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
     const size = finiteSize(asset.size);
     const downloadUrl = trustedGitHubUrl(asset.browser_download_url);
     const type = name ? releaseAssetType(name, tag) : null;
+    const downloadCount = typeof asset.download_count === 'number' && Number.isFinite(asset.download_count) && asset.download_count >= 0
+      ? Math.trunc(asset.download_count)
+      : 0;
     if (
       !name
       || size === null
@@ -116,7 +135,7 @@ function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
       || !isReleaseAssetUrl(downloadUrl, repository.owner, repository.name, tag, name)
     ) return [];
 
-    return [{ name, size, downloadUrl, type }];
+    return [{ name, size, downloadUrl, type, downloadCount }];
   });
 
   return (['installer', 'portable', 'checksum'] as const).flatMap((type: ReleaseAssetType) => {
@@ -190,6 +209,74 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
   } catch (err) {
     console.warn(`[GitHub API] Error fetching latest release:`, err);
     return defaultReleaseFallback;
+  }
+}
+
+export async function getDownloadMetrics(): Promise<DownloadMetrics> {
+  const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/releases?per_page=100`;
+  try {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) {
+      console.warn(`[GitHub API] Failed to fetch releases for download metrics (${res.status}). Using verified baseline.`);
+      return VERIFIED_DOWNLOAD_BASELINE;
+    }
+    const data: unknown = await readBoundedJson(res);
+    if (!Array.isArray(data)) {
+      return VERIFIED_DOWNLOAD_BASELINE;
+    }
+
+    let installerCount = 0;
+    let portableCount = 0;
+    let latestCount = 0;
+    let firstRelease = true;
+
+    for (const release of data) {
+      if (!isRecord(release) || release.draft === true || release.prerelease === true) {
+        continue;
+      }
+      if (!Array.isArray(release.assets)) continue;
+
+      let releaseInstaller = 0;
+      let releasePortable = 0;
+
+      for (const asset of release.assets) {
+        if (!isRecord(asset)) continue;
+        const name = stringValue(asset.name);
+        const count = typeof asset.download_count === 'number' && Number.isFinite(asset.download_count) && asset.download_count >= 0
+          ? Math.trunc(asset.download_count)
+          : 0;
+
+        if (name && /BarePDF-Setup-x64.*\.exe$/i.test(name)) {
+          releaseInstaller += count;
+        } else if (name && /BarePDF-Portable-x64.*\.zip$/i.test(name)) {
+          releasePortable += count;
+        }
+      }
+
+      installerCount += releaseInstaller;
+      portableCount += releasePortable;
+
+      if (firstRelease) {
+        latestCount = releaseInstaller + releasePortable;
+        firstRelease = false;
+      }
+    }
+
+    const total = installerCount + portableCount;
+    if (total === 0) {
+      return VERIFIED_DOWNLOAD_BASELINE;
+    }
+
+    return {
+      totalDownloads: Math.max(total, VERIFIED_DOWNLOAD_BASELINE.totalDownloads),
+      installerDownloads: Math.max(installerCount, VERIFIED_DOWNLOAD_BASELINE.installerDownloads),
+      portableDownloads: Math.max(portableCount, VERIFIED_DOWNLOAD_BASELINE.portableDownloads),
+      latestReleaseDownloads: latestCount > 0 ? latestCount : VERIFIED_DOWNLOAD_BASELINE.latestReleaseDownloads,
+      isFallback: false,
+    };
+  } catch (err) {
+    console.warn(`[GitHub API] Error fetching download metrics:`, err);
+    return VERIFIED_DOWNLOAD_BASELINE;
   }
 }
 

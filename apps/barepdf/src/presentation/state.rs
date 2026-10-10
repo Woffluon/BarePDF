@@ -403,6 +403,14 @@ pub(crate) struct CommittedOverlayCache {
     pub(crate) pixels: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingTool {
+    Pan,
+    Pen,
+    Eraser,
+    Typewriter,
+}
+
 pub(crate) struct AppState {
     pub(crate) application: Application,
     pub(crate) current_page: u32,
@@ -462,6 +470,7 @@ pub(crate) struct AppState {
     pub(crate) drawing_color: barepdf_core::InkColor,
     pub(crate) drawing_width_pts: f32,
     pub(crate) drawing_eraser: bool,
+    pub(crate) drawing_typewriter: bool,
     pub(crate) pan_mode: bool,
     pub(crate) drawing_eraser_size_index: usize,
     pub(crate) drawing_toolbar_at_bottom: bool,
@@ -471,6 +480,10 @@ pub(crate) struct AppState {
     pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
     pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
     pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
+    pub(crate) sign_pen_thickness: f32,
+    pub(crate) file_watcher: Option<barepdf_platform_windows::WindowsDocumentFileWatcher>,
+    file_change_sender: std::sync::mpsc::Sender<PathBuf>,
+    file_change_receiver: std::sync::mpsc::Receiver<PathBuf>,
     pump_timer: Option<Rc<Timer>>,
     pump_active_until: Option<Instant>,
 }
@@ -483,6 +496,7 @@ impl AppState {
             _ => ZoomFactor::default(),
         };
         let (background_io_sender, background_io_receiver) = std::sync::mpsc::channel();
+        let (file_change_sender, file_change_receiver) = std::sync::mpsc::channel();
         Self {
             application: Application::default(),
             current_page: 0,
@@ -542,17 +556,78 @@ impl AppState {
             drawing_color: barepdf_core::InkColor::Black,
             drawing_width_pts: 4.0,
             drawing_eraser: false,
+            drawing_typewriter: false,
             pan_mode: true,
             drawing_eraser_size_index: 1,
-            drawing_toolbar_at_bottom: true,
+            drawing_toolbar_at_bottom: false,
             last_eraser_point: None,
             annotation_history: HashMap::new(),
             committed_overlay_cache: None,
             sign_pad_strokes: Vec::new(),
             sign_pad_active_stroke: None,
             sign_uploaded_image: None,
+            sign_pen_thickness: 2.0,
+            file_watcher: None,
+            file_change_sender,
+            file_change_receiver,
             pump_timer: None,
             pump_active_until: None,
+        }
+    }
+
+    pub(crate) fn activate_drawing_tool(&mut self, tool: DrawingTool) {
+        match tool {
+            DrawingTool::Pan => {
+                self.pan_mode = true;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Pen => {
+                self.pan_mode = false;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Eraser => {
+                self.pan_mode = false;
+                self.drawing_eraser = true;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Typewriter => {
+                self.pan_mode = false;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = true;
+            }
+        }
+    }
+
+    pub(crate) fn try_recv_file_change(&self) -> Option<PathBuf> {
+        self.file_change_receiver.try_recv().ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn notify_file_changed(&mut self, path: PathBuf) {
+        let _ = self.file_change_sender.send(path);
+        self.wake_pump();
+    }
+
+    pub(crate) fn start_file_watcher(&mut self, path: &std::path::Path) {
+        if path.is_file() {
+            let tx = self.file_change_sender.clone();
+            if let Ok(watcher) = barepdf_platform_windows::WindowsDocumentFileWatcher::with_callback(
+                path,
+                std::time::Duration::from_millis(150),
+                move |event| {
+                    let _ = tx.send(event.path().to_path_buf());
+                },
+            ) {
+                self.file_watcher = Some(watcher);
+            }
+        }
+    }
+
+    pub(crate) fn stop_file_watcher(&mut self) {
+        if let Some(watcher) = self.file_watcher.take() {
+            watcher.stop();
         }
     }
 
@@ -1283,7 +1358,8 @@ mod tests {
         let app = AppState::new(UserPreferences::default());
         assert!(app.pan_mode);
         assert_eq!(app.drawing_eraser_size_index, 1);
-        assert!(app.drawing_toolbar_at_bottom);
+        assert!(!app.drawing_toolbar_at_bottom);
+        assert_eq!(app.sign_pen_thickness, 2.0);
         assert_eq!(app.last_eraser_point, None);
         assert!(app.annotation_history.is_empty());
         assert_eq!(app.committed_overlay_cache, None);

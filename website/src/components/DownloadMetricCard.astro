@@ -1,0 +1,177 @@
+---
+import type { DownloadMetrics } from '../lib/github';
+
+interface Props {
+  metrics: DownloadMetrics;
+  compact?: boolean;
+}
+
+const { metrics, compact = false } = Astro.props;
+---
+
+<div class:list={['download-metric-card', { compact }]}>
+  <div class="metric-header">
+    <div class="metric-icon-wrap" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        <path d="M9 12l2 2 4-4"></path>
+      </svg>
+    </div>
+
+    <div class="metric-title-group">
+      <div class="metric-badge-row">
+        <span class="badge badge-success">
+          <span data-i18n data-en="Zero Telemetry" data-tr="Sıfır Telemetri">Zero Telemetry</span>
+        </span>
+        <span class="metric-subtag" data-i18n data-en="Public GitHub Release Metrics" data-tr="Herkese Açık GitHub Sürüm Verileri">
+          Public GitHub Release Metrics
+        </span>
+      </div>
+      <h3 class="metric-title" data-i18n data-en="Privacy-Respecting Release Downloads" data-tr="Gizliliğe Saygılı Sürüm İndirmeleri">
+        Privacy-Respecting Release Downloads
+      </h3>
+    </div>
+  </div>
+
+  <div class="metric-numbers-grid">
+    <div class="metric-stat">
+      <span class="stat-number">{metrics.totalDownloads}</span>
+      <span class="stat-label" data-i18n data-en="Total Downloads" data-tr="Toplam İndirme">Total Downloads</span>
+    </div>
+    <div class="metric-stat">
+      <span class="stat-number">{metrics.installerDownloads}</span>
+      <span class="stat-label" data-i18n data-en="Setup Installer" data-tr="Kurulum Paketi">Setup Installer</span>
+    </div>
+    <div class="metric-stat">
+      <span class="stat-number">{metrics.portableDownloads}</span>
+      <span class="stat-label" data-i18n data-en="Portable ZIP" data-tr="Taşınabilir ZIP">Portable ZIP</span>
+    </div>
+    <div class="metric-stat highlight">
+      <span class="stat-number">0</span>
+      <span class="stat-label" data-i18n data-en="Telemetry Pings" data-tr="Telemetri İsteği">Telemetry Pings</span>
+    </div>
+  </div>
+
+  <p class="metric-explanation" data-i18n
+    data-en="Download metrics are counted solely by GitHub when files are retrieved from official releases. BarePDF sends zero background network calls, generates no analytics pings, and assigns no device identifiers."
+    data-tr="İndirme sayıları yalnızca resmi sürümlerden dosya çekildiğinde GitHub tarafından sayılır. BarePDF arka planda sıfır ağ araması yapar, hiçbir analitik verisi göndermez ve cihaz kimliği atamaz.">
+    Download metrics are counted solely by GitHub when files are retrieved from official releases. BarePDF sends zero background network calls, generates no analytics pings, and assigns no device identifiers.
+  </p>
+</div>
+
+<style>
+  .download-metric-card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 1.75rem 2rem;
+    box-shadow: var(--shadow-sm);
+    margin: 2rem 0;
+  }
+
+  .download-metric-card.compact {
+    padding: 1.25rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+
+  .metric-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .metric-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    background-color: var(--color-accent-subtle);
+    color: var(--color-accent);
+    flex-shrink: 0;
+  }
+
+  .metric-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .metric-badge-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .metric-subtag {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .metric-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .metric-numbers-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    padding: 1.25rem 0;
+    border-top: 1px solid var(--color-border-subtle);
+    border-bottom: 1px solid var(--color-border-subtle);
+    margin-bottom: 1rem;
+  }
+
+  .metric-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .stat-number {
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 1.1;
+    font-family: var(--font-mono);
+    color: var(--color-text);
+  }
+
+  .metric-stat.highlight .stat-number {
+    color: var(--color-accent);
+  }
+
+  .stat-label {
+    font-size: 0.8125rem;
+    color: var(--color-text-muted);
+  }
+
+  .metric-explanation {
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  @media (max-width: 768px) {
+    .download-metric-card {
+      padding: 1.25rem;
+    }
+
+    .metric-numbers-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+    }
+
+    .stat-number {
+      font-size: 1.4rem;
+    }
+  }
+</style>

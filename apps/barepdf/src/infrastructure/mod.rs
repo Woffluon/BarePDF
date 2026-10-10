@@ -9,6 +9,8 @@ pub(crate) use preferences_store::{
     PreferencesLoadError,
 };
 pub(crate) use print_worker::{PrintEvent, PrintRequest, PrintWorker, PrintWorkerError};
+#[allow(unused_imports)]
+pub(crate) use tool_worker::ToolTask;
 pub(crate) use tool_worker::{
     ToolEvent, ToolJobKey, ToolOperation, ToolOutcome, ToolRequest, ToolWorker,
 };

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://woffluon.github.io/BarePDF/docs/
+    about: Read user guides, keyboard shortcuts, and architecture documentation.
+  - name: Downloads & Releases
+    url: https://woffluon.github.io/BarePDF/download/
+    about: Download official Windows installer packages, portable archives, and checksums.
+  - name: Security Advisory & Vulnerability Reports
+    url: https://github.com/Woffluon/BarePDF/security
+    about: Report sensitive security vulnerabilities privately to project maintainers.

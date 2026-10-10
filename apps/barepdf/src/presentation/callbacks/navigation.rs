@@ -37,15 +37,33 @@ pub(super) fn connect_navigation_callbacks(
                 if let Some(window) = weak.upgrade() {
                     let page = {
                         let app = state.borrow();
-                        let step = if app.viewing_mode == ViewingMode::TwoPageSpread {
-                            2
-                        } else {
-                            1
-                        };
                         match target {
-                            NavigationTarget::Previous => app.current_page.saturating_sub(step),
+                            NavigationTarget::Previous => {
+                                if app.viewing_mode == ViewingMode::TwoPageSpread {
+                                    app.current_page.saturating_sub(2)
+                                } else if app.viewing_mode == ViewingMode::BookMode {
+                                    if app.current_page <= 2 {
+                                        0
+                                    } else {
+                                        app.current_page.saturating_sub(2)
+                                    }
+                                } else {
+                                    app.current_page.saturating_sub(1)
+                                }
+                            }
                             NavigationTarget::Next => {
-                                (app.current_page + step).min(app.page_count().saturating_sub(1))
+                                if app.viewing_mode == ViewingMode::TwoPageSpread {
+                                    (app.current_page + 2).min(app.page_count().saturating_sub(1))
+                                } else if app.viewing_mode == ViewingMode::BookMode {
+                                    if app.current_page == 0 {
+                                        1.min(app.page_count().saturating_sub(1))
+                                    } else {
+                                        (app.current_page + 2)
+                                            .min(app.page_count().saturating_sub(1))
+                                    }
+                                } else {
+                                    (app.current_page + 1).min(app.page_count().saturating_sub(1))
+                                }
                             }
                             NavigationTarget::First => 0,
                             NavigationTarget::Last => app.page_count().saturating_sub(1),
@@ -223,7 +241,8 @@ pub(super) fn connect_view_callbacks(
             app.viewing_mode = match app.viewing_mode {
                 ViewingMode::ContinuousVertical => ViewingMode::SinglePage,
                 ViewingMode::SinglePage => ViewingMode::TwoPageSpread,
-                _ => ViewingMode::ContinuousVertical,
+                ViewingMode::TwoPageSpread => ViewingMode::BookMode,
+                ViewingMode::BookMode => ViewingMode::ContinuousVertical,
             };
             app.preferences.viewing_mode = app.viewing_mode;
             app.layout_key = None;

@@ -6,6 +6,7 @@ mod generated {
             TabItem,
             SelectionBox,
             OverlayRectData,
+            FreeTextItem,
             BookmarkItem,
             PageItem,
             ThumbnailItem,
@@ -19,6 +20,7 @@ mod generated {
             TabItem,
             SelectionBox,
             OverlayRectData,
+            FreeTextItem,
             BookmarkItem,
             PageItem,
             ThumbnailItem,
@@ -34,8 +36,8 @@ pub use generated::*;
 #[deny(clippy::all, clippy::pedantic)]
 mod tests {
     use super::{
-        AppWindow, BookmarkItem, OutlineItem, OverlayRectData, PageItem, RecentFileItem,
-        SelectionBox, TabItem, ThumbnailItem,
+        AppWindow, BookmarkItem, FreeTextItem, OutlineItem, OverlayRectData, PageItem,
+        RecentFileItem, SelectionBox, TabItem, ThumbnailItem,
     };
     use slint::{Color, Image, Model, ModelRc, SharedString, VecModel};
     use std::rc::Rc;
@@ -60,6 +62,18 @@ mod tests {
         };
         assert!((overlay.width_ratio - 0.5).abs() < f32::EPSILON);
         assert_eq!(overlay.color.alpha(), 128);
+
+        let free_text = FreeTextItem {
+            page_index: 0,
+            x_ratio: 0.1,
+            y_ratio: 0.2,
+            text: SharedString::from("Typewriter"),
+            font_size: 14.0,
+            color: Color::from_argb_u8(255, 0, 0, 0),
+        };
+        assert_eq!(free_text.page_index, 0);
+        assert_eq!(free_text.text.as_str(), "Typewriter");
+        assert!((free_text.font_size - 14.0).abs() < f32::EPSILON);
 
         let bookmark = BookmarkItem {
             title: SharedString::from("Intro"),
@@ -184,8 +198,11 @@ mod tests {
         ];
         assert_eq!(callbacks.len(), 3);
 
-        let int_callbacks: [IntCallbackSetter; 1] = [AppWindow::on_set_drawing_eraser_size];
-        assert_eq!(int_callbacks.len(), 1);
+        let int_callbacks: [IntCallbackSetter; 2] = [
+            AppWindow::on_set_drawing_eraser_size,
+            AppWindow::on_select_drawing_tool,
+        ];
+        assert_eq!(int_callbacks.len(), 2);
 
         let bool_getters: [BoolGetter; 4] = [
             AppWindow::get_pan_mode_active,
@@ -200,5 +217,58 @@ mod tests {
 
         let float_getters: [FloatGetter; 1] = [AppWindow::get_drawing_eraser_diameter_norm];
         assert_eq!(float_getters.len(), 1);
+    }
+
+    #[test]
+    fn crop_and_reorder_callbacks_are_exposed() {
+        type CropCallbackSetter = fn(
+            &AppWindow,
+            Box<dyn Fn(SharedString, SharedString, SharedString, SharedString, SharedString)>,
+        );
+        type ReorderCallbackSetter = fn(&AppWindow, Box<dyn Fn(SharedString)>);
+
+        let _: CropCallbackSetter = AppWindow::on_request_crop_pages_execute;
+        let _: ReorderCallbackSetter = AppWindow::on_request_reorder_pages_execute;
+    }
+
+    #[test]
+    fn text_note_dialog_properties_and_callbacks_are_exposed() {
+        type TextNoteCallbackSetter =
+            fn(&AppWindow, Box<dyn Fn(i32, f32, f32, SharedString, f32, i32)>);
+        type BoolGetter = fn(&AppWindow) -> bool;
+        type BoolSetter = fn(&AppWindow, bool);
+        type IntGetter = fn(&AppWindow) -> i32;
+        type IntSetter = fn(&AppWindow, i32);
+        type FloatGetter = fn(&AppWindow) -> f32;
+        type FloatSetter = fn(&AppWindow, f32);
+        type StringGetter = fn(&AppWindow) -> SharedString;
+        type StringSetter = fn(&AppWindow, SharedString);
+
+        let _: TextNoteCallbackSetter = AppWindow::on_request_add_free_text;
+        let _: BoolGetter = AppWindow::get_text_note_dialog_open;
+        let _: BoolSetter = AppWindow::set_text_note_dialog_open;
+        let _: IntGetter = AppWindow::get_text_note_page_index;
+        let _: IntSetter = AppWindow::set_text_note_page_index;
+        let _: FloatGetter = AppWindow::get_text_note_norm_x;
+        let _: FloatSetter = AppWindow::set_text_note_norm_x;
+        let _: FloatGetter = AppWindow::get_text_note_norm_y;
+        let _: FloatSetter = AppWindow::set_text_note_norm_y;
+        let _: StringGetter = AppWindow::get_text_note_content;
+        let _: StringSetter = AppWindow::set_text_note_content;
+        let _: FloatGetter = AppWindow::get_text_note_font_size;
+        let _: FloatSetter = AppWindow::set_text_note_font_size;
+        let _: IntGetter = AppWindow::get_text_note_color_index;
+        let _: IntSetter = AppWindow::set_text_note_color_index;
+
+        let slint_dialog = include_str!("../ui/dialogs/text_annotation_dialog.slint");
+        assert!(slint_dialog.contains("export component TextAnnotationDialog"));
+        assert!(slint_dialog.contains("callback insert(string, float, int);"));
+        assert!(slint_dialog.contains("callback close();"));
+        assert!(slint_dialog.contains("dialog-width: 440px;"));
+        assert!(slint_dialog.contains("dialog-height: 280px;"));
+        assert!(slint_dialog.contains("12pt"));
+        assert!(slint_dialog.contains("14pt"));
+        assert!(slint_dialog.contains("18pt"));
+        assert!(slint_dialog.contains("24pt"));
     }
 }

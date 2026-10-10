@@ -11,9 +11,15 @@ use std::sync::Arc;
 use super::super::models::{
     refresh_annotation_overlays, refresh_page_model, render_signature_pad_preview,
 };
-use super::super::state::{AppState, BackgroundUiEvent, ERASER_RADII};
+use super::super::state::{AppState, BackgroundUiEvent, DrawingTool, ERASER_RADII};
 use super::super::ui::{begin_open, show_banner};
 use super::print::populate_print_preview_printers;
+
+pub(crate) fn sync_drawing_tool_ui(app: &AppState, window: &AppWindow) {
+    window.set_pan_mode_active(app.pan_mode);
+    window.set_drawing_eraser_active(app.drawing_eraser);
+    window.set_drawing_typewriter_active(app.drawing_typewriter);
+}
 
 pub(crate) fn handle_background_ui_event(
     event: BackgroundUiEvent,
@@ -70,8 +76,12 @@ pub(crate) fn handle_background_ui_event(
             Ok((w, h, pixels)) => {
                 let mut app = state.borrow_mut();
                 app.sign_uploaded_image = Some((w, h, pixels));
-                let preview =
-                    render_signature_pad_preview(&[], None, app.sign_uploaded_image.as_ref());
+                let preview = render_signature_pad_preview(
+                    &[],
+                    None,
+                    app.sign_uploaded_image.as_ref(),
+                    app.sign_pen_thickness,
+                );
                 window.set_sign_pad_preview(preview);
                 window.set_sign_has_preview(true);
             }
@@ -106,10 +116,11 @@ pub(super) fn connect_annotation_and_signature_callbacks(
 ) {
     {
         let app = state.borrow();
-        window.set_pan_mode_active(app.pan_mode);
+        sync_drawing_tool_ui(&app, window);
         window.set_drawing_eraser_size_index(app.drawing_eraser_size_index as i32);
         window.set_drawing_eraser_diameter_norm(ERASER_RADII[app.drawing_eraser_size_index] * 2.0);
         window.set_drawing_toolbar_at_bottom(app.drawing_toolbar_at_bottom);
+        window.set_sign_pen_thickness(app.sign_pen_thickness);
         update_drawing_undo_redo_ui(&app, window);
     }
     let weak = window.as_weak();
@@ -211,8 +222,11 @@ pub(super) fn connect_annotation_and_signature_callbacks(
         if let Some(window) = weak.upgrade() {
             let next = !window.get_drawing_mode_active();
             window.set_drawing_mode_active(next);
-            let app = state_draw_mode.borrow();
-            window.set_pan_mode_active(app.pan_mode);
+            let mut app = state_draw_mode.borrow_mut();
+            if next && app.pan_mode {
+                app.activate_drawing_tool(DrawingTool::Pen);
+            }
+            sync_drawing_tool_ui(&app, &window);
             window.set_drawing_eraser_size_index(app.drawing_eraser_size_index as i32);
             window.set_drawing_eraser_diameter_norm(
                 ERASER_RADII[app.drawing_eraser_size_index] * 2.0,
@@ -223,12 +237,32 @@ pub(super) fn connect_annotation_and_signature_callbacks(
     });
 
     let weak = window.as_weak();
+    let state_select_tool = state.clone();
+    window.on_select_drawing_tool(move |tool_id| {
+        let mut app = state_select_tool.borrow_mut();
+        match tool_id {
+            0 => app.activate_drawing_tool(DrawingTool::Pan),
+            1 => app.activate_drawing_tool(DrawingTool::Pen),
+            2 => app.activate_drawing_tool(DrawingTool::Eraser),
+            3 => app.activate_drawing_tool(DrawingTool::Typewriter),
+            _ => app.activate_drawing_tool(DrawingTool::Pen),
+        }
+        if let Some(window) = weak.upgrade() {
+            sync_drawing_tool_ui(&app, &window);
+        }
+    });
+
+    let weak = window.as_weak();
     let state_pan = state.clone();
     window.on_toggle_pan_mode(move || {
         if let Some(window) = weak.upgrade() {
             let mut app = state_pan.borrow_mut();
-            app.pan_mode = !app.pan_mode;
-            window.set_pan_mode_active(app.pan_mode);
+            if app.pan_mode {
+                app.activate_drawing_tool(DrawingTool::Pen);
+            } else {
+                app.activate_drawing_tool(DrawingTool::Pan);
+            }
+            sync_drawing_tool_ui(&app, &window);
         }
     });
 
@@ -236,9 +270,13 @@ pub(super) fn connect_annotation_and_signature_callbacks(
     let state_eraser = state.clone();
     window.on_set_drawing_eraser(move |active| {
         let mut app = state_eraser.borrow_mut();
-        app.drawing_eraser = active;
+        if active {
+            app.activate_drawing_tool(DrawingTool::Eraser);
+        } else {
+            app.activate_drawing_tool(DrawingTool::Pen);
+        }
         if let Some(window) = weak.upgrade() {
-            window.set_drawing_eraser_active(active);
+            sync_drawing_tool_ui(&app, &window);
             let idx = app.drawing_eraser_size_index;
             let radius = ERASER_RADII[idx];
             window.set_drawing_eraser_size_index(idx as i32);
@@ -279,10 +317,10 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             3 => barepdf_core::InkColor::Yellow,
             _ => barepdf_core::InkColor::Black,
         };
-        app.drawing_eraser = false;
+        app.activate_drawing_tool(DrawingTool::Pen);
         if let Some(window) = weak.upgrade() {
             window.set_drawing_color_index(idx.clamp(0, 3));
-            window.set_drawing_eraser_active(false);
+            sync_drawing_tool_ui(&app, &window);
         }
     });
 
@@ -295,8 +333,10 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             1 => 4.0,
             _ => 8.0,
         };
+        app.activate_drawing_tool(DrawingTool::Pen);
         if let Some(window) = weak.upgrade() {
             window.set_drawing_width_index(idx.clamp(0, 2));
+            sync_drawing_tool_ui(&app, &window);
         }
     });
 
@@ -315,6 +355,24 @@ pub(super) fn connect_annotation_and_signature_callbacks(
         };
         let page_idx = PageIndex::from_raw(page as u32);
         let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+        if app.pan_mode {
+            return;
+        }
+        if app.drawing_typewriter {
+            let color_index = match app.drawing_color {
+                barepdf_core::InkColor::Black => 0,
+                barepdf_core::InkColor::Red => 1,
+                barepdf_core::InkColor::Blue => 2,
+                barepdf_core::InkColor::Yellow => 3,
+            };
+            window.set_text_note_page_index(page_idx.get() as i32);
+            window.set_text_note_norm_x(pt.0);
+            window.set_text_note_norm_y(pt.1);
+            window.set_text_note_content("".into());
+            window.set_text_note_color_index(color_index);
+            window.set_text_note_dialog_open(true);
+            return;
+        }
         if app.drawing_eraser {
             app.last_eraser_point = Some((page_idx, pt.0, pt.1));
             let radius = ERASER_RADII[app.drawing_eraser_size_index];
@@ -361,6 +419,9 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             return;
         };
         let mut app = state_draw_move.borrow_mut();
+        if app.pan_mode || app.drawing_typewriter {
+            return;
+        }
         let Some(doc_id) = app.active_document() else {
             return;
         };
@@ -404,6 +465,9 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             return;
         };
         let mut app = state_draw_up.borrow_mut();
+        if app.pan_mode || app.drawing_typewriter {
+            return;
+        }
         let Some(doc_id) = app.active_document() else {
             return;
         };
@@ -494,6 +558,8 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             ann.strokes.retain(|s| s.page.get() != current_page);
             ann.highlights.retain(|h| h.page.get() != current_page);
             ann.signatures.retain(|s| s.page.get() != current_page);
+            ann.free_texts
+                .retain(|ft| ft.page_index != current_page as usize);
             if *ann != before {
                 let history = app.annotation_history.entry(doc_id).or_default();
                 history.push_snapshot(before);
@@ -565,6 +631,38 @@ pub(super) fn connect_annotation_and_signature_callbacks(
     });
 
     let weak = window.as_weak();
+    let state_free_text = state.clone();
+    window.on_request_add_free_text(move |page_idx, nx, ny, text, font_size, color_index| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let mut app = state_free_text.borrow_mut();
+        app.activate_drawing_tool(DrawingTool::Typewriter);
+        sync_drawing_tool_ui(&app, &window);
+        let color = match color_index {
+            1 => [230, 50, 50, 255],
+            2 => [30, 100, 220, 255],
+            3 => [220, 180, 20, 255],
+            _ => [0, 0, 0, 255],
+        };
+        add_free_text_annotation(
+            &mut app,
+            page_idx as usize,
+            nx,
+            ny,
+            text.to_string(),
+            font_size,
+            color,
+        );
+        update_drawing_undo_redo_ui(&app, &window);
+        refresh_annotation_overlays(&mut app, &window);
+    });
+
+    let weak = window.as_weak();
     let state_open_sign = state.clone();
     window.on_open_sign_modal(move || {
         let Some(window) = weak.upgrade() else {
@@ -574,10 +672,28 @@ pub(super) fn connect_annotation_and_signature_callbacks(
         app.sign_pad_strokes.clear();
         app.sign_pad_active_stroke = None;
         app.sign_uploaded_image = None;
+        window.set_sign_pen_thickness(app.sign_pen_thickness);
         window.set_sign_pad_preview(Image::default());
         window.set_sign_has_preview(false);
         window.set_sign_tab_index(0);
         window.set_sign_modal_open(true);
+    });
+
+    let weak = window.as_weak();
+    let state_sign_thick = state.clone();
+    window.on_sign_pen_thickness_changed(move |thickness| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut app = state_sign_thick.borrow_mut();
+        app.sign_pen_thickness = thickness.clamp(0.5, 6.0);
+        let preview = render_signature_pad_preview(
+            &app.sign_pad_strokes,
+            app.sign_pad_active_stroke.as_ref(),
+            app.sign_uploaded_image.as_ref(),
+            app.sign_pen_thickness,
+        );
+        window.set_sign_pad_preview(preview);
     });
 
     let weak = window.as_weak();
@@ -593,6 +709,7 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             &app.sign_pad_strokes,
             app.sign_pad_active_stroke.as_ref(),
             None,
+            app.sign_pen_thickness,
         );
         window.set_sign_pad_preview(preview);
         window.set_sign_has_preview(true);
@@ -612,6 +729,7 @@ pub(super) fn connect_annotation_and_signature_callbacks(
                     &app.sign_pad_strokes,
                     app.sign_pad_active_stroke.as_ref(),
                     None,
+                    app.sign_pen_thickness,
                 );
                 window.set_sign_pad_preview(preview);
             }
@@ -629,7 +747,12 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             if !stroke.is_empty() {
                 app.sign_pad_strokes.push(stroke);
             }
-            let preview = render_signature_pad_preview(&app.sign_pad_strokes, None, None);
+            let preview = render_signature_pad_preview(
+                &app.sign_pad_strokes,
+                None,
+                None,
+                app.sign_pen_thickness,
+            );
             window.set_sign_pad_preview(preview);
             window.set_sign_has_preview(!app.sign_pad_strokes.is_empty());
         }
@@ -713,6 +836,7 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             w_norm: window.get_signature_box_w().clamp(0.05, 1.0),
             h_norm: window.get_signature_box_h().clamp(0.03, 1.0),
             payload,
+            stroke_width: app.sign_pen_thickness,
         };
         let ann = app.annotations.entry(doc_id).or_default();
         let before = ann.clone();
@@ -838,4 +962,42 @@ pub(super) fn erase_strokes_near(
             .any(|&(px, py)| (px - nx) * (px - nx) + (py - ny) * (py - ny) <= r2)
     });
     strokes.len() != before
+}
+
+pub(crate) fn add_free_text_annotation(
+    app: &mut AppState,
+    page_index: usize,
+    norm_x: f32,
+    norm_y: f32,
+    text: String,
+    font_size: f32,
+    color_rgba: [u8; 4],
+) {
+    let Some(doc_id) = app.active_document() else {
+        return;
+    };
+    let (pw, ph) = app
+        .page_dimensions
+        .get(page_index)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+
+    let x = norm_x * pw;
+    let y = (1.0 - norm_y) * ph;
+
+    let annotation = barepdf_core::FreeTextAnnotation {
+        id: uuid::Uuid::new_v4(),
+        page_index,
+        x,
+        y,
+        text,
+        font_size,
+        color_rgba,
+    };
+
+    let before = app.annotations.get(&doc_id).cloned().unwrap_or_default();
+    let ann = app.annotations.entry(doc_id).or_default();
+    ann.free_texts.push(annotation);
+    let history = app.annotation_history.entry(doc_id).or_default();
+    history.push_snapshot(before);
 }

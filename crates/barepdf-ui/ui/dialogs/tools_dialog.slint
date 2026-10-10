@@ -233,6 +233,19 @@ export component ToolsModal inherits Rectangle {
     in property <string> rotation-90: "";
     in property <string> rotation-180: "";
     in property <string> rotation-270: "";
+    in property <string> text-crop: "Crop Pages";
+    in property <string> text-crop-desc: "Crop margins or custom areas from pages";
+    in property <string> text-reorder: "Reorder Pages";
+    in property <string> text-reorder-desc: "Rearrange page sequence in document";
+    in property <string> text-drop-crop: "Drop PDF here to crop pages";
+    in property <string> text-drop-reorder: "Drop PDF here to reorder pages";
+    in property <string> text-crop-placeholder: "Pages to crop (empty = all)";
+    in property <string> text-reorder-placeholder: "e.g. 3, 1, 2, 4";
+    in-out property <string> crop-margin-left-str: "36";
+    in-out property <string> crop-margin-bottom-str: "36";
+    in-out property <string> crop-margin-right-str: "576";
+    in-out property <string> crop-margin-top-str: "756";
+    in-out property <string> reorder-sequence-input: "";
 
     callback select-tool(int);
     callback close();
@@ -248,6 +261,8 @@ export component ToolsModal inherits Rectangle {
     callback delete-submit(string);
     callback rotate-submit(string, int);
     callback convert-submit(int, int, int, string);
+    callback crop-submit(string, string, string, string, string);
+    callback reorder-submit(string);
     callback drop-files(data-transfer, int);
     callback select-page(int, bool, bool);
     callback select-all-pages();
@@ -260,13 +275,14 @@ export component ToolsModal inherits Rectangle {
 
     TouchArea {
         clicked => { root.close(); }
+        scroll-event(event) => { return accept; }
     }
 
     modal-focus := FocusScope {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: Math.min(parent.width - 32px, root.current-tool == -1 ? 520px : 560px);
-        height: Math.min(parent.height - 32px, root.current-tool == -1 ? 420px : (root.current-tool == 0 ? 500px : (root.current-tool == 4 ? (root.convert-scope == 1 ? 520px : 440px) : 460px)));
+        height: Math.min(parent.height - 32px, root.current-tool == -1 ? 520px : (root.current-tool == 0 ? 500px : (root.current-tool == 4 ? (root.convert-scope == 1 ? 520px : 440px) : (root.current-tool == 5 ? 510px : 480px))));
         key-pressed(event) => {
             if (event.text == "\u{001b}") {
                 if root.current-tool != -1 {
@@ -282,6 +298,7 @@ export component ToolsModal inherits Rectangle {
         Rectangle {
             width: 100%;
             height: 100%;
+            clip: true;
             background: ThemeTokens.layer;
             border-radius: ThemeTokens.overlay-radius;
             border-width: 1px;
@@ -292,7 +309,9 @@ export component ToolsModal inherits Rectangle {
             accessible-role: groupbox;
             accessible-label: root.title;
 
-            TouchArea {}
+            TouchArea {
+                scroll-event(event) => { return accept; }
+            }
 
             VerticalLayout {
                 spacing: 0px;
@@ -337,7 +356,9 @@ export component ToolsModal inherits Rectangle {
                                       root.current-tool == 0 ? root.text-merge :
                                       root.current-tool == 1 ? root.text-split :
                                       root.current-tool == 2 ? root.text-delete :
-                                      root.current-tool == 3 ? root.text-rotate : root.text-convert;
+                                      root.current-tool == 3 ? root.text-rotate :
+                                      root.current-tool == 4 ? root.text-convert :
+                                      root.current-tool == 5 ? root.text-crop : root.text-reorder;
                                 color: ThemeTokens.text;
                                 font-size: 14px;
                                 font-weight: 600;
@@ -398,12 +419,14 @@ export component ToolsModal inherits Rectangle {
                     }
 
                     if root.current-tool == -1 : VerticalLayout {
-                        spacing: 10px;
+                        spacing: 8px;
                         ToolChoice { title: root.text-merge; description: root.text-merge-desc; selected => { root.select-tool(0); } }
                         ToolChoice { title: root.text-split; description: root.text-split-desc; selected => { root.select-tool(1); } }
                         ToolChoice { title: root.text-delete; description: root.text-delete-desc; selected => { root.select-tool(2); } }
                         ToolChoice { title: root.text-rotate; description: root.text-rotate-desc; selected => { root.select-tool(3); } }
                         ToolChoice { title: root.text-convert; description: root.text-convert-desc; selected => { root.select-tool(4); } }
+                        ToolChoice { title: root.text-crop; description: root.text-crop-desc; selected => { root.select-tool(5); } }
+                        ToolChoice { title: root.text-reorder; description: root.text-reorder-desc; selected => { root.select-tool(6); } }
                     }
 
                     if root.current-tool == 0 : VerticalLayout {
@@ -792,6 +815,149 @@ export component ToolsModal inherits Rectangle {
                                     enabled: !root.is-working && root.page-range-input != "";
                                     clicked => { root.convert-submit(root.convert-format, root.convert-dpi, root.convert-jpeg-quality, root.page-range-input); }
                                 }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 5 : VerticalLayout {
+                        spacing: 8px;
+                        ToolDropZone { label: root.text-drop-crop; dropped(data) => { root.drop-files(data, 5); } }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            Image {
+                                source: @image-url("../../../../assets/icons/document_pdf_20_regular.svg");
+                                width: 16px;
+                                height: 16px;
+                                colorize: ThemeTokens.text-muted;
+                                image-fit: contain;
+                            }
+                            Text {
+                                text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
+                                color: ThemeTokens.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: root.label-pages + " (" + root.text-pages-empty-hint + ")"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                TextButton { text: root.text-pages-select-all; compact: true; clicked => { root.select-all-pages(); } }
+                                TextButton { text: root.text-pages-clear-selection; compact: true; clicked => { root.clear-pages(); } }
+                            }
+                        }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                            }
+                        }
+                        crop-edit := LineEdit {
+                            text <=> root.page-range-input;
+                            placeholder-text: root.text-crop-placeholder;
+                        }
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    Text { text: "Left (pt)"; font-size: 11px; color: ThemeTokens.text-muted; }
+                                    LineEdit { text <=> root.crop-margin-left-str; }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    Text { text: "Right (pt)"; font-size: 11px; color: ThemeTokens.text-muted; }
+                                    LineEdit { text <=> root.crop-margin-right-str; }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    Text { text: "Top (pt)"; font-size: 11px; color: ThemeTokens.text-muted; }
+                                    LineEdit { text <=> root.crop-margin-top-str; }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    Text { text: "Bottom (pt)"; font-size: 11px; color: ThemeTokens.text-muted; }
+                                    LineEdit { text <=> root.crop-margin-bottom-str; }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        DialogFooter {
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working;
+                                clicked => {
+                                    root.crop-submit(
+                                        root.page-range-input,
+                                        root.crop-margin-left-str,
+                                        root.crop-margin-bottom-str,
+                                        root.crop-margin-right-str,
+                                        root.crop-margin-top-str
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    if root.current-tool == 6 : VerticalLayout {
+                        spacing: 10px;
+                        ToolDropZone { label: root.text-drop-reorder; dropped(data) => { root.drop-files(data, 6); } }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            Image {
+                                source: @image-url("../../../../assets/icons/document_pdf_20_regular.svg");
+                                width: 16px;
+                                height: 16px;
+                                colorize: ThemeTokens.text-muted;
+                                image-fit: contain;
+                            }
+                            Text {
+                                text: root.active-doc-title + " (" + root.active-doc-pages + " " + root.text-pages-unit + ")";
+                                color: ThemeTokens.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        Flickable {
+                            height: 66px; viewport-width: root.page-thumbnails.length * 62px; viewport-height: self.height; interactive: true;
+                            HorizontalLayout { width: parent.viewport-width; height: parent.viewport-height; spacing: 4px;
+                                for thumb in root.page-thumbnails : PageSelectionCard { item: thumb; selected(ctrl, shift) => { root.select-page(thumb.page_index, ctrl, shift); } }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text { text: "Page Order (e.g. 3, 1, 2, 4):"; color: ThemeTokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        }
+                        reorder-edit := LineEdit {
+                            text <=> root.reorder-sequence-input;
+                            placeholder-text: root.text-reorder-placeholder;
+                            accepted => { root.reorder-submit(root.reorder-sequence-input); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        DialogFooter {
+                            TextButton { text: root.btn-cancel; clicked => { root.close(); } }
+                            TextButton {
+                                text: root.btn-save;
+                                primary: true;
+                                enabled: !root.is-working && root.reorder-sequence-input != "";
+                                clicked => { root.reorder-submit(root.reorder-sequence-input); }
                             }
                         }
                     }
