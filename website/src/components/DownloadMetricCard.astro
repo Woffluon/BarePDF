@@ -2,71 +2,66 @@
 import type { DownloadMetrics } from '../lib/github';
 
 interface Props {
-  metrics: DownloadMetrics;
+  metrics: DownloadMetrics | null;
   compact?: boolean;
 }
 
 const { metrics, compact = false } = Astro.props;
 ---
 
-<div class:list={['download-metric-card', { compact }]}>
-  <div class="metric-header">
-    <div class="metric-icon-wrap" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        <path d="M9 12l2 2 4-4"></path>
-      </svg>
-    </div>
-
-    <div class="metric-title-group">
-      <div class="metric-badge-row">
-        <span class="badge badge-success">
-          <span data-i18n data-en="Zero Telemetry" data-tr="Sıfır Telemetri">Zero Telemetry</span>
-        </span>
-        <span class="metric-subtag" data-i18n data-en="Public GitHub Release Metrics" data-tr="Herkese Açık GitHub Sürüm Verileri">
-          Public GitHub Release Metrics
-        </span>
+{metrics && (
+  <section class:list={['download-metric-card', { compact }]} aria-labelledby="metrics-title">
+    <div class="metric-header">
+      <div class="metric-title-group">
+        <div class="metric-badge-row">
+          <span class="badge badge-success">
+            <span data-i18n data-en="Verified Zero Telemetry" data-tr="Doğrulanmış Sıfır Telemetri">Verified Zero Telemetry</span>
+          </span>
+          <span class="metric-subtag" data-i18n data-en="GitHub API Live Asset Metrics" data-tr="GitHub API Canlı Dosya Verileri">
+            GitHub API Live Asset Metrics
+          </span>
+        </div>
+        <h3 id="metrics-title" class="metric-title" data-i18n data-en="Release Distribution Metrics" data-tr="Sürüm Dağıtım Verileri">
+          Release Distribution Metrics
+        </h3>
       </div>
-      <h3 class="metric-title" data-i18n data-en="Privacy-Respecting Release Downloads" data-tr="Gizliliğe Saygılı Sürüm İndirmeleri">
-        Privacy-Respecting Release Downloads
-      </h3>
     </div>
-  </div>
 
-  <div class="metric-numbers-grid">
-    <div class="metric-stat">
-      <span class="stat-number">{metrics.totalDownloads}</span>
-      <span class="stat-label" data-i18n data-en="Total Downloads" data-tr="Toplam İndirme">Total Downloads</span>
+    <div class="metric-numbers-grid">
+      <div class="metric-stat">
+        <span class="stat-number">{metrics.totalDownloads.toLocaleString()}</span>
+        <span class="stat-label" data-i18n data-en="Total Asset Downloads" data-tr="Toplam Dosya İndirmesi">Total Asset Downloads</span>
+      </div>
+      <div class="metric-stat">
+        <span class="stat-number">{metrics.installerDownloads.toLocaleString()}</span>
+        <span class="stat-label" data-i18n data-en="Setup Installer (.exe)" data-tr="Kurulum Paketi (.exe)">Setup Installer (.exe)</span>
+      </div>
+      <div class="metric-stat">
+        <span class="stat-number">{metrics.portableDownloads.toLocaleString()}</span>
+        <span class="stat-label" data-i18n data-en="Portable Archive (.zip)" data-tr="Taşınabilir Paket (.zip)">Portable Archive (.zip)</span>
+      </div>
+      <div class="metric-stat highlight">
+        <span class="stat-number">0</span>
+        <span class="stat-label" data-i18n data-en="Background Tracking Calls" data-tr="Arka Plan Takip Çağrısı">Background Tracking Calls</span>
+      </div>
     </div>
-    <div class="metric-stat">
-      <span class="stat-number">{metrics.installerDownloads}</span>
-      <span class="stat-label" data-i18n data-en="Setup Installer" data-tr="Kurulum Paketi">Setup Installer</span>
-    </div>
-    <div class="metric-stat">
-      <span class="stat-number">{metrics.portableDownloads}</span>
-      <span class="stat-label" data-i18n data-en="Portable ZIP" data-tr="Taşınabilir ZIP">Portable ZIP</span>
-    </div>
-    <div class="metric-stat highlight">
-      <span class="stat-number">0</span>
-      <span class="stat-label" data-i18n data-en="Telemetry Pings" data-tr="Telemetri İsteği">Telemetry Pings</span>
-    </div>
-  </div>
 
-  <p class="metric-explanation" data-i18n
-    data-en="Download metrics are counted solely by GitHub when files are retrieved from official releases. BarePDF sends zero background network calls, generates no analytics pings, and assigns no device identifiers."
-    data-tr="İndirme sayıları yalnızca resmi sürümlerden dosya çekildiğinde GitHub tarafından sayılır. BarePDF arka planda sıfır ağ araması yapar, hiçbir analitik verisi göndermez ve cihaz kimliği atamaz.">
-    Download metrics are counted solely by GitHub when files are retrieved from official releases. BarePDF sends zero background network calls, generates no analytics pings, and assigns no device identifiers.
-  </p>
-</div>
+    <p class="metric-explanation" data-i18n
+      data-en="Asset numbers reflect the raw GitHub release asset download counter at site build time. They represent binary retrievals (including CI runners and repeated downloads), not unique active users. BarePDF transmits 0 analytics pings, sets 0 tracking cookies, and runs offline by default."
+      data-tr="İndirme sayıları site derleme anında GitHub API tarafından bildirilen ham dosya indirme sayaçlarıdır. Tekil kullanıcıyı değil, dosya çekme sayısını (CI çalıştırıcıları ve tekrarlar dahil) temsil eder. BarePDF varsayılan olarak tamamen çevrimdışıdır; sıfır takip çerezi ve sıfır analitik çağrısı ile çalışır.">
+      Asset numbers reflect the raw GitHub release asset download counter at site build time. They represent binary retrievals (including CI runners and repeated downloads), not unique active users. BarePDF transmits 0 analytics pings, sets 0 tracking cookies, and runs offline by default.
+    </p>
+  </section>
+)}
 
 <style>
   .download-metric-card {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     padding: 1.75rem 2rem;
     box-shadow: var(--shadow-sm);
-    margin: 2rem 0;
+    margin: 2.5rem 0;
   }
 
   .download-metric-card.compact {
@@ -81,28 +76,17 @@ const { metrics, compact = false } = Astro.props;
     margin-bottom: 1.25rem;
   }
 
-  .metric-icon-wrap {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-md);
-    background-color: var(--color-accent-subtle);
-    color: var(--color-accent);
-    flex-shrink: 0;
-  }
-
   .metric-title-group {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.35rem;
   }
 
   .metric-badge-row {
     display: flex;
     align-items: center;
-    gap: 0.625rem;
+    gap: 0.75rem;
+    flex-wrap: wrap;
   }
 
   .metric-subtag {
@@ -114,7 +98,7 @@ const { metrics, compact = false } = Astro.props;
   }
 
   .metric-title {
-    font-size: 1.15rem;
+    font-size: 1.25rem;
     font-weight: 700;
     color: var(--color-text);
     margin: 0;
@@ -123,7 +107,7 @@ const { metrics, compact = false } = Astro.props;
   .metric-numbers-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
+    gap: 1.5rem;
     padding: 1.25rem 0;
     border-top: 1px solid var(--color-border-subtle);
     border-bottom: 1px solid var(--color-border-subtle);
@@ -137,11 +121,12 @@ const { metrics, compact = false } = Astro.props;
   }
 
   .stat-number {
-    font-size: 1.75rem;
-    font-weight: 800;
+    font-size: 1.85rem;
+    font-weight: 700;
     line-height: 1.1;
     font-family: var(--font-mono);
     color: var(--color-text);
+    letter-spacing: -0.03em;
   }
 
   .metric-stat.highlight .stat-number {
@@ -155,8 +140,8 @@ const { metrics, compact = false } = Astro.props;
 
   .metric-explanation {
     font-size: 0.875rem;
-    line-height: 1.5;
-    color: var(--color-text-muted);
+    line-height: 1.55;
+    color: var(--color-text-dim);
     margin: 0;
   }
 
@@ -171,7 +156,7 @@ const { metrics, compact = false } = Astro.props;
     }
 
     .stat-number {
-      font-size: 1.4rem;
+      font-size: 1.5rem;
     }
   }
 </style>

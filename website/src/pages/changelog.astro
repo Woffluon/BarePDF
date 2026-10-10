@@ -17,9 +17,14 @@ const hasReleaseMetadata = release.state === 'published';
 >
   <section class="changelog-header">
     <div class="container header-container">
-      <h1 class="page-title">Changelog & Activity</h1>
-      <p class="page-subtitle">
-        Track recent releases, feature implementations, and Git development activity.
+      <span class="badge badge-accent">
+        <span data-i18n data-en="Development Stream" data-tr="Geliştirme Akışı">Development Stream</span>
+      </span>
+      <h1 class="page-title" data-i18n data-en="Changelog & Activity" data-tr="Değişiklikler ve Hareketler">Changelog & Activity</h1>
+      <p class="page-subtitle" data-i18n
+        data-en="Track published releases, feature implementations, and default-branch commit history."
+        data-tr="Yayımlanan sürümleri, özellik geliştirmelerini ve varsayılan dalın commit geçmişini takip edin.">
+        Track published releases, feature implementations, and default-branch commit history.
       </p>
     </div>
   </section>
@@ -27,13 +32,19 @@ const hasReleaseMetadata = release.state === 'published';
   <section class="changelog-body">
     <div class="container">
       <div class="section-block">
-        <h2 class="block-heading">{hasReleaseMetadata ? 'Latest Published Release' : 'Current Build Version'}</h2>
+        <div class="block-header">
+          <h2 class="block-heading" data-i18n
+            data-en={hasReleaseMetadata ? 'Latest Published Release' : 'Current Build Version'}
+            data-tr={hasReleaseMetadata ? 'Son Yayımlanan Sürüm' : 'Mevcut Derleme Sürümü'}>
+            {hasReleaseMetadata ? 'Latest Published Release' : 'Current Build Version'}
+          </h2>
+        </div>
         <ReleaseCard release={release} />
       </div>
 
       <div class="section-block">
         <div class="block-header">
-          <h2 class="block-heading">Recent Git Commits</h2>
+          <h2 class="block-heading" data-i18n data-en="Recent Git Commits" data-tr="Son Git Kayıtları">Recent Git Commits</h2>
           <span class="commit-count-badge">{commits.length} Recent Commits</span>
         </div>
 
@@ -52,19 +63,25 @@ const hasReleaseMetadata = release.state === 'published';
   }
 
   .header-container {
-    max-width: 640px;
+    max-width: 680px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
 
   .page-title {
-    font-size: 2.75rem;
+    font-size: clamp(2.2rem, 5vw, 3rem);
     font-weight: 800;
+    margin-top: 0.75rem;
     margin-bottom: 0.75rem;
+    letter-spacing: -0.03em;
   }
 
   .page-subtitle {
     font-size: 1.1rem;
     color: var(--color-text-muted);
     margin: 0;
+    line-height: 1.55;
   }
 
   .changelog-body {
@@ -80,12 +97,14 @@ const hasReleaseMetadata = release.state === 'published';
     align-items: center;
     justify-content: space-between;
     margin-bottom: 1.25rem;
+    gap: 1rem;
   }
 
   .block-heading {
     font-size: 1.5rem;
     font-weight: 800;
     margin: 0;
+    letter-spacing: -0.02em;
   }
 
   .commit-count-badge {
@@ -95,6 +114,7 @@ const hasReleaseMetadata = release.state === 'published';
     padding: 0.2rem 0.6rem;
     background-color: var(--color-surface-subtle);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
   }
 </style>

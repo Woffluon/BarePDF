@@ -1,54 +1,75 @@
 ---
-const points = [
+interface RefusalItem {
+  number: string;
+  refusal: string;
+  trRefusal: string;
+  explanation: string;
+  trExplanation: string;
+  codeSource: string;
+}
+
+const refusals: readonly RefusalItem[] = [
   {
-    title: 'Zero Telemetry & Tracking',
-    trTitle: 'Sıfır telemetri ve takip',
-    description: 'No background tracking, analytics beacons, or phone-home requests. Your document reading activity is private.',
-    trDescription: 'Arka plan takibi, analitik sinyali veya eve çağrı yok. Belgelerinizi nasıl okuduğunuz size ait.'
+    number: '01',
+    refusal: 'No Background Telemetry or Tracking Beacons',
+    trRefusal: 'Arka Plan Telemetrisi ve Takip İşaretçisi Yok',
+    explanation: 'BarePDF contains 0 analytics SDKs, 0 user activity pings, and 0 identifier cookies. Reading activity stays entirely on your personal processor.',
+    trExplanation: 'BarePDF içinde sıfır analitik kütüphanesi, sıfır etkinlik sinyali ve sıfır cihaz kimliği bulunur. Okuma hareketleriniz tamamen kişisel bilgisayarınızda kalır.',
+    codeSource: 'crates/barepdf-platform-windows',
   },
   {
-    title: 'No User Accounts Required',
-    trTitle: 'Kullanıcı hesabı gerekmez',
-    description: 'No email signups, paywalls, trial countdowns, or cloud subscription prompts. Download and open your PDFs.',
-    trDescription: 'E-posta kaydı, ödeme duvarı, deneme sayacı veya bulut aboneliği yok. İndirin ve PDF’inizi açın.'
+    number: '02',
+    refusal: 'No Mandatory User Accounts or Cloud Sign-Ins',
+    trRefusal: 'Zorunlu Kullanıcı Hesabı ve Bulut Girişi Yok',
+    explanation: 'No email forms, subscription countdowns, paywalls, or cloud dependencies. When you launch BarePDF, you immediately open documents.',
+    trExplanation: 'E-posta kaydı, abonelik sayacı, ödeme duvarı veya bulut zorunluluğu yok. BarePDF açıldığında doğrudan belgelerinizi görüntülersiniz.',
+    codeSource: 'apps/barepdf/src/presentation/state.rs',
   },
   {
-    title: 'No AI Clutter or Ads',
-    trTitle: 'Yapay zekâ kalabalığı ve reklam yok',
-    description: 'Focused strictly on fast PDF reading. Free of intrusive AI summarize popups, advertisements, or sponsored sidebars.',
-    trDescription: 'Yalnızca hızlı PDF okumaya odaklanır. Zorlayıcı özet pencereleri, reklamlar ve sponsorlu kenar çubukları yok.'
+    number: '03',
+    refusal: 'No In-App Advertisements or AI Summarization Upsells',
+    trRefusal: 'Uygulama İçi Reklam ve Yapay Zekâ Pazarlaması Yok',
+    explanation: 'The interface remains uncluttered. There are no sponsored banners, marketing sidebars, or intrusive modal dialogs urging you to upgrade to AI tiers.',
+    trExplanation: 'Arayüz yalın kalır. Sponsorlu afişler, pazarlama kenar çubukları veya sizi ücretli yapay zekâ katmanlarına zorlayan pencereler yer almaz.',
+    codeSource: 'crates/barepdf-ui',
   },
   {
-    title: '100% Offline & Local Operation',
-    trTitle: '%100 çevrimdışı ve yerel çalışma',
-    description: 'Your documents never leave your computer. PDF parsing, bitmap rendering, and search happen locally.',
-    trDescription: 'Belgeleriniz bilgisayarınızdan çıkmaz. PDF ayrıştırma, görüntüleme ve arama yerel olarak yapılır.'
-  }
+    number: '04',
+    refusal: 'Offline by Default Operation',
+    trRefusal: 'Varsayılan Olarak Tamamen Çevrimdışı Çalışma',
+    explanation: 'Document parsing, bitmap rendering, annotations, and page tools run strictly via local CPU instructions. Network connectivity is used only if you explicitly choose to check for updates.',
+    trExplanation: 'Belge ayrıştırma, görüntü oluşturma, notlar ve sayfa araçları tamamen yerel CPU komutlarıyla çalışır. Ağ bağlantısı yalnızca güncellemeleri kontrol etmeyi açıkça seçerseniz kullanılır.',
+    codeSource: 'apps/barepdf/src/infrastructure/update',
+  },
 ];
 ---
 
-<section class="philosophy-section">
+<section class="philosophy-section" aria-labelledby="philosophy-heading">
   <div class="container">
     <div class="philosophy-box">
       <div class="philosophy-header">
-        <h2 class="philosophy-title" data-i18n data-en="Private & Minimalist by Principle" data-tr="İlke olarak özel ve yalın">Private & Minimalist by Principle</h2>
-        <p class="philosophy-subtitle" data-i18n data-en="BarePDF is built around a clear open-source philosophy: software should respect user privacy and system resources." data-tr="BarePDF şu açık kaynak ilkesine dayanır: yazılım, kullanıcının gizliliğine ve sistem kaynaklarına saygı göstermelidir.">
-          BarePDF is built around a clear open-source philosophy: software should respect user privacy and system resources.
+        <span class="badge badge-accent">
+          <span data-i18n data-en="Engineering Philosophy" data-tr="Mühendislik Felsefesi">Engineering Philosophy</span>
+        </span>
+        <h2 id="philosophy-heading" class="philosophy-title" data-i18n data-en="What BarePDF Deliberately Does Not Do" data-tr="BarePDF’in Bilinçli Olarak Yapmadıkları">
+          What BarePDF Deliberately Does Not Do
+        </h2>
+        <p class="philosophy-subtitle" data-i18n
+          data-en="Modern document tools often extract user attention and system resources to feed cloud platforms. BarePDF is built on an explicit series of architectural refusals."
+          data-tr="Günümüz belge araçları, bulut platformlarını beslemek için kullanıcı dikkatini ve sistem kaynaklarını tüketir. BarePDF bilinçli bir mimari ret dizisi üzerine inşa edilmiştir.">
+          Modern document tools often extract user attention and system resources to feed cloud platforms. BarePDF is built on an explicit series of architectural refusals.
         </p>
       </div>
 
-      <div class="philosophy-grid">
-        {points.map((item) => (
-          <div class="philosophy-item">
-            <div class="check-icon">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
+      <div class="refusals-grid">
+        {refusals.map((item) => (
+          <div class="refusal-item">
+            <div class="refusal-top">
+              <span class="refusal-num">{item.number}</span>
+              <span class="refusal-source"><code>{item.codeSource}</code></span>
             </div>
-            <div>
-              <h3 class="item-title" data-i18n data-en={item.title} data-tr={item.trTitle}>{item.title}</h3>
-              <p class="item-desc" data-i18n data-en={item.description} data-tr={item.trDescription}>{item.description}</p>
-            </div>
+            <h3 class="refusal-title" data-i18n data-en={item.refusal} data-tr={item.trRefusal}>{item.refusal}</h3>
+            <p class="refusal-desc" data-i18n data-en={item.explanation} data-tr={item.trExplanation}>{item.explanation}</p>
           </div>
         ))}
       </div>
@@ -58,15 +79,15 @@ const points = [
 
 <style>
   .philosophy-section {
-    padding: 3rem 0 5rem;
+    padding: 2.5rem 0 4rem;
   }
 
   .philosophy-box {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
-    padding: 3rem;
-    box-shadow: var(--shadow-md);
+    border-radius: var(--radius-lg);
+    padding: 2.75rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .philosophy-header {
@@ -75,61 +96,76 @@ const points = [
   }
 
   .philosophy-title {
-    font-size: 2.25rem;
+    font-size: clamp(1.75rem, 3.5vw, 2.35rem);
     font-weight: 800;
+    margin-top: 0.75rem;
     margin-bottom: 0.75rem;
+    letter-spacing: -0.03em;
   }
 
   .philosophy-subtitle {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     color: var(--color-text-muted);
+    line-height: 1.55;
+    margin: 0;
   }
 
-  .philosophy-grid {
+  .refusals-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 2rem;
   }
 
-  .philosophy-item {
+  .refusal-item {
     display: flex;
-    gap: 1rem;
+    flex-direction: column;
+    padding: 1.5rem;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
   }
 
-  .check-icon {
-    flex-shrink: 0;
-    display: inline-flex;
+  .refusal-top {
+    display: flex;
     align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius-full);
-    background-color: var(--color-success-bg);
-    color: var(--color-success);
-    margin-top: 0.2rem;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
   }
 
-  .item-title {
-    font-size: 1.1rem;
+  .refusal-num {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
     font-weight: 700;
-    margin-bottom: 0.35rem;
-    color: var(--color-text);
+    color: var(--color-accent);
   }
 
-  .item-desc {
-    font-size: 0.9375rem;
+  .refusal-source code {
+    font-size: 0.75rem;
+    color: var(--color-text-dim);
+  }
+
+  .refusal-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: var(--color-text);
+    line-height: 1.3;
+  }
+
+  .refusal-desc {
+    font-size: 0.925rem;
     color: var(--color-text-muted);
-    line-height: 1.5;
+    line-height: 1.55;
     margin-bottom: 0;
   }
 
   @media (max-width: 768px) {
     .philosophy-box {
-      padding: 1.75rem;
+      padding: 1.5rem;
     }
-    .philosophy-grid {
+    .refusals-grid {
       grid-template-columns: 1fr;
-      gap: 1.5rem;
+      gap: 1.25rem;
     }
   }
 </style>

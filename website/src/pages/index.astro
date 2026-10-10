@@ -2,6 +2,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Hero from '../components/Hero.astro';
 import AppScreenshot from '../components/AppScreenshot.astro';
+import BenchmarkSection from '../components/BenchmarkSection.astro';
 import DownloadMetricCard from '../components/DownloadMetricCard.astro';
 import FeatureGrid from '../components/FeatureGrid.astro';
 import Philosophy from '../components/Philosophy.astro';
@@ -10,7 +11,7 @@ import { getLatestRelease, getRecentCommits, getDownloadMetrics } from '../lib/g
 
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-// Fetch latest release, recent commits, and download metrics at build time
+// Fetch latest verified release, recent commits, and download metrics
 const latestRelease = await getLatestRelease();
 const recentCommits = await getRecentCommits(5);
 const downloadMetrics = await getDownloadMetrics();
@@ -18,7 +19,7 @@ const downloadMetrics = await getDownloadMetrics();
 
 <BaseLayout
   title="BarePDF: Bare, Fast, Yours."
-  description="BarePDF is an open-source, fast, modern, ultra-lightweight PDF reader for Windows 10/11 built with Rust and PDFium."
+  description="BarePDF is an open-source, resource-bounded PDF reader for Windows 10/11 built with Rust and Google PDFium."
   currentPath={`${baseUrl}/`}
 >
   <Hero release={latestRelease} />
@@ -29,19 +30,30 @@ const downloadMetrics = await getDownloadMetrics();
     <DownloadMetricCard metrics={downloadMetrics} />
   </div>
 
-  <FeatureGrid />
+  <BenchmarkSection />
 
   <Philosophy />
 
-  <section class="home-activity-section">
+  <FeatureGrid />
+
+  <section class="home-activity-section" aria-labelledby="activity-heading">
     <div class="container">
       <div class="activity-header">
         <div>
-          <h2 class="activity-title" data-i18n data-en="Recent Development Activity" data-tr="Son geliştirme hareketleri">Recent Development Activity</h2>
-          <p class="activity-subtitle" data-i18n data-en="Synced from the default branch on each site deployment." data-tr="Her site dağıtımında varsayılan daldan güncellenir.">Synced from the default branch on each site deployment.</p>
+          <span class="badge badge-accent">
+            <span data-i18n data-en="Live Git Stream" data-tr="Canlı Git Akışı">Live Git Stream</span>
+          </span>
+          <h2 id="activity-heading" class="activity-title" data-i18n data-en="Recent Repository Activity" data-tr="Son Geliştirme Hareketleri">
+            Recent Repository Activity
+          </h2>
+          <p class="activity-subtitle" data-i18n
+            data-en="Synchronized directly from the default branch on every site deployment."
+            data-tr="Her site dağıtımında varsayılan daldan doğrudan güncellenir.">
+            Synchronized directly from the default branch on every site deployment.
+          </p>
         </div>
         <a href={`${baseUrl}/changelog`} class="btn btn-secondary">
-          <span data-i18n data-en="View Full Changelog →" data-tr="Tüm değişiklikleri gör →">View Full Changelog →</span>
+          <span data-i18n data-en="View Full Changelog" data-tr="Tüm Değişiklikleri Gör">View Full Changelog</span>
         </a>
       </div>
 
@@ -49,24 +61,31 @@ const downloadMetrics = await getDownloadMetrics();
     </div>
   </section>
 
-  <section class="docs-cta-section">
+  <section class="docs-cta-section" aria-labelledby="docs-cta-title">
     <div class="container docs-cta-box">
       <div class="cta-text">
-        <h2 class="cta-title" data-i18n data-en="Explore Documentation" data-tr="Belgeleri keşfedin">Explore Documentation</h2>
-        <p class="cta-desc" data-i18n data-en="Whether you are an end user configuring settings or a developer building from source, check our guides." data-tr="Ayarlarını düzenleyen bir kullanıcı veya kaynaktan derleme yapan bir geliştirici olun, rehberlerimize göz atın.">
-          Whether you are an end user configuring settings or a developer building from source, check our guides.
+        <span class="badge badge-accent">
+          <span data-i18n data-en="Documentation & Guides" data-tr="Belgeler ve Rehberler">Documentation & Guides</span>
+        </span>
+        <h2 id="docs-cta-title" class="cta-title" data-i18n data-en="Explore the Technical Guides" data-tr="Teknik Rehberleri İnceleyin">
+          Explore the Technical Guides
+        </h2>
+        <p class="cta-desc" data-i18n
+          data-en="Whether you are configuring desktop shortcuts or compiling from source with Cargo and PDFium, consult our documentation."
+          data-tr="İster klavye kısayollarını özelleştirin, ister Cargo ve PDFium ile kaynaktan derleme yapın; kılavuzlarımıza göz atın.">
+          Whether you are configuring desktop shortcuts or compiling from source with Cargo and PDFium, consult our documentation.
         </p>
       </div>
 
       <div class="cta-buttons">
         <a href={`${baseUrl}/docs/user/getting-started`} class="btn btn-primary">
-          <span data-i18n data-en="User Guide" data-tr="Kullanıcı rehberi">User Guide</span>
+          <span data-i18n data-en="User Guide" data-tr="Kullanıcı Rehberi">User Guide</span>
         </a>
         <a href={`${baseUrl}/docs/developer/building`} class="btn btn-secondary">
-          <span data-i18n data-en="Developer Guide" data-tr="Geliştirici rehberi">Developer Guide</span>
+          <span data-i18n data-en="Developer Guide" data-tr="Geliştirici Rehberi">Developer Guide</span>
         </a>
         <a href={`${baseUrl}/docs/user/keyboard-shortcuts`} class="btn btn-secondary">
-          <span data-i18n data-en="Shortcuts Reference" data-tr="Kısayol başvurusu">Shortcuts Reference</span>
+          <span data-i18n data-en="Shortcuts Reference" data-tr="Kısayol Başvurusu">Shortcuts Reference</span>
         </a>
       </div>
     </div>
@@ -75,20 +94,23 @@ const downloadMetrics = await getDownloadMetrics();
 
 <style>
   .home-activity-section {
-    padding: 3rem 0 5rem;
+    padding: 3rem 0 4.5rem;
   }
 
   .activity-header {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
     margin-bottom: 2rem;
+    gap: 1.5rem;
   }
 
   .activity-title {
-    font-size: 1.75rem;
+    font-size: clamp(1.5rem, 3vw, 2rem);
     font-weight: 800;
+    margin-top: 0.5rem;
     margin-bottom: 0.25rem;
+    letter-spacing: -0.03em;
   }
 
   .activity-subtitle {
@@ -104,26 +126,29 @@ const downloadMetrics = await getDownloadMetrics();
   .docs-cta-box {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
-    padding: 3rem;
+    border-radius: var(--radius-lg);
+    padding: 2.75rem 3rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 2rem;
-    box-shadow: var(--shadow-md);
+    gap: 2.5rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .cta-title {
-    font-size: 2rem;
+    font-size: clamp(1.5rem, 3vw, 2rem);
     font-weight: 800;
+    margin-top: 0.6rem;
     margin-bottom: 0.5rem;
+    letter-spacing: -0.03em;
   }
 
   .cta-desc {
-    font-size: 1.05rem;
+    font-size: 1rem;
     color: var(--color-text-muted);
     margin: 0;
     max-width: 540px;
+    line-height: 1.55;
   }
 
   .cta-buttons {
@@ -133,11 +158,10 @@ const downloadMetrics = await getDownloadMetrics();
     flex-shrink: 0;
   }
 
-  @media (max-width: 768px) {
+  @media (max-width: 800px) {
     .activity-header {
       flex-direction: column;
       align-items: flex-start;
-      gap: 1rem;
     }
     .docs-cta-box {
       flex-direction: column;

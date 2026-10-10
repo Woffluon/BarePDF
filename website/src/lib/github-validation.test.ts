@@ -9,7 +9,6 @@ import {
 } from './github-validation.ts';
 import {
   MAX_API_RESPONSE_BYTES,
-  VERIFIED_DOWNLOAD_BASELINE,
   getDownloadMetrics,
   getLatestRelease,
   readBoundedJson,
@@ -168,20 +167,15 @@ test('rejects oversized GitHub API responses before buffering or parsing', async
   }
 });
 
-test('download metrics parses releases and falls back safely', async () => {
-  assert.equal(VERIFIED_DOWNLOAD_BASELINE.totalDownloads, 149);
-  assert.equal(VERIFIED_DOWNLOAD_BASELINE.installerDownloads, 104);
-  assert.equal(VERIFIED_DOWNLOAD_BASELINE.portableDownloads, 45);
-
+test('download metrics parses releases without fabricated baseline', async () => {
   const originalFetch = globalThis.fetch;
   try {
-    // Failure falls back to verified baseline
+    // API Failure cleanly returns null instead of invented numbers
     globalThis.fetch = async () => new Response('Internal error', { status: 500 });
-    const metricsFallback = await getDownloadMetrics();
-    assert.equal(metricsFallback.isFallback, true);
-    assert.equal(metricsFallback.totalDownloads, 149);
+    const metricsFailure = await getDownloadMetrics();
+    assert.equal(metricsFailure, null);
 
-    // Mocked releases response parses asset download counts
+    // Mocked releases response accurately aggregates asset download counts
     globalThis.fetch = async () =>
       new Response(
         JSON.stringify([
@@ -197,7 +191,7 @@ test('download metrics parses releases and falls back safely', async () => {
         { status: 200 },
       );
     const parsed = await getDownloadMetrics();
-    assert.equal(parsed.isFallback, false);
+    assert.ok(parsed);
     assert.equal(parsed.installerDownloads, 150);
     assert.equal(parsed.portableDownloads, 50);
     assert.equal(parsed.totalDownloads, 200);

@@ -9,168 +9,135 @@ interface FeatureItem {
   trDescription: string;
   badge?: string;
   trBadge?: string;
-  paths: readonly string[];
+  codeAnchor: string;
 }
 
 const features: readonly FeatureItem[] = [
   {
     id: 'tools',
-    title: 'Merge, Split, Reorder & Crop Tools',
-    trTitle: 'Birleştirme, Bölme, Sıralama ve Kırpma Araçları',
-    tagline: 'Document assembly',
-    trTagline: 'Belge düzenleme',
-    description: 'Assemble multi-file documents, extract page intervals, reorder pages, or crop document margins to eliminate unwanted borders. All processing runs entirely on your local CPU.',
-    trDescription: 'Çok dosyalı belgeleri birleştirin, sayfa aralıklarını ayıklayın, sayfaları yeniden sıralayın veya istenmeyen kenar boşluklarını kırpın. Tüm işlemler tamamen yerel işlemcinizde çalışır.',
-    badge: 'Page Tools',
-    trBadge: 'Sayfa Araçları',
-    paths: [
-      'M6 2v14a2 2 0 0 0 2 2h14',
-      'M18 22V8a2 2 0 0 0-2-2H2',
-    ],
+    title: 'Merge, Split, Rotate & Page Tools',
+    trTitle: 'Birleştirme, Bölme, Döndürme ve Sayfa Araçları',
+    tagline: 'Local Processing',
+    trTagline: 'Yerel İşlem',
+    description: 'Reorder pages, merge multi-file collections, extract intervals, and rotate orientations. Runs entirely via local CPU algorithms inside your process.',
+    trDescription: 'Sayfaları yeniden sıralayın, çoklu dosyaları birleştirin, aralıkları ayıklayın ve yönleri döndürün. Tamamen yerel CPU algoritmalarıyla çalışır.',
+    badge: 'Local CPU',
+    trBadge: 'Yerel CPU',
+    codeAnchor: 'crates/barepdf-pdf/src/operations.rs',
   },
   {
     id: 'annotations',
-    title: 'Highlights, Ink, Signature Stamps & Typewriter',
-    trTitle: 'Vurgular, Çizim, İmza Damgaları ve Daktilo',
-    tagline: 'Vector annotations',
-    trTagline: 'Vektörel notlar',
-    description: 'Highlight text with glyph-accurate geometry, draw vector ink strokes with undo and redo history, stamp saved signatures, and place typewriter text notes on any page.',
-    trDescription: 'Glif duyarlılığında metin vurgulayın, geri alma ve yineleme geçmişine sahip vektörel çizimler yapın, kayıtlı imzaları damgalayın ve daktilo metin notları yerleştirin.',
+    title: 'Glyph Highlights, Ink Strokes & Stamp Notes',
+    trTitle: 'Metin Vurguları, Çizimler ve Damga Notları',
+    tagline: 'Vector Layer',
+    trTagline: 'Vektörel Katman',
+    description: 'Highlight text with glyph-accurate vector coordinates, draw ink lines with full undo/redo stack, and place typewriter text annotations on any page.',
+    trDescription: 'Glif duyarlı vektörel koordinatlarla metin vurgulayın, geri/ileri alma geçmişli çizimler yapın ve sayfalara daktilo notları ekleyin.',
     badge: 'Annotations',
     trBadge: 'Notlar',
-    paths: [
-      'M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z',
-    ],
+    codeAnchor: 'crates/barepdf-core/src/annotations.rs',
   },
   {
     id: 'hud',
-    title: 'Command Palette HUD (Ctrl+K)',
-    trTitle: 'Komut Paleti HUD (Ctrl+K)',
-    tagline: 'Keyboard-first navigation',
-    trTagline: 'Klavye odaklı gezinme',
-    description: 'Press Ctrl+K to jump to any page number, switch viewing modes, apply paper tints, or trigger PDF tools without taking your hands off the keyboard.',
-    trDescription: 'Klavyeden elinizi kaldırmadan sayfa numaralarına atlamak, görüntüleme modlarını değiştirmek, kâğıt tonlarını uygulamak veya PDF araçlarını çalıştırmak için Ctrl+K tuşlarına basın.',
-    badge: 'HUD',
-    trBadge: 'HUD',
-    paths: [
-      'M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z',
-    ],
+    title: 'Keyboard-Driven Command Palette (Ctrl+K)',
+    trTitle: 'Klavye Odaklı Komut Paleti (Ctrl+K)',
+    tagline: 'Quick Actions',
+    trTagline: 'Hızlı Eylemler',
+    description: 'Jump to specific page numbers, toggle paper reading tints, switch view modes, or trigger tools without moving your hands away from the keyboard.',
+    trDescription: 'Klavyeden elinizi kaldırmadan sayfa numaralarına atlayın, kâğıt tonlarını değiştirin, okuma modlarını ayarlayın veya araçları çalıştırın.',
+    badge: 'Ctrl+K HUD',
+    trBadge: 'Ctrl+K HUD',
+    codeAnchor: 'crates/barepdf-ui',
   },
   {
     id: 'modes',
-    title: 'Four Dedicated Reading Modes',
+    title: 'Four Dedicated Layout Modes',
     trTitle: 'Dört Farklı Okuma Modu',
-    tagline: 'Flexible layouts',
-    trTagline: 'Esnek yerleşimler',
-    description: 'Switch freely between Book View for cover-aware layouts, Two-Page Spread for wide screens, Continuous Vertical for smooth reading, and focused Single Page viewing.',
-    trDescription: 'Kapak düzenine uygun Kitap Görünümü, geniş ekranlar için İki Sayfa Yan Yana, akıcı okuma için Sürekli Dikey ve odaklanmış Tek Sayfa modları arasında serbestçe geçiş yapın.',
-    badge: 'Layouts',
-    trBadge: 'Düzenler',
-    paths: [
-      'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z',
-      'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z',
-    ],
+    tagline: 'Viewport Layouts',
+    trTagline: 'Ekran Düzenleri',
+    description: 'Continuous vertical scrolling, focused single-page view, two-page side-by-side spread, and cover-aware book view layout.',
+    trDescription: 'Sürekli dikey kaydırma, odaklanmış tek sayfa, yan yana iki sayfa ve kapak uyumlu kitap görünümü.',
+    badge: 'Reading Modes',
+    trBadge: 'Okuma Modları',
+    codeAnchor: 'crates/barepdf-core/src/layout.rs',
   },
   {
     id: 'tints',
-    title: 'Eye-Comfort Paper Tints',
-    trTitle: 'Göz Yormayan Kâğıt Tonları',
-    tagline: 'Visual ergonomics',
-    trTagline: 'Görsel ergonomi',
-    description: 'Calibrated color profiles reduce screen glare: warm Sepia for daytime reading, low-contrast Night for dark rooms, Amber for late nights, and high-contrast Inverted mode.',
-    trDescription: 'Özel renk profilleri ekran parlamasını azaltır: gündüz için sıcak Sepya, karanlık odalar için Gece, geç saatler için Kehribar ve yüksek kontrastlı Ters Renk modu.',
-    badge: 'Tints',
-    trBadge: 'Tonlar',
-    paths: [
-      'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z',
-    ],
+    title: 'Calibrated Paper Reading Tints',
+    trTitle: 'Ayarlanmış Kâğıt Okuma Tonları',
+    tagline: 'Visual Ergonomics',
+    trTagline: 'Görsel Ergonomi',
+    description: 'Sepia for long daytime reading sessions, dark night tones for low-light rooms, Amber warmth, and high-contrast color inversion.',
+    trDescription: 'Uzun gündüz okumaları için Sepya, loş ortamlar için Gece, Kehribar sıcaklığı ve yüksek kontrastlı renk tersine çevirme.',
+    badge: 'Eye Comfort',
+    trBadge: 'Göz Konforu',
+    codeAnchor: 'crates/barepdf-render',
   },
   {
     id: 'print-shell',
-    title: 'Native Win32 Printing & Explorer Thumbnails',
-    trTitle: 'Yerel Win32 Yazdırma ve Gezgin Küçük Resimleri',
-    tagline: 'Windows integration',
-    trTagline: 'Windows entegrasyonu',
-    description: 'Direct high-resolution printing via native Win32 printer pipelines with preview. The dedicated shell extension generates crisp page thumbnails directly inside Windows File Explorer.',
-    trDescription: 'Baskı önizleme destekli yerel Win32 yazdırma kanalıyla doğrudan yüksek çözünürlüklü yazdırma. Özel kabuk uzantısı, Windows Dosya Gezgini içinde net sayfa küçük resimleri üretir.',
-    badge: 'Win32',
-    trBadge: 'Win32',
-    paths: [
-      'M6 9V2h12v7',
-      'M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2',
-      'M6 14h12v8H6z',
-    ],
-  },
-  {
-    id: 'zero-telemetry',
-    title: 'Zero Telemetry & Verified Offline Guarantee',
-    trTitle: 'Sıfır Telemetri ve Çevrimdışı Güvencesi',
-    tagline: 'Complete privacy',
-    trTagline: 'Tam gizlilik',
-    description: 'Reading documents produces zero background network requests, zero telemetry packets, and zero analytical trackers. Documents, signatures, and notes remain strictly on your personal device.',
-    trDescription: 'Belge okuma süreci sıfır arka plan ağ isteği, sıfır telemetri paketi ve sıfır analitik takipçi üretir. Belgeleriniz, imzalarınız ve notlarınız yalnızca kişisel cihazınızda kalır.',
-    badge: '100% Offline',
-    trBadge: '%100 Çevrimdışı',
-    paths: [
-      'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
-      'M9 12l2 2 4-4',
-    ],
+    title: 'Native Win32 Print & Shell Thumbnails',
+    trTitle: 'Yerel Win32 Yazdırma ve Gezgin Önizlemeleri',
+    tagline: 'Windows Shell',
+    trTagline: 'Windows Kabuğu',
+    description: 'Direct high-resolution printing pipeline via native Win32 printer dialogs. Dedicated shell provider generates crisp PDF thumbnails inside Windows Explorer.',
+    trDescription: 'Yerel Win32 yazdırma pencereleri üzerinden doğrudan yüksek çözünürlüklü yazdırma. Özel kabuk eklentisi Dosya Gezgini içinde net PDF küçük resimleri üretir.',
+    badge: 'Win32 Native',
+    trBadge: 'Win32 Yerel',
+    codeAnchor: 'crates/barepdf-thumbnail',
   },
 ];
 ---
 
-<section class="features-section">
+<section class="features-section" aria-labelledby="features-heading">
   <div class="container">
     <div class="section-header">
-      <h2 class="section-title" data-i18n data-en="Engineered for Fast, Focused Reading" data-tr="Hızlı ve odaklı okuma için tasarlandı">
-        Engineered for Fast, Focused Reading
+      <span class="badge badge-accent">
+        <span data-i18n data-en="Verified Capabilities" data-tr="Doğrulanmış Yetenekler">Verified Capabilities</span>
+      </span>
+      <h2 id="features-heading" class="section-title" data-i18n data-en="Fast, Focused, Verified Document Tooling" data-tr="Hızlı, Odaklı, Doğrulanmış Belge Araçları">
+        Fast, Focused, Verified Document Tooling
       </h2>
       <p class="section-subtitle" data-i18n
-        data-en="Built in Rust with Slint and Google PDFium. Demand-driven rendering, dedicated document tools, and verified zero background telemetry."
-        data-tr="Rust, Slint ve Google PDFium ile geliştirildi. Talep odaklı işleme, özel belge araçları ve doğrulanmış sıfır telemetri.">
-        Built in Rust with Slint and Google PDFium. Demand-driven rendering, dedicated document tools, and verified zero background telemetry.
+        data-en="Every feature runs locally in your machine process without requiring external cloud subscriptions, telemetry trackers, or background sync services."
+        data-tr="Her bir özellik harici bulut aboneliği, telemetri takipçisi veya arka plan eşitleme servisi gerektirmeden doğrudan bilgisayarınızda çalışır.">
+        Every feature runs locally in your machine process without requiring external cloud subscriptions, telemetry trackers, or background sync services.
       </p>
     </div>
 
-    <div class="bento-grid">
-      {features.map((f, index) => {
-        const isFeatured = index === 0 || index === 1 || index === 6;
-        return (
-          <div class:list={['feature-card', `feature-${f.id}`, { featured: isFeatured }]}>
-            <div class="card-top">
-              <div class="feature-icon">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  {f.paths.map((d) => <path d={d}></path>)}
-                </svg>
-              </div>
-              {f.badge && (
-                <span class="feature-badge" data-i18n data-en={f.badge} data-tr={f.trBadge}>
-                  {f.badge}
-                </span>
-              )}
-            </div>
-
-            <div class="card-content">
-              <span class="feature-tagline" data-i18n data-en={f.tagline} data-tr={f.trTagline}>
-                {f.tagline}
+    <div class="features-grid">
+      {features.map((f) => (
+        <article class="feature-card">
+          <div class="feature-card-header">
+            <span class="feature-tagline" data-i18n data-en={f.tagline} data-tr={f.trTagline}>
+              {f.tagline}
+            </span>
+            {f.badge && (
+              <span class="badge" data-i18n data-en={f.badge} data-tr={f.trBadge}>
+                {f.badge}
               </span>
-              <h3 class="feature-title" data-i18n data-en={f.title} data-tr={f.trTitle}>
-                {f.title}
-              </h3>
-              <p class="feature-desc" data-i18n data-en={f.description} data-tr={f.trDescription}>
-                {f.description}
-              </p>
-            </div>
+            )}
           </div>
-        );
-      })}
+
+          <h3 class="feature-title" data-i18n data-en={f.title} data-tr={f.trTitle}>
+            {f.title}
+          </h3>
+
+          <p class="feature-desc" data-i18n data-en={f.description} data-tr={f.trDescription}>
+            {f.description}
+          </p>
+
+          <div class="feature-footer">
+            <span class="code-ref"><code>{f.codeAnchor}</code></span>
+          </div>
+        </article>
+      ))}
     </div>
   </div>
 </section>
 
 <style>
   .features-section {
-    padding: 4.5rem 0 3.5rem;
+    padding: 3rem 0 4.5rem;
   }
 
   .section-header {
@@ -180,9 +147,10 @@ const features: readonly FeatureItem[] = [
   }
 
   .section-title {
-    font-size: 2.25rem;
+    font-size: clamp(1.75rem, 3.5vw, 2.35rem);
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
+    margin-top: 0.75rem;
     margin-bottom: 0.75rem;
   }
 
@@ -190,103 +158,30 @@ const features: readonly FeatureItem[] = [
     font-size: 1.05rem;
     line-height: 1.55;
     color: var(--color-text-muted);
+    margin: 0;
   }
 
-  /* Bento 12-column layout */
-  .bento-grid {
+  .features-grid {
     display: grid;
-    grid-template-columns: repeat(12, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 1.5rem;
   }
 
   .feature-card {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     padding: 1.75rem;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+    box-shadow: var(--shadow-sm);
   }
 
-  .feature-card:hover {
-    border-color: var(--color-accent-border);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
-  }
-
-  /* Layout distribution for 7 items */
-  .feature-tools {
-    grid-column: span 6;
-  }
-
-  .feature-annotations {
-    grid-column: span 6;
-  }
-
-  .feature-hud {
-    grid-column: span 4;
-  }
-
-  .feature-modes {
-    grid-column: span 4;
-  }
-
-  .feature-tints {
-    grid-column: span 4;
-  }
-
-  .feature-print-shell {
-    grid-column: span 6;
-  }
-
-  .feature-zero-telemetry {
-    grid-column: span 6;
-    background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-surface-subtle) 100%);
-    border-color: var(--color-accent-border);
-  }
-
-  .card-top {
+  .feature-card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.25rem;
-  }
-
-  .feature-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-md);
-    background-color: var(--color-accent-subtle);
-    color: var(--color-accent);
-  }
-
-  .feature-badge {
-    font-size: 0.6875rem;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 0.25rem 0.625rem;
-    border-radius: var(--radius-full);
-    background-color: var(--color-surface-subtle);
-    border: 1px solid var(--color-border);
-    color: var(--color-text-dim);
-  }
-
-  .feature-zero-telemetry .feature-badge {
-    background-color: var(--color-accent-subtle);
-    border-color: var(--color-accent-border);
-    color: var(--color-accent-hover);
-    font-weight: 700;
-  }
-
-  .card-content {
-    display: flex;
-    flex-direction: column;
+    margin-bottom: 1rem;
   }
 
   .feature-tagline {
@@ -294,58 +189,45 @@ const features: readonly FeatureItem[] = [
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--color-text-dim);
-    margin-bottom: 0.375rem;
+    color: var(--color-accent);
+    font-weight: 600;
   }
 
   .feature-title {
-    font-size: 1.2rem;
+    font-size: 1.15rem;
     font-weight: 700;
-    line-height: 1.3;
-    margin-bottom: 0.5rem;
+    line-height: 1.35;
+    margin-bottom: 0.75rem;
     color: var(--color-text);
   }
 
   .feature-desc {
-    font-size: 0.9375rem;
-    line-height: 1.5;
+    font-size: 0.925rem;
+    line-height: 1.55;
     color: var(--color-text-muted);
-    margin-bottom: 0;
+    margin-bottom: 1.5rem;
+    flex: 1;
+  }
+
+  .feature-footer {
+    border-top: 1px solid var(--color-border-subtle);
+    padding-top: 0.75rem;
+  }
+
+  .code-ref code {
+    font-size: 0.72rem;
+    color: var(--color-text-dim);
   }
 
   @media (max-width: 1024px) {
-    .feature-tools,
-    .feature-annotations,
-    .feature-print-shell,
-    .feature-zero-telemetry {
-      grid-column: span 6;
-    }
-
-    .feature-hud,
-    .feature-modes,
-    .feature-tints {
-      grid-column: span 12;
+    .features-grid {
+      grid-template-columns: repeat(2, 1fr);
     }
   }
 
-  @media (max-width: 768px) {
-    .bento-grid {
+  @media (max-width: 640px) {
+    .features-grid {
       grid-template-columns: 1fr;
-      gap: 1rem;
-    }
-
-    .feature-tools,
-    .feature-annotations,
-    .feature-hud,
-    .feature-modes,
-    .feature-tints,
-    .feature-print-shell,
-    .feature-zero-telemetry {
-      grid-column: span 1;
-    }
-
-    .section-title {
-      font-size: 1.85rem;
     }
   }
 </style>

@@ -1,0 +1,224 @@
+---
+import { getLatestBenchmarks } from '../lib/benchmarks';
+
+const benchmarks = await getLatestBenchmarks();
+---
+
+{benchmarks && (
+  <section class="benchmark-section" aria-labelledby="benchmarks-heading">
+    <div class="container">
+      <div class="benchmark-box">
+        <div class="benchmark-header">
+          <div class="header-left">
+            <span class="badge badge-accent">
+              <span data-i18n data-en="Committed Evidence" data-tr="Kayıtlı Ölçüm">Committed Evidence</span>
+            </span>
+            <h2 id="benchmarks-heading" class="benchmark-title" data-i18n data-en="Measured Performance & Memory Bounds" data-tr="Ölçülen Performans ve Bellek Sınırları">
+              Measured Performance & Memory Bounds
+            </h2>
+            <p class="benchmark-subtitle" data-i18n
+              data-en="Recorded using the repository benchmark script on Windows 11. No estimated numbers or speculative marketing charts."
+              data-tr="Windows 11 üzerinde repo benchmark komutuyla kaydedilmiştir. Tahmini sayılar veya spekülatif pazarlama grafikleri içermez.">
+              Recorded using the repository benchmark script on Windows 11. No estimated numbers or speculative marketing charts.
+            </p>
+          </div>
+          <div class="benchmark-env-pill">
+            <span class="env-label" data-i18n data-en="Environment:" data-tr="Ortam:">Environment:</span>
+            <span class="env-text">{benchmarks.environment.os} · {benchmarks.environment.processor.trim()}</span>
+          </div>
+        </div>
+
+        <div class="benchmark-metrics-grid">
+          <div class="metric-card">
+            <span class="metric-val">{benchmarks.metrics.idle.privateBytesMB.toFixed(2)} MB</span>
+            <span class="metric-label" data-i18n data-en="Idle Private Memory" data-tr="Boşta Özel Bellek">Idle Private Memory</span>
+            <span class="metric-hint" data-i18n data-en="Clean application start, no document loaded" data-tr="Belge yüklenmemiş temiz başlangıç">Clean application start, no document loaded</span>
+          </div>
+
+          <div class="metric-card">
+            <span class="metric-val">{benchmarks.metrics.documentLoaded.privateBytesMB.toFixed(2)} MB</span>
+            <span class="metric-label" data-i18n data-en="Document Loaded Memory" data-tr="Belge Yüklü Bellek">Document Loaded Memory</span>
+            <span class="metric-hint" data-i18n data-en="With sample PDF loaded in memory" data-tr="Örnek PDF belgesi yüklendiğinde">With sample PDF loaded in memory</span>
+          </div>
+
+          <div class="metric-card">
+            <span class="metric-val">{benchmarks.metrics.idle.cpuPercent.toFixed(1)}%</span>
+            <span class="metric-label" data-i18n data-en="Settled Idle CPU Usage" data-tr="Boşta CPU Kullanımı">Settled Idle CPU Usage</span>
+            <span class="metric-hint" data-i18n data-en="Zero background polling threads" data-tr="Sıfır arka plan sorgu iş parçacığı">Zero background polling threads</span>
+          </div>
+
+          <div class="metric-card">
+            <span class="metric-val">{benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB</span>
+            <span class="metric-label" data-i18n data-en="Working Set Footprint" data-tr="Çalışma Kümesi Boyutu">Working Set Footprint</span>
+            <span class="metric-hint" data-i18n data-en="Total active memory footprint under OS" data-tr="İşletim sistemindeki toplam aktif bellek">Total active memory footprint under OS</span>
+          </div>
+        </div>
+
+        <div class="benchmark-footer">
+          <div class="footer-info">
+            <span class="bench-tag" data-i18n data-en="Automated Measurement" data-tr="Otomatik Ölçüm">Automated Measurement</span>
+            <span class="bench-date">Run recorded on {benchmarks.timestamp.split('T')[0]}</span>
+          </div>
+          <a href="https://github.com/Woffluon/BarePDF/blob/main/docs/BENCHMARKS.md" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+            <span data-i18n data-en="View Full Benchmark Report ↗" data-tr="Tam Benchmark Raporunu İncele ↗">View Full Benchmark Report ↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+)}
+
+<style>
+  .benchmark-section {
+    padding: 1.5rem 0 4rem;
+  }
+
+  .benchmark-box {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 2.25rem 2.5rem;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .benchmark-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .header-left {
+    max-width: 620px;
+  }
+
+  .benchmark-title {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-weight: 800;
+    margin-top: 0.6rem;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.03em;
+  }
+
+  .benchmark-subtitle {
+    font-size: 0.95rem;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .benchmark-env-pill {
+    padding: 0.6rem 0.9rem;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex-shrink: 0;
+  }
+
+  .env-label {
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+  }
+
+  .env-text {
+    color: var(--color-text);
+    font-weight: 600;
+  }
+
+  .benchmark-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+  }
+
+  .metric-card {
+    padding: 1.25rem;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .metric-val {
+    font-family: var(--font-mono);
+    font-size: 1.65rem;
+    font-weight: 700;
+    color: var(--color-text);
+    letter-spacing: -0.03em;
+  }
+
+  .metric-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .metric-hint {
+    font-size: 0.78rem;
+    color: var(--color-text-dim);
+    line-height: 1.4;
+  }
+
+  .benchmark-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .footer-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--color-text-dim);
+  }
+
+  .bench-tag {
+    font-weight: 600;
+    color: var(--color-accent);
+  }
+
+  .btn-sm {
+    padding: 0.45rem 0.9rem;
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 900px) {
+    .benchmark-header {
+      flex-direction: column;
+    }
+    .benchmark-metrics-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 600px) {
+    .benchmark-box {
+      padding: 1.5rem;
+    }
+    .benchmark-metrics-grid {
+      grid-template-columns: 1fr;
+    }
+    .benchmark-footer {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+    .benchmark-footer .btn {
+      width: 100%;
+    }
+  }
+</style>

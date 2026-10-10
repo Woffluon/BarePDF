@@ -22,13 +22,15 @@ const hasReleaseMetadata = release.state === 'published';
 >
   <section class="download-page-header">
     <div class="container header-container">
-      <span class="badge badge-success">
-        <span data-i18n data-en={hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`} data-tr={hasReleaseMetadata ? `Son sürüm ${release.tag}` : `Derleme ${release.tag}`}>
-          {hasReleaseMetadata ? `Latest Release ${release.tag}` : `Build Version ${release.tag}`}
+      <span class="badge badge-accent">
+        <span data-i18n data-en={hasReleaseMetadata ? `Release ${release.tag}` : `Build ${release.tag}`} data-tr={hasReleaseMetadata ? `Sürüm ${release.tag}` : `Derleme ${release.tag}`}>
+          {hasReleaseMetadata ? `Release ${release.tag}` : `Build ${release.tag}`}
         </span>
       </span>
-      <h1 class="page-title" data-i18n data-en="Download BarePDF" data-tr="BarePDF’i indirin">Download BarePDF</h1>
-      <p class="page-subtitle" data-i18n data-en="Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private." data-tr="Windows 10 ve 11 (64 bit) için resmi sürüm paketleri. Hızlı, hafif ve tamamen özel.">
+      <h1 class="page-title" data-i18n data-en="Download BarePDF" data-tr="BarePDF’i İndirin">Download BarePDF</h1>
+      <p class="page-subtitle" data-i18n
+        data-en="Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private."
+        data-tr="Windows 10 ve 11 (64-bit) için resmi sürüm paketleri. Hızlı, hafif ve tamamen özel.">
         Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private.
       </p>
     </div>
@@ -36,82 +38,100 @@ const hasReleaseMetadata = release.state === 'published';
 
   <section class="download-options-section">
     <div class="container">
-      {hasReleaseMetadata ? <div class="cards-grid">
-        {installerAsset && (
-          <DownloadCard
-            asset={installerAsset}
-            title="Windows Setup Installer"
-            description="Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without admin rights."
-            badge="Recommended"
-            iconType="installer"
-          />
-        )}
+      {hasReleaseMetadata ? (
+        <div class="cards-grid">
+          {installerAsset && (
+            <DownloadCard
+              asset={installerAsset}
+              title="Windows Setup Installer"
+              description="Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without administrator privileges."
+              badge="Recommended"
+              iconType="installer"
+            />
+          )}
 
-        {portableAsset && (
-          <DownloadCard
-            asset={portableAsset}
-            title="Portable ZIP Package"
-            description="Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or installation."
-            badge="Portable"
-            iconType="portable"
-          />
-        )}
+          {portableAsset && (
+            <DownloadCard
+              asset={portableAsset}
+              title="Portable ZIP Package"
+              description="Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or system installation."
+              badge="Portable"
+              iconType="portable"
+            />
+          )}
 
-        {checksumAsset && (
-          <DownloadCard
-            asset={checksumAsset}
-            title="SHA-256 Checksums"
-            description="Official SHA256SUMS.txt manifest file to verify cryptographic integrity of release binaries."
-            badge="Verification"
-            iconType="checksum"
-          />
-        )}
-      </div> : <div class="release-metadata-notice">
-        <h3 class="guide-title" data-i18n data-en="Release Metadata Unavailable" data-tr="Sürüm bilgisi kullanılamıyor">Release Metadata Unavailable</h3>
-        <p class="guide-desc" data-i18n data-en="This site build could not verify current release assets. Use GitHub Releases to view published downloads." data-tr="Bu site derlemesi güncel sürüm varlıklarını doğrulayamadı. Yayımlanan indirmeler için GitHub Releases sayfasını açın.">
-          This site build could not verify current release assets. Use GitHub Releases to view published downloads.
-        </p>
-        <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary">
-          View Latest Release on GitHub ↗
-        </a>
-      </div>}
+          {checksumAsset && (
+            <DownloadCard
+              asset={checksumAsset}
+              title="SHA-256 Checksums"
+              description="Official SHA256SUMS.txt manifest file to verify the cryptographic integrity of downloaded release binaries."
+              badge="Verification"
+              iconType="checksum"
+            />
+          )}
+        </div>
+      ) : (
+        <div class="release-metadata-notice">
+          <h3 class="guide-title" data-i18n data-en="Release Metadata Unavailable" data-tr="Sürüm Bilgisi Kullanılamıyor">Release Metadata Unavailable</h3>
+          <p class="guide-desc" data-i18n
+            data-en="This site build could not verify current release assets via GitHub API. Use GitHub Releases to view published downloads directly."
+            data-tr="Bu site derlemesi güncel sürüm dosyalarını GitHub API üzerinden doğrulayamadı. Yayımlanan indirmeleri doğrudan GitHub Releases sayfasından inceleyin.">
+            This site build could not verify current release assets via GitHub API. Use GitHub Releases to view published downloads directly.
+          </p>
+          <a href={release.url} target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+            View Releases on GitHub
+          </a>
+        </div>
+      )}
 
       <DownloadMetricCard metrics={downloadMetrics} />
 
-      {checksumAsset && <div class="verification-guide-box">
-        <h3 class="guide-title" data-i18n data-en="How to Verify Download Hashes" data-tr="İndirme sağlama değerlerini doğrulama">How to Verify Download Hashes</h3>
-        <p class="guide-desc" data-i18n data-en="You can verify the cryptographic hash of your downloaded file using Windows PowerShell:" data-tr="İndirdiğiniz dosyanın kriptografik sağlama değerini Windows PowerShell ile doğrulayabilirsiniz:">
-          You can verify the cryptographic hash of your downloaded file using Windows PowerShell:
-        </p>
-        <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64-vX.Y.Z.exe'}</code></pre>
-        <p class="guide-note">
-          Compare the output hash against the SHA256SUMS manifest file listed above.
-        </p>
-      </div>}
+      {checksumAsset && (
+        <div class="verification-guide-box">
+          <h3 class="guide-title" data-i18n data-en="How to Verify Download Hashes" data-tr="İndirme Sağlama Değerlerini Doğrulama">How to Verify Download Hashes</h3>
+          <p class="guide-desc" data-i18n
+            data-en="You can verify the cryptographic SHA-256 hash of your downloaded file using Windows PowerShell before execution:"
+            data-tr="İndirdiğiniz dosyanın kriptografik SHA-256 sağlama değerini çalıştırmadan önce Windows PowerShell ile doğrulayabilirsiniz:">
+            You can verify the cryptographic SHA-256 hash of your downloaded file using Windows PowerShell before execution:
+          </p>
+          <pre><code>Get-FileHash -Algorithm SHA256 .\{installerAsset?.name ?? 'BarePDF-Setup-x64-vX.Y.Z.exe'}</code></pre>
+          <p class="guide-note" data-i18n
+            data-en="Compare the computed hash against the SHA256SUMS manifest file published with the release."
+            data-tr="Hesaplanan sağlama değerini sürümle birlikte yayımlanan SHA256SUMS bildirim dosyasındaki değerle karşılaştırın.">
+            Compare the computed hash against the SHA256SUMS manifest file published with the release.
+          </p>
+        </div>
+      )}
 
-      <div class="signing-policy-note">
-        <h3 class="guide-title" data-i18n data-en="Update authenticity policy" data-tr="Güncelleme doğrulama politikası">Update authenticity policy</h3>
-        <p class="guide-desc" data-i18n data-en="BarePDF verifies the release manifest signature, installer URL, size, SHA-256, and version before launching an update. Windows may still show an unknown-publisher warning." data-tr="BarePDF güncellemeyi başlatmadan önce bildirim imzasını, kurulum URL’sini, boyutu, SHA-256 değerini ve sürümü doğrular. Windows yine de bilinmeyen yayımcı uyarısı gösterebilir.">
-          BarePDF verifies the release manifest signature, installer URL, size, SHA-256, and version before launching an update. Windows may still show an unknown-publisher warning.
+      <div class="signing-policy-box">
+        <h3 class="guide-title" data-i18n data-en="Update Authenticity & Verification Policy" data-tr="Güncelleme Doğrulama Politikası">Update Authenticity & Verification Policy</h3>
+        <p class="guide-desc" data-i18n
+          data-en="When update checks are enabled by the user, BarePDF cryptographically verifies the release manifest Ed25519 signature, approved repository URL, file size, SHA-256 hash, and version ordering before presenting an update. Windows SmartScreen may still display an unknown publisher notification."
+          data-tr="Güncelleme kontrolleri kullanıcı tarafından etkinleştirildiğinde BarePDF, bir güncellemeyi sunmadan önce bildirim dosyasının Ed25519 imzasını, onaylı depo adresini, dosya boyutunu, SHA-256 sağlama değerini ve sürüm sırasını doğrular. Windows SmartScreen yine de bilinmeyen yayımcı uyarısı gösterebilir.">
+          When update checks are enabled by the user, BarePDF cryptographically verifies the release manifest Ed25519 signature, approved repository URL, file size, SHA-256 hash, and version ordering before presenting an update. Windows SmartScreen may still display an unknown publisher notification.
         </p>
-        <a href={`${repository.url}#update-authenticity-policy`} target="_blank" rel="noopener noreferrer">
-          Read the update authenticity policy ↗
+        <a href={`${repository.url}#update-authenticity-policy`} target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+          Read Authenticity Policy
         </a>
       </div>
 
       <div class="slint-attribution">
         <a href="https://slint.dev/" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Made with Slint">
-          <img src={`${baseUrl}/made-with-slint.svg`} alt="Made with Slint" width="212" height="97" loading="lazy" decoding="async" />
+          <img src={`${baseUrl}/made-with-slint.svg`} alt="Made with Slint" width="180" height="82" loading="lazy" decoding="async" />
         </a>
       </div>
 
       <div class="all-releases-banner">
         <div>
-          <h4 class="banner-heading" data-i18n data-en="Need Older Releases or Raw Assets?" data-tr="Eski sürümler veya ham dosyalar mı gerekli?">Need Older Releases or Raw Assets?</h4>
-          <p class="banner-sub" data-i18n data-en="View complete tag history, source archives, and assets directly on GitHub Releases." data-tr="Etiket geçmişini, kaynak arşivlerini ve dosyaları doğrudan GitHub Releases’te görüntüleyin.">View complete tag history, source archives, and assets directly on GitHub Releases.</p>
+          <h4 class="banner-heading" data-i18n data-en="Need Older Releases or Source Trees?" data-tr="Eski Sürümler veya Kaynak Kod mu Gerekli?">Need Older Releases or Source Trees?</h4>
+          <p class="banner-sub" data-i18n
+            data-en="View the complete immutable tag history, git commits, and source archives directly on GitHub."
+            data-tr="Değiştirilemez etiket geçmişini, git kayıtlarını ve kaynak arşivlerini doğrudan GitHub üzerinden inceleyin.">
+            View the complete immutable tag history, git commits, and source archives directly on GitHub.
+          </p>
         </div>
         <a href={`${repository.url}/releases`} target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
-          View All GitHub Releases ↗
+          View All GitHub Releases
         </a>
       </div>
     </div>
@@ -120,82 +140,84 @@ const hasReleaseMetadata = release.state === 'published';
 
 <style>
   .download-page-header {
-    padding: 4rem 0 2rem;
+    padding: 3.5rem 0 2rem;
     text-align: center;
     background-color: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
   }
 
   .header-container {
-    max-width: 720px;
+    max-width: 680px;
     display: flex;
     flex-direction: column;
     align-items: center;
   }
 
   .page-title {
-    font-size: 2.75rem;
+    font-size: clamp(2.2rem, 5vw, 3rem);
     font-weight: 800;
     margin-top: 0.75rem;
     margin-bottom: 0.75rem;
+    letter-spacing: -0.03em;
   }
 
   .page-subtitle {
-    font-size: 1.15rem;
+    font-size: 1.1rem;
     color: var(--color-text-muted);
     margin: 0;
+    line-height: 1.55;
   }
 
   .download-options-section {
-    padding: 3.5rem 0 5rem;
+    padding: 3rem 0 5rem;
   }
 
   .cards-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 1.75rem;
-    margin-bottom: 3.5rem;
+    gap: 1.5rem;
+    margin-bottom: 3rem;
   }
 
-  .verification-guide-box {
-    background-color: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
-    padding: 2rem;
-    margin-bottom: 2.5rem;
-  }
-
+  .verification-guide-box,
+  .signing-policy-box,
   .release-metadata-notice {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     padding: 2rem;
-    margin-bottom: 2.5rem;
-  }
-
-  .signing-policy-note {
-    margin-bottom: 2.5rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .slint-attribution {
-    margin-bottom: 2.5rem;
+    display: flex;
+    justify-content: center;
+    margin: 2.5rem 0;
   }
 
   .slint-attribution img {
     display: block;
-    max-width: 100%;
+    opacity: 0.85;
+    transition: opacity var(--transition-fast);
+  }
+
+  .slint-attribution img:hover {
+    opacity: 1;
   }
 
   .guide-title {
     font-size: 1.25rem;
     font-weight: 700;
+    margin-top: 0;
     margin-bottom: 0.5rem;
   }
 
   .guide-desc {
-    font-size: 0.9375rem;
+    font-size: 0.95rem;
     color: var(--color-text-muted);
     margin-bottom: 1rem;
+    line-height: 1.55;
   }
 
   .guide-note {
@@ -204,11 +226,16 @@ const hasReleaseMetadata = release.state === 'published';
     margin: 0;
   }
 
+  .btn-sm {
+    padding: 0.45rem 0.95rem;
+    font-size: 0.85rem;
+  }
+
   .all-releases-banner {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1.5rem 2rem;
+    padding: 1.75rem 2rem;
     background-color: var(--color-surface-subtle);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
@@ -216,7 +243,7 @@ const hasReleaseMetadata = release.state === 'published';
   }
 
   .banner-heading {
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     font-weight: 700;
     margin-bottom: 0.25rem;
   }

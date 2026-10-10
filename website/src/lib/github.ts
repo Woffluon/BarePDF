@@ -39,16 +39,7 @@ export interface DownloadMetrics {
   installerDownloads: number;
   portableDownloads: number;
   latestReleaseDownloads: number;
-  isFallback: boolean;
 }
-
-export const VERIFIED_DOWNLOAD_BASELINE: DownloadMetrics = {
-  totalDownloads: 149,
-  installerDownloads: 104,
-  portableDownloads: 45,
-  latestReleaseDownloads: 5,
-  isFallback: true,
-};
 
 const GITHUB_API_BASE = 'https://api.github.com';
 export const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -212,17 +203,17 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
   }
 }
 
-export async function getDownloadMetrics(): Promise<DownloadMetrics> {
+export async function getDownloadMetrics(): Promise<DownloadMetrics | null> {
   const url = `${GITHUB_API_BASE}/repos/${repository.owner}/${repository.name}/releases?per_page=100`;
   try {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
-      console.warn(`[GitHub API] Failed to fetch releases for download metrics (${res.status}). Using verified baseline.`);
-      return VERIFIED_DOWNLOAD_BASELINE;
+      console.warn(`[GitHub API] Failed to fetch releases for download metrics (${res.status}). No mock numbers used.`);
+      return null;
     }
     const data: unknown = await readBoundedJson(res);
     if (!Array.isArray(data)) {
-      return VERIFIED_DOWNLOAD_BASELINE;
+      return null;
     }
 
     let installerCount = 0;
@@ -263,20 +254,16 @@ export async function getDownloadMetrics(): Promise<DownloadMetrics> {
     }
 
     const total = installerCount + portableCount;
-    if (total === 0) {
-      return VERIFIED_DOWNLOAD_BASELINE;
-    }
 
     return {
-      totalDownloads: Math.max(total, VERIFIED_DOWNLOAD_BASELINE.totalDownloads),
-      installerDownloads: Math.max(installerCount, VERIFIED_DOWNLOAD_BASELINE.installerDownloads),
-      portableDownloads: Math.max(portableCount, VERIFIED_DOWNLOAD_BASELINE.portableDownloads),
-      latestReleaseDownloads: latestCount > 0 ? latestCount : VERIFIED_DOWNLOAD_BASELINE.latestReleaseDownloads,
-      isFallback: false,
+      totalDownloads: total,
+      installerDownloads: installerCount,
+      portableDownloads: portableCount,
+      latestReleaseDownloads: latestCount,
     };
   } catch (err) {
     console.warn(`[GitHub API] Error fetching download metrics:`, err);
-    return VERIFIED_DOWNLOAD_BASELINE;
+    return null;
   }
 }
 

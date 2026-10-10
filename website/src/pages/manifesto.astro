@@ -5,8 +5,8 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 
 <BaseLayout
-  title="BarePDF Manifesto | A Small Refusal"
-  description="A personal manifesto by Efe Arabacı for quiet, local, user-first PDF reading."
+  title="BarePDF Manifesto: A Small Refusal"
+  description="A personal statement by Efe Arabacı for quiet, local, user-first PDF reading."
   currentPath={`${baseUrl}/manifesto`}
   ogImage={`${baseUrl}/images/manifesto-cover.png`}
 >
@@ -14,17 +14,29 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     <div class="manifesto-container">
       <section class="manifesto-hero" aria-labelledby="manifesto-title">
         <div class="manifesto-hero-copy">
-          <p class="manifesto-kicker">A PERSONAL NOTE FROM EFE ARABACI</p>
-          <h1 id="manifesto-title">I built BarePDF for the part of you that just wants to read.</h1>
-          <p class="manifesto-lead">
-            A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a small tribute to a company that has mistaken your attention for property.
+          <p class="manifesto-kicker" data-i18n data-en="A STATEMENT FROM EFE ARABACI" data-tr="EFE ARABACI'DAN BİR AÇIKLAMA">A STATEMENT FROM EFE ARABACI</p>
+          <h1 id="manifesto-title" data-i18n
+            data-en="I built BarePDF for the part of you that just wants to read."
+            data-tr="BarePDF'i yalnızca okumak isteyen yanınız için geliştirdim.">
+            I built BarePDF for the part of you that just wants to read.
+          </h1>
+          <p class="manifesto-lead" data-i18n
+            data-en="A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a subscription to a company that mistakes your attention for property."
+            data-tr="Bir belge bir bulut platformunun bahanesi haline gelmemelidir. Bir PDF açmak bir tören, hesap kaydı, bulut bağlantısı veya dikkatinizi kendi mülkü sanan bir şirkete ödeme gerektirmemelidir.">
+            A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a subscription to a company that mistakes your attention for property.
           </p>
-          <a class="manifesto-link" href="#the-refusal">Read the refusal <span aria-hidden="true">↓</span></a>
+          <a class="manifesto-link" href="#the-refusal">
+            <span data-i18n data-en="Read the architectural refusal" data-tr="Mimari ret metnini oku">Read the architectural refusal</span> ↓
+          </a>
         </div>
 
         <figure class="manifesto-art">
-          <img src={`${baseUrl}/images/manifesto-cover.png`} alt="A surreal collage of a server tower, a knight, and people carrying technology across a barren landscape." width="1024" height="1536" />
-          <figcaption>Somewhere between convenience and custody, the reader remains.</figcaption>
+          <img src={`${baseUrl}/images/manifesto-cover.png`} alt="A visual representation of reading simplicity vs platform extraction." width="1024" height="1536" />
+          <figcaption data-i18n
+            data-en="Between convenience and custody, the reader remains."
+            data-tr="Kolaylık ile gözetim arasında, okur yerinde kalır.">
+            Between convenience and custody, the reader remains.
+          </figcaption>
         </figure>
       </section>
 
@@ -32,28 +44,44 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
       <section class="manifesto-grid" id="the-refusal">
         <div class="manifesto-prose">
-          <p class="manifesto-index">01 / THE LITTLE KINGDOM OF SOFTWARE</p>
-          <h2>Techno-feudalism, now with better onboarding.</h2>
-          <p>
-            We have entered an age of techno-feudalism. A handful of landlords rent us tools that used to be ordinary objects. They collect our data at the gate, ask us to sign in before we may see our own files, and call the resulting dependence convenience. The castle is often a dashboard. The tax is often a notification.
+          <p class="manifesto-index">01 / THE KINGDOM OF SOFTWARE</p>
+          <h2 data-i18n data-en="Techno-feudalism, now with frictionless onboarding." data-tr="Tekno-feodalizm, şimdi pürüzsüz karşılama ekranlarıyla.">
+            Techno-feudalism, now with frictionless onboarding.
+          </h2>
+          <p data-i18n
+            data-en="We have entered an age where a handful of platforms rent tools that used to be ordinary objects. They collect telemetry at the gate, request logins before displaying local files, and label that dependence convenience. The castle is often a dashboard. The tax is often an unsolicited notification."
+            data-tr="Bir avuç platformun eskiden sıradan birer araç olan nesneleri bize kiraladığı bir döneme girdik. Kapıda veri topluyor, yerel dosyalarımızı göstermek için oturum açmamızı istiyor ve bu bağımlılığı kolaylık olarak adlandırıyorlar. Kale çoğunlukla bir gösterge paneli, vergi ise istenmeyen bir bildirimdir.">
+            We have entered an age where a handful of platforms rent tools that used to be ordinary objects. They collect telemetry at the gate, request logins before displaying local files, and label that dependence convenience. The castle is often a dashboard. The tax is often an unsolicited notification.
           </p>
 
           <p class="manifesto-index">02 / BARE MEANS ENOUGH</p>
-          <h2>A quiet reader is a political position.</h2>
-          <p>
-            BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising squeezed into the margins. Update checks are optional. The reader should spend its resources on the page, not on a feature parade built to justify a subscription.
+          <h2 data-i18n data-en="A quiet reader is an intentional engineering stance." data-tr="Sessiz bir okuyucu, bilinçli bir mühendislik tavrıdır.">
+            A quiet reader is an intentional engineering stance.
+          </h2>
+          <p data-i18n
+            data-en="BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising placed into the margins. Update checks are strictly opt-in. The reader spends resources strictly on the page, not on a feature parade designed to justify monthly subscriptions."
+            data-tr="BarePDF belgeleri yerel olarak açar. Zorunlu hesap yok. Bulut bağımlılığı yok. Yardımseverlik maskesi takmış takip mekanizmaları yok. Kenar boşluklarına sıkıştırılmış reklamlar yok. Güncelleme denetimleri tamamen isteğe bağlıdır. Okuyucu kaynaklarını sayfa için harcar, aylık abonelikleri meşrulaştırmak için tasarlanan gösterişli özellikler için değil.">
+            BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising placed into the margins. Update checks are strictly opt-in. The reader spends resources strictly on the page, not on a feature parade designed to justify monthly subscriptions.
           </p>
 
-          <p class="manifesto-index">03 / THE SMALL REFUSAL</p>
-          <h2>Less theater. More ownership.</h2>
-          <p>
-            There will be no loyalty program for opening a file, no badge for surviving a settings panel, and no cloud-shaped moat around a local document. I am not trying to make reading feel like a social network. I am trying to leave enough room for the document, the machine, and the person in front of it.
+          <p class="manifesto-index">03 / THE DELIBERATE REFUSAL</p>
+          <h2 data-i18n data-en="Less theater. Genuine ownership." data-tr="Daha az tiyatro. Gerçek mülkiyet.">
+            Less theater. Genuine ownership.
+          </h2>
+          <p data-i18n
+            data-en="There will be no loyalty points for opening a file, no badges for browsing a settings panel, and no cloud-shaped wall built around local storage. Reading is not a social network. BarePDF leaves room for the document, the machine, and the human being reading."
+            data-tr="Bir dosya açtığınız için sadakat puanı verilmeyecek, ayarlar menüsünü gezdiğiniz için rozet dağıtılmayacak ve yerel depolamanın etrafına bulut biçimli duvarlar örülmeyecektir. Okuma eylemi bir sosyal ağ değildir. BarePDF yalnızca belgeye, makineye ve okuyan insana yer bırakır.">
+            There will be no loyalty points for opening a file, no badges for browsing a settings panel, and no cloud-shaped wall built around local storage. Reading is not a social network. BarePDF leaves room for the document, the machine, and the human being reading.
           </p>
         </div>
 
-        <aside class="manifesto-aside" aria-label="Manifesto closing statement">
-          <div class="manifesto-stamp">BAREPDF<br />LOCAL BY DEFAULT</div>
-          <blockquote>“You are not the product. You are the person who opened the file. That should be enough.”</blockquote>
+        <aside class="manifesto-aside" aria-label="Manifesto summary">
+          <div class="manifesto-stamp">BAREPDF<br />OFFLINE BY DEFAULT</div>
+          <blockquote data-i18n
+            data-en="“You are not the product. You are the person who opened the file. That is enough.”"
+            data-tr="“Siz ürün değilsiniz. Siz dosyayı açan insansınız. Bu tek başına yeterlidir.”">
+            “You are not the product. You are the person who opened the file. That is enough.”
+          </blockquote>
           <p class="manifesto-signature">Efe Arabacı</p>
         </aside>
       </section>
@@ -63,11 +91,11 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 <style>
   .manifesto-shell {
-    --manifesto-bg: #0d0f12;
-    --manifesto-surface: #15181d;
-    --manifesto-text: #f2eee6;
-    --manifesto-muted: #a9aeb8;
-    --manifesto-accent: #f69423;
+    --manifesto-bg: #0f1012;
+    --manifesto-surface: #16171a;
+    --manifesto-text: #f3f4f6;
+    --manifesto-muted: #a3a6b2;
+    --manifesto-accent: #f2861c;
     background: var(--manifesto-bg);
     color: var(--manifesto-text);
     min-height: calc(100vh - 72px);
@@ -75,50 +103,48 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
   }
 
   .manifesto-container {
-    width: min(1180px, 100% - 3rem);
+    width: min(1160px, 100% - 3rem);
     margin: 0 auto;
-    padding: clamp(4rem, 8vw, 8rem) 0;
+    padding: clamp(3.5rem, 6vw, 6.5rem) 0;
   }
 
   .manifesto-hero {
     display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
+    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
     align-items: center;
-    gap: clamp(3rem, 9vw, 9rem);
+    gap: clamp(2.5rem, 6vw, 6rem);
   }
 
   .manifesto-hero-copy {
-    max-width: 670px;
+    max-width: 640px;
   }
 
   .manifesto-kicker,
   .manifesto-index {
     color: var(--manifesto-accent);
     font-family: var(--font-mono);
-    font-size: 0.73rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    letter-spacing: 0.13em;
+    letter-spacing: 0.12em;
     line-height: 1.4;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1rem;
     text-transform: uppercase;
   }
 
   .manifesto-hero h1 {
     color: var(--manifesto-text);
-    font-size: clamp(3.2rem, 7vw, 6.6rem);
+    font-size: clamp(2.4rem, 5vw, 4.2rem);
     font-weight: 800;
-    letter-spacing: -0.065em;
-    line-height: 0.94;
-    margin-bottom: 2rem;
-    max-width: 760px;
+    letter-spacing: -0.04em;
+    line-height: 1.05;
+    margin-bottom: 1.75rem;
   }
 
   .manifesto-lead {
     color: var(--manifesto-muted);
-    font-size: clamp(1.1rem, 1.7vw, 1.45rem);
-    line-height: 1.55;
-    margin-bottom: 2.25rem;
-    max-width: 620px;
+    font-size: clamp(1.05rem, 1.5vw, 1.25rem);
+    line-height: 1.6;
+    margin-bottom: 2rem;
   }
 
   .manifesto-link {
@@ -127,9 +153,9 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     color: var(--manifesto-text);
     display: inline-flex;
     font-size: 0.95rem;
-    font-weight: 700;
-    gap: 0.8rem;
-    padding-bottom: 0.45rem;
+    font-weight: 600;
+    gap: 0.5rem;
+    padding-bottom: 0.35rem;
   }
 
   .manifesto-link:hover {
@@ -139,79 +165,72 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
   .manifesto-art {
     margin: 0;
-    max-width: 440px;
+    max-width: 420px;
     justify-self: end;
-    position: relative;
-  }
-
-  .manifesto-art::after {
-    border: 1px solid var(--manifesto-accent);
-    content: '';
-    inset: 1rem -1rem -1rem 1rem;
-    pointer-events: none;
-    position: absolute;
-    z-index: 0;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    border: 1px solid #2e3037;
   }
 
   .manifesto-art img {
     aspect-ratio: 2 / 3;
     display: block;
     object-fit: cover;
-    position: relative;
     width: 100%;
-    z-index: 1;
   }
 
   .manifesto-art figcaption {
     color: var(--manifesto-muted);
     font-family: var(--font-mono);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     line-height: 1.4;
-    margin-top: 1.2rem;
-    max-width: 280px;
+    padding: 0.75rem 1rem;
+    background-color: var(--manifesto-surface);
   }
 
   .manifesto-rule {
     background: var(--manifesto-accent);
     height: 1px;
-    margin: clamp(5rem, 10vw, 10rem) 0 clamp(3rem, 7vw, 7rem);
-    opacity: 0.75;
+    margin: clamp(4rem, 8vw, 6rem) 0 clamp(2.5rem, 5vw, 4.5rem);
+    opacity: 0.4;
     width: 100%;
   }
 
   .manifesto-grid {
     display: grid;
-    gap: clamp(3rem, 9vw, 9rem);
+    gap: clamp(2.5rem, 6vw, 6rem);
     grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr);
   }
 
   .manifesto-prose {
-    max-width: 700px;
+    max-width: 680px;
   }
 
   .manifesto-prose .manifesto-index:not(:first-child) {
-    margin-top: 4rem;
+    margin-top: 3.5rem;
   }
 
   .manifesto-prose h2 {
     color: var(--manifesto-text);
-    font-size: clamp(1.7rem, 3vw, 2.6rem);
-    letter-spacing: -0.04em;
-    line-height: 1.05;
+    font-size: clamp(1.6rem, 2.5vw, 2.2rem);
+    letter-spacing: -0.03em;
+    line-height: 1.15;
     margin: 0 0 1rem;
   }
 
   .manifesto-prose p:not(.manifesto-index) {
     color: var(--manifesto-muted);
     font-size: 1.05rem;
-    line-height: 1.8;
+    line-height: 1.75;
     margin: 0;
   }
 
   .manifesto-aside {
     align-self: start;
     background: var(--manifesto-surface);
+    border: 1px solid #2e3037;
     border-left: 3px solid var(--manifesto-accent);
+    border-radius: var(--radius-lg);
     padding: 2rem;
     position: sticky;
     top: 7rem;
@@ -222,32 +241,28 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     font-family: var(--font-mono);
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.1em;
-    line-height: 1.5;
-    margin-bottom: 3.5rem;
+    letter-spacing: 0.08em;
+    line-height: 1.4;
+    margin-bottom: 2rem;
   }
 
   .manifesto-aside blockquote {
     color: var(--manifesto-text);
-    font-size: clamp(1.45rem, 2.4vw, 2.2rem);
+    font-size: clamp(1.25rem, 2vw, 1.75rem);
     font-weight: 700;
-    letter-spacing: -0.04em;
-    line-height: 1.08;
-    margin: 0 0 2rem;
+    letter-spacing: -0.03em;
+    line-height: 1.25;
+    margin: 0 0 1.5rem;
   }
 
   .manifesto-signature {
     color: var(--manifesto-muted);
     font-family: var(--font-mono);
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     margin: 0;
   }
 
   @media (max-width: 800px) {
-    .manifesto-container {
-      width: min(100% - 2rem, 620px);
-    }
-
     .manifesto-hero,
     .manifesto-grid {
       grid-template-columns: 1fr;
@@ -255,25 +270,11 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
     .manifesto-art {
       justify-self: start;
-      max-width: 380px;
+      max-width: 360px;
     }
 
     .manifesto-aside {
       position: static;
-    }
-  }
-
-  @media (max-width: 480px) {
-    .manifesto-container {
-      padding: 3rem 0 5rem;
-    }
-
-    .manifesto-hero h1 {
-      font-size: 3.25rem;
-    }
-
-    .manifesto-art::after {
-      inset: 0.6rem -0.6rem -0.6rem 0.6rem;
     }
   }
 </style>

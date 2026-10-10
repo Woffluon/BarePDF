@@ -2,9 +2,15 @@
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
 ---
 
-<section class="screenshot-section">
+<section class="screenshot-section" aria-label="Application Interface View">
   <div class="container">
     <div class="screenshot-frame">
+      <div class="frame-bar" aria-hidden="true">
+        <span class="frame-dot"></span>
+        <span class="frame-dot"></span>
+        <span class="frame-dot"></span>
+        <span class="frame-title">BarePDF — Native Windows Interface</span>
+      </div>
       <picture class="screenshot-picture">
         <img
           src={`${baseUrl}/images/app-interface.webp`}
@@ -17,30 +23,54 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
         />
       </picture>
     </div>
+    <p class="screenshot-caption" data-i18n
+      data-en="Actual release interface running on Windows 11. Fluent dark theme, integrated thumbnail navigation, and keyboard-driven HUD."
+      data-tr="Windows 11 üzerinde çalışan gerçek sürüm arayüzü. Fluent koyu tema, entegre küçük resim gezintisi ve klavye odaklı komut paleti.">
+      Actual release interface running on Windows 11. Fluent dark theme, integrated thumbnail navigation, and keyboard-driven HUD.
+    </p>
   </div>
 </section>
 
 <style>
   .screenshot-section {
-    padding: 1rem 0 4rem;
+    padding: 1.5rem 0 3.5rem;
   }
 
   .screenshot-frame {
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow: var(--shadow-lg);
-    transition: transform var(--transition-normal);
+    box-shadow: var(--shadow-md);
   }
 
-  .screenshot-frame:hover {
-    transform: translateY(-2px);
+  .frame-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0.65rem 1rem;
+    background-color: var(--color-surface-subtle);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .frame-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background-color: var(--color-border);
+  }
+
+  .frame-title {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    margin-left: 0.5rem;
   }
 
   .screenshot-picture {
     display: block;
     width: 100%;
+    background-color: #121316;
   }
 
   .screenshot-img {
@@ -48,5 +78,13 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
     width: 100%;
     height: auto;
     object-fit: cover;
+  }
+
+  .screenshot-caption {
+    font-size: 0.8125rem;
+    color: var(--color-text-dim);
+    text-align: center;
+    margin-top: 0.85rem;
+    margin-bottom: 0;
   }
 </style>
