@@ -6,6 +6,7 @@ use semver::Version;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -14,7 +15,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ureq::Agent;
 
 const INSTALLER_TIMEOUT: Duration = Duration::from_mins(30);
+#[cfg(windows)]
 const FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 static VERIFIED_INSTALLER_LOCK: Mutex<Option<(PathBuf, File)>> = Mutex::new(None);
@@ -106,21 +109,28 @@ fn verify_file_integrity(
     expected_size: u64,
     expected_sha256: &str,
 ) -> Result<File, UpdateFailure> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .open(path)
-        .map_err(|source| UpdateFailure::Io {
-            operation: "Could not reopen downloaded update",
-            source,
-        })?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ);
+    let mut file = options.open(path).map_err(|source| UpdateFailure::Io {
+        operation: "Could not reopen downloaded update",
+        source,
+    })?;
     let metadata = file.metadata().map_err(|source| UpdateFailure::Io {
         operation: "Could not inspect downloaded update",
         source,
     })?;
+    #[cfg(windows)]
     if !metadata.is_file() || (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
         return Err(UpdateFailure::Rejected(
             "Downloaded installer must be a regular non-reparse file",
+        ));
+    }
+    #[cfg(not(windows))]
+    if !metadata.is_file() {
+        return Err(UpdateFailure::Rejected(
+            "Downloaded installer must be a regular file",
         ));
     }
     validate_download_size(metadata.len(), expected_size)?;
@@ -188,12 +198,11 @@ fn create_unique_partial(
             ".BarePDF-Setup-x64-v{version}-{}-{nonce}-{attempt}.partial",
             std::process::id()
         ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .share_mode(0)
-            .open(&path)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        options.share_mode(0);
+        match options.open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(source) => {
