@@ -194,7 +194,10 @@ jobs:
         run: cargo build --release --locked --package barepdf
 
       - name: Build Debian/Pardus Package (.deb)
-        run: cargo deb --package barepdf --no-build
+        run: |
+          cargo deb --package barepdf --no-build
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="barepdf") | .version')
+          mv target/debian/*.deb "target/debian/barepdf_${VERSION}_amd64.deb"
 
       - name: Generate AppImage
         run: |

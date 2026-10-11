@@ -130,7 +130,7 @@ function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
   });
 
   return (['installer', 'portable', 'checksum', 'deb', 'appimage'] as const).flatMap((type: ReleaseAssetType) => {
-    const asset = candidates.find((candidate) => candidate.name === expectedNames[type]);
+    const asset = candidates.find((candidate) => candidate.type === type);
     return asset ? [asset] : [];
   });
 }

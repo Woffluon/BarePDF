@@ -66,6 +66,8 @@ export function releaseAssetType(name: string, tag: string): ReleaseAssetType | 
   for (const type of ['installer', 'portable', 'checksum', 'deb', 'appimage'] as const) {
     if (names[type] === name) return type;
   }
+  const version = /^v(\d+\.\d+\.\d+)$/.exec(tag)?.[1];
+  if (version && name === `barepdf_${version}-1_amd64.deb`) return 'deb';
   return null;
 }
 
