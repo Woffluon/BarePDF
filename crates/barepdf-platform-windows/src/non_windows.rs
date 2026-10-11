@@ -1,7 +1,7 @@
 use barepdf_core::{EncodedImageFormat, ImageEncodeError, ImageEncoder, PageCount, RawBitmap};
 use barepdf_platform::printing::{
-    InstalledPrinter, PrintDuplex, PrintError, PrintJobId, PrintPage, PrintRange, PrintSelection,
-    PrinterDialog, PrinterSink,
+    PrintDuplex, PrintError, PrintJobId, PrintPage, PrintRange, PrintSelection, PrinterDialog,
+    PrinterSink,
 };
 use barepdf_platform::watcher::DocumentFileWatcher as DocumentFileWatcherTrait;
 use barepdf_platform::PlatformError;
