@@ -61,11 +61,17 @@ if (-not $UsesCanonicalAssets) {
     $AliasChecksums = "BarePDF-SHA256SUMS.txt"
     $Required += @($AliasInstaller, $AliasPortable, $AliasChecksums)
 }
+$Allowed = @($Required) + @(
+    "BarePDF-$Version-x86_64.AppImage",
+    "barepdf_${Version}_amd64.deb",
+    "barepdf_${Version}-1_amd64.deb"
+)
+
 $Assets = @($Release.assets)
 $Names = @($Assets | ForEach-Object { $_.name })
 $Missing = @($Required | Where-Object { $_ -notin $Names })
 if ($Missing.Count -gt 0) { throw "Existing immutable release is incomplete: $($Missing -join ', ')" }
-$Unexpected = @($Names | Where-Object { $_ -notin $Required })
+$Unexpected = @($Names | Where-Object { $_ -notin $Allowed })
 if ($Unexpected.Count -gt 0) { throw "Existing immutable release contains unexpected assets: $($Unexpected -join ', ')" }
 
 $BytesByName = @{}
