@@ -1,4 +1,5 @@
 use arboard::Clipboard;
+use barepdf_platform::PlatformError;
 use std::sync::Mutex;
 
 pub struct LinuxClipboard {
@@ -13,12 +14,36 @@ impl LinuxClipboard {
         }
     }
 
-    pub fn set_text(&self, text: &str) -> bool {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn set_text(&self, text: &str) -> Result<(), PlatformError> {
+        let mut guard = self.inner.lock().map_err(|_| PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
         if guard.is_none() {
             *guard = Clipboard::new().ok();
         }
-        guard.as_mut().and_then(|c| c.set_text(text).ok()).is_some()
+        let cb = guard.as_mut().ok_or(PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        cb.set_text(text).map_err(|source| PlatformError::External {
+            operation: "Could not write clipboard text",
+            source: Box::new(source),
+        })
+    }
+
+    pub fn get_text(&self) -> Result<String, PlatformError> {
+        let mut guard = self.inner.lock().map_err(|_| PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        if guard.is_none() {
+            *guard = Clipboard::new().ok();
+        }
+        let cb = guard.as_mut().ok_or(PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        cb.get_text().map_err(|source| PlatformError::External {
+            operation: "Could not read clipboard text",
+            source: Box::new(source),
+        })
     }
 }
 

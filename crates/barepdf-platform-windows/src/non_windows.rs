@@ -1,7 +1,7 @@
 use barepdf_core::{EncodedImageFormat, ImageEncodeError, ImageEncoder, PageCount, RawBitmap};
 use barepdf_platform::printing::{
-    InstalledPrinter, PrintError, PrintJobId, PrintPage, PrintRange, PrintSelection, PrinterDialog,
-    PrinterSink,
+    InstalledPrinter, PrintDuplex, PrintError, PrintJobId, PrintPage, PrintRange, PrintSelection,
+    PrinterDialog, PrinterSink,
 };
 use barepdf_platform::watcher::DocumentFileWatcher as DocumentFileWatcherTrait;
 use barepdf_platform::PlatformError;
@@ -11,9 +11,10 @@ use std::sync::mpsc::Receiver;
 
 pub use barepdf_platform::printing::PrintOrientation;
 pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeEvent, FileChangeWatcher};
-pub use barepdf_platform_linux::{ask_yes_no, open_url, show_fatal_error};
-pub type WindowsClipboard = barepdf_platform_linux::LinuxClipboard;
-pub type WindowsFileDialogs = barepdf_platform_linux::LinuxFileDialogs;
+pub use barepdf_platform_linux::{
+    ask_yes_no, open_url, show_fatal_error, LinuxClipboard as WindowsClipboard,
+    LinuxFileDialogs as WindowsFileDialogs,
+};
 
 #[must_use]
 pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
@@ -23,6 +24,21 @@ pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
 pub struct WindowsPrinterSink {
     job_id: PrintJobId,
     target_dpi: u16,
+}
+
+impl WindowsPrinterSink {
+    pub const DEFAULT_DPI: u16 = 300;
+
+    pub fn direct(
+        job_id: PrintJobId,
+        target_dpi: u16,
+        _printer_name: &str,
+        _orientation: PrintOrientation,
+        _duplex: PrintDuplex,
+        _copies: u16,
+    ) -> Result<Self, PrintError> {
+        Ok(Self { job_id, target_dpi })
+    }
 }
 
 impl PrinterSink for WindowsPrinterSink {
