@@ -258,6 +258,8 @@ jobs:
             ### Downloads
             - **Windows installer:** `BarePDF-Setup-x64-v${{ matrix.release.version }}.exe`
             - **Portable package:** `BarePDF-Portable-x64-v${{ matrix.release.version }}.zip`
+            - **Debian / Pardus package:** `barepdf_${{ matrix.release.version }}_amd64.deb`
+            - **Universal Linux AppImage:** `BarePDF-${{ matrix.release.version }}-x86_64.AppImage`
             - **Checksums:** `BarePDF-v${{ matrix.release.version }}-SHA256SUMS.txt`
 
             Update authenticity policy: https://github.com/Woffluon/BarePDF#update-authenticity-policy
@@ -269,10 +271,81 @@ jobs:
           make_latest: "false"
           token: ${{ github.token }}
 
-  finalize:
-    name: Finalize Latest Release
+  publish-linux:
+    name: Publish Linux Assets for ${{ matrix.release.tag }}
     needs: [ discover, publish ]
     if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.releases) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ matrix.release.sha }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.95.0
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Download Pinned Pdfium Linux Binary
+        run: |
+          mkdir -p target/release
+          curl -fsSL -o target/release/pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          tar -xzf target/release/pdfium-linux-x64.tgz -C target/release lib/libpdfium.so
+          mv target/release/lib/libpdfium.so target/release/
+          rm -rf target/release/lib target/release/pdfium-linux-x64.tgz
+
+      - name: Build BarePDF Release
+        run: cargo build --release --locked --package barepdf
+
+      - name: Build Debian/Pardus Package (.deb)
+        run: cargo deb --package barepdf --no-build
+
+      - name: Generate AppImage
+        run: |
+          VERSION="${{ matrix.release.version }}"
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/barepdf AppDir/usr/bin/
+          cp target/release/libpdfium.so AppDir/usr/lib/
+          cp packaging/linux/barepdf.desktop AppDir/
+          cp packaging/linux/icons/barepdf.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          cp packaging/linux/icons/barepdf.svg AppDir/barepdf.svg
+          echo '#!/bin/sh' > AppDir/AppRun
+          echo 'HERE="$(dirname "$(readlink -f "${0}")")"' >> AppDir/AppRun
+          echo 'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' >> AppDir/AppRun
+          echo 'exec "${HERE}/usr/bin/barepdf" "$@"' >> AppDir/AppRun
+          chmod +x AppDir/AppRun
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "BarePDF-${VERSION}-x86_64.AppImage"
+
+      - name: Upload Linux Assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ matrix.release.tag }}" target/debian/*.deb *.AppImage --clobber
+
+  finalize:
+    name: Finalize Latest Release
+    needs: [ discover, publish, publish-linux ]
+    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success' && needs.publish-linux.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write

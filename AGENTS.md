@@ -14,16 +14,17 @@ This file applies to the entire repository. Every AI agent and delegated subagen
 
 - Touch only files and lines required by the task.
 - Do not refactor, reformat, rename, or delete adjacent code without a direct need.
-- Reuse existing helpers, standard-library facilities, native Windows APIs, and installed dependencies before adding new abstractions or packages.
+- Reuse existing helpers, standard-library facilities, native Windows and Linux platform APIs, and installed dependencies before adding new abstractions or packages.
 - Do not create interfaces, factories, configuration layers, or extension points for a single implementation.
 - Remove imports, variables, and helpers made unused by your own change. Leave unrelated existing debt alone and report it separately.
 - Preserve user-authored changes in a dirty worktree. Never use destructive Git recovery commands unless explicitly authorized.
 
 ## 3. Repository Orientation
 
-- Rust workspace source lives under `apps/` and `crates/`.
+- Rust workspace source lives under `apps/` and `crates/` (including `barepdf-platform-windows` and `barepdf-platform-linux`).
 - The Astro website lives under `website/`.
 - Windows packaging lives under `packaging/windows/`.
+- Linux and Pardus packaging lives under `packaging/linux/` (`barepdf.desktop`, application icon, and cargo-deb configuration).
 - CI and deployment workflows live under `.github/workflows/`.
 - If `.codegraph/` exists, use CodeGraph before text search for code-flow questions. Do not create an index unless asked.
 - Use `rg` and `rg --files` for normal repository search.
@@ -73,6 +74,7 @@ pnpm --dir website run build
 powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact full commit message>"
 ```
 
+- Linux package validation runs in CI via `.github/workflows/ci.yml` (`linux-build-and-package` job) and can be dispatched via `gh workflow run build-linux.yml`.
 - Security or packaging changes also require RustSec audit and Windows staging/package validation.
 - Never fix a failing check by weakening or deleting the check without explicit user approval.
 - Add the smallest runnable regression test for non-trivial parsing, branching, security, or versioning logic.
@@ -85,7 +87,7 @@ powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact
 - GitHub Actions must use least-privilege permissions and pin third-party actions by full commit SHA.
 - Release publication must be idempotent: an existing tag is accepted only when it resolves to the same commit; conflicting tags/releases fail.
 - Never overwrite assets on an older stable release. Every product version gets a new immutable tag and release.
-- Publish exactly one versioned installer, one versioned portable archive, one versioned checksum manifest, `latest.json`, and `latest.json.sig` per release. Do not publish duplicate alias copies.
+- Publish exactly one versioned Windows installer (`BarePDF-Setup-x64-v<version>.exe`), one versioned portable archive (`BarePDF-Portable-x64-v<version>.zip`), one Debian/Pardus package (`barepdf_<version>_amd64.deb`), one universal Linux AppImage (`BarePDF-<version>-x86_64.AppImage`), one versioned checksum manifest (`BarePDF-v<version>-SHA256SUMS.txt`), `latest.json`, and `latest.json.sig` per release. Do not publish duplicate alias copies.
 - Hash checks do not replace signature verification. Update installers require a valid manifest signature from the public key pinned in the application, exact SHA-256/size/version matching, and an approved immutable release URL.
 
 ## 8. Updater and Privacy Rules
@@ -96,7 +98,8 @@ powershell -File packaging/windows/scripts/validate-version.ps1 -Message "<exact
 - Only HTTPS GitHub/BarePDF release endpoints may supply update metadata or installers.
 - Never install silently. Download, verify, present the release, and require an explicit install action.
 - Never permit downgrade, same-version reinstall, untrusted redirects, hash mismatch, invalid signature, unexpected signer, oversized payload, or partial-file execution.
-- Portable builds notify and link to the release; they do not self-replace.
+- Portable builds and Linux builds notify and link to the release; they do not self-replace.
+- Linux installations never request root privileges (`sudo`/`pkexec`) or overwrite files in `/usr/bin/` or `/usr/lib/` directly; package manager updates are handled via standard distribution tooling (`apt` or Pardus Paket Kurucu).
 - Update failures are non-fatal and must leave the current installation usable.
 
 ## 9. Website and Documentation Data

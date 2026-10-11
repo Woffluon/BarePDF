@@ -17,22 +17,23 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: 1.92.0
+          toolchain: 1.95.0
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
 
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
 
       - name: Download Pinned Pdfium Linux Binary
         run: |
-          curl -sSL -o pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F6895/pdfium-linux-x64.tgz
-          tar -xzf pdfium-linux-x64.tgz lib/libpdfium.so
           mkdir -p target/release
-          mv lib/libpdfium.so target/release/
+          curl -fsSL -o target/release/pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          tar -xzf target/release/pdfium-linux-x64.tgz -C target/release lib/libpdfium.so
+          mv target/release/lib/libpdfium.so target/release/
+          rm -rf target/release/lib target/release/pdfium-linux-x64.tgz
 
       - name: Build BarePDF Release
         run: cargo build --release --locked --package barepdf
@@ -42,7 +43,8 @@ jobs:
 
       - name: Generate AppImage
         run: |
-          curl -sSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="barepdf") | .version')
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
           cp target/release/barepdf AppDir/usr/bin/
@@ -55,7 +57,7 @@ jobs:
           echo 'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' >> AppDir/AppRun
           echo 'exec "${HERE}/usr/bin/barepdf" "$@"' >> AppDir/AppRun
           chmod +x AppDir/AppRun
-          ./appimagetool AppDir BarePDF-x86_64.AppImage
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "BarePDF-${VERSION}-x86_64.AppImage"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -64,3 +66,4 @@ jobs:
           path: |
             target/debian/*.deb
             *.AppImage
+

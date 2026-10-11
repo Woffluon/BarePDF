@@ -154,3 +154,71 @@ jobs:
         with:
           name: BarePDF-Windows-CI-Build
           path: target/release/artifacts/*
+
+  linux-build-and-package:
+    name: Linux Package (.deb & AppImage) Test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.95.0
+
+      - name: Cargo Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Download Pinned Pdfium Linux Binary
+        run: |
+          mkdir -p target/release
+          curl -fsSL -o target/release/pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          tar -xzf target/release/pdfium-linux-x64.tgz -C target/release lib/libpdfium.so
+          mv target/release/lib/libpdfium.so target/release/
+          rm -rf target/release/lib target/release/pdfium-linux-x64.tgz
+
+      - name: Build BarePDF Release
+        run: cargo build --release --locked --package barepdf
+
+      - name: Build Debian/Pardus Package (.deb)
+        run: cargo deb --package barepdf --no-build
+
+      - name: Generate AppImage
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="barepdf") | .version')
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/barepdf AppDir/usr/bin/
+          cp target/release/libpdfium.so AppDir/usr/lib/
+          cp packaging/linux/barepdf.desktop AppDir/
+          cp packaging/linux/icons/barepdf.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          cp packaging/linux/icons/barepdf.svg AppDir/barepdf.svg
+          echo '#!/bin/sh' > AppDir/AppRun
+          echo 'HERE="$(dirname "$(readlink -f "${0}")")"' >> AppDir/AppRun
+          echo 'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' >> AppDir/AppRun
+          echo 'exec "${HERE}/usr/bin/barepdf" "$@"' >> AppDir/AppRun
+          chmod +x AppDir/AppRun
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "BarePDF-${VERSION}-x86_64.AppImage"
+
+      - name: Upload Linux Build Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: BarePDF-Linux-CI-Build
+          path: |
+            target/debian/*.deb
+            *.AppImage
+
