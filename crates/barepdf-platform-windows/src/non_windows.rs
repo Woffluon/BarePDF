@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 pub use barepdf_platform::printing::PrintOrientation;
-pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeWatcher};
+pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeEvent, FileChangeWatcher};
 pub use barepdf_platform_linux::{ask_yes_no, open_url, show_fatal_error};
 pub type WindowsClipboard = barepdf_platform_linux::LinuxClipboard;
 pub type WindowsFileDialogs = barepdf_platform_linux::LinuxFileDialogs;
@@ -42,11 +42,9 @@ impl PrinterSink for WindowsPrinterSink {
         Err(PrintError::InvalidState)
     }
 
-    fn finish(&mut self) -> Result<(), PrintError> {
+    fn finish(self: Box<Self>) -> Result<(), PrintError> {
         Ok(())
     }
-
-    fn cancel(&mut self) {}
 }
 
 pub struct WindowsPrinterDialog;
@@ -80,22 +78,30 @@ impl PrinterDialog for WindowsPrinterDialog {
     }
 }
 
-pub struct WindowsDocumentFileWatcher;
+pub struct WindowsDocumentFileWatcher {
+    path: PathBuf,
+}
 
 impl WindowsDocumentFileWatcher {
-    pub fn with_callback<F>(_path: &Path, _callback: F) -> Result<Self, PlatformError>
+    pub fn with_callback<F>(
+        path: &Path,
+        _debounce: std::time::Duration,
+        _callback: F,
+    ) -> Result<Self, PlatformError>
     where
-        F: FnMut() + Send + 'static,
+        F: FnMut(FileChangeEvent) + Send + 'static,
     {
-        Ok(Self)
+        Ok(Self {
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn stop(&self) {}
 }
 
 impl DocumentFileWatcherTrait for WindowsDocumentFileWatcher {
-    fn switch_path(&mut self, _target: &Path) -> Result<(), PlatformError> {
-        Ok(())
+    fn watched_path(&self) -> Option<PathBuf> {
+        Some(self.path.clone())
     }
 
     fn stop(&mut self) {}
@@ -130,9 +136,9 @@ pub fn install_file_drop(_window: WindowHandle<'_>) -> Option<Receiver<Vec<PathB
 }
 
 pub fn executable_file_version(_path: &Path) -> Result<[u16; 4], PlatformError> {
-    Err(PlatformError::Other(
-        "Not supported on this platform".into(),
-    ))
+    Err(PlatformError::Unavailable {
+        operation: "executable_file_version",
+    })
 }
 
 #[must_use]
@@ -143,9 +149,9 @@ pub fn is_installed_build() -> bool {
 }
 
 pub fn launch_installer(_path: &Path) -> Result<(), PlatformError> {
-    Err(PlatformError::Other(
-        "Installer is not supported on this platform".into(),
-    ))
+    Err(PlatformError::Unavailable {
+        operation: "launch_installer",
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
