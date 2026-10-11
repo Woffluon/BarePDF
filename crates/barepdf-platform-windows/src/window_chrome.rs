@@ -29,6 +29,7 @@ pub enum WindowHit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowCommand {
     Minimize,
+    Maximize,
     ToggleMaximize,
     Close,
 }
@@ -112,6 +113,13 @@ pub fn send_window_command(window: WindowHandle<'_>, command: WindowCommand) -> 
             // SAFETY: `window` guarantees a live Win32 `HWND` on the calling UI thread.
             unsafe {
                 ShowWindow(hwnd, SW_MINIMIZE);
+            }
+            true
+        }
+        WindowCommand::Maximize => {
+            // SAFETY: `window` guarantees a live Win32 `HWND` on the calling UI thread.
+            unsafe {
+                ShowWindow(hwnd, SW_MAXIMIZE);
             }
             true
         }
@@ -227,6 +235,7 @@ mod tests {
 
         assert!(!begin_native_drag(handle, WindowHit::Caption));
         assert!(!send_window_command(handle, WindowCommand::Minimize));
+        assert!(!send_window_command(handle, WindowCommand::Maximize));
         assert!(!send_window_command(handle, WindowCommand::ToggleMaximize));
         assert!(!send_window_command(handle, WindowCommand::Close));
         assert!(!apply_frameless_style(handle));

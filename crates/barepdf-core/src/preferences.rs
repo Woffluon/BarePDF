@@ -55,6 +55,7 @@ pub struct UserPreferences {
     pub paper_tint: u8,
     pub invert_colors: bool,
     pub welcome_manifesto_seen: bool,
+    pub window_maximized: bool,
 }
 
 pub type AppPreferences = UserPreferences;
@@ -79,6 +80,7 @@ impl Default for UserPreferences {
             paper_tint: 0,
             invert_colors: false,
             welcome_manifesto_seen: false,
+            window_maximized: true,
         }
     }
 }
@@ -220,5 +222,28 @@ mod tests {
         };
         let json = serde_json::to_string(&prefs).unwrap();
         assert!(json.contains(r#""invert_colors":true"#));
+    }
+
+    #[test]
+    fn window_maximized_defaults_to_true_and_persists() {
+        let preferences = UserPreferences::default();
+        assert!(preferences.window_maximized);
+
+        // Deserializing empty JSON object should default window_maximized to true
+        let deserialized: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(deserialized.window_maximized);
+
+        // Deserializing with window_maximized: false
+        let deserialized_false: UserPreferences =
+            serde_json::from_str(r#"{"window_maximized":false}"#).unwrap();
+        assert!(!deserialized_false.window_maximized);
+
+        // Serializing with window_maximized: false
+        let prefs = UserPreferences {
+            window_maximized: false,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&prefs).unwrap();
+        assert!(json.contains(r#""window_maximized":false"#));
     }
 }

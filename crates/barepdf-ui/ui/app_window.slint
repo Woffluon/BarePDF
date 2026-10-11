@@ -288,6 +288,8 @@ export component AppWindow inherits Window {
     in-out property <string> text-toolbar-rotate: "Rotate (Ctrl+R)";
     in-out property <string> text-toolbar-draw: "Draw";
     in-out property <string> text-toolbar-pan: "Pan";
+    in-out property <string> text-toolbar-dock-top: "Move toolbar to top";
+    in-out property <string> text-toolbar-dock-bottom: "Move toolbar to bottom";
     in-out property <string> text-toolbar-sign: "Sign";
     in-out property <string> text-context-find: "Find in Document";
     in-out property <string> text-context-highlight: "Highlight";
@@ -907,7 +909,7 @@ export component AppWindow inherits Window {
                     clicked => { root.toggle-drawing-mode(); }
                 }
                 IconButton {
-                    icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+                    icon: @image-url("../../../assets/icons/hand_right_20_regular.svg");
                     label: root.text-toolbar-pan;
                     tooltip: root.text-toolbar-pan;
                     show-label: root.width >= 1080px;
@@ -1099,8 +1101,8 @@ export component AppWindow inherits Window {
                                 Rectangle {
                                     x: (parent.width - self.width) / 2;
                                     y: 8px + (150px - self.height) / 2;
-                                    width: Math.min(140px, thumb.width);
-                                    height: Math.min(150px, thumb.height);
+                                    width: thumb.width;
+                                    height: thumb.height;
                                     border-radius: ThemeTokens.page-radius;
                                     background: white;
                                     border-width: 1px;
@@ -1895,7 +1897,7 @@ export component AppWindow inherits Window {
                         IconButton {
                             height: 40px;
                             icon: @image-url("../../../assets/icons/chevron_down_20_regular.svg");
-                            tooltip: root.drawing-toolbar-at-bottom ? "Move toolbar to top" : "Move toolbar to bottom";
+                            tooltip: root.drawing-toolbar-at-bottom ? root.text-toolbar-dock-top : root.text-toolbar-dock-bottom;
                             clicked => {
                                 root.drawing-toolbar-at-bottom = !root.drawing-toolbar-at-bottom;
                                 root.toggle-drawing-toolbar-position();
@@ -1905,10 +1907,10 @@ export component AppWindow inherits Window {
                         Rectangle { width: 1px; height: 26px; background: ThemeTokens.divider; }
 
                         // Pan mode button
-                        TextButton {
+                        IconButton {
                             height: 40px;
-                            min-width: 44px;
-                            text: root.text-toolbar-pan;
+                            icon: @image-url("../../../assets/icons/hand_right_20_regular.svg");
+                            tooltip: root.text-toolbar-pan;
                             active: root.pan-mode-active;
                             clicked => {
                                 root.pan-mode-active = true;
@@ -2496,7 +2498,7 @@ export component AppWindow inherits Window {
             }
         }
         if root.width < 900px : MenuItem {
-            icon: @image-url("../../../assets/icons/arrow_fit_20_regular.svg");
+            icon: @image-url("../../../assets/icons/hand_right_20_regular.svg");
             has-icon: true;
             text: root.text-toolbar-pan;
             checked: root.pan-mode-active;

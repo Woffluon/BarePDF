@@ -621,7 +621,10 @@ const TURKISH_TOOLS: &[(&str, &str)] = &[
 const ENGLISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("toolbar.rotate", "Rotate (Ctrl+R)"),
     ("toolbar.draw", "Draw"),
+    ("toolbar.pan", "Pan"),
     ("toolbar.sign", "Sign"),
+    ("toolbar.dock_top", "Move toolbar to top"),
+    ("toolbar.dock_bottom", "Move toolbar to bottom"),
     ("toolbar.text", "Text"),
     ("toolbar.typewriter", "Typewriter / Text"),
     ("toolbar.crop", "Crop Pages"),
@@ -636,6 +639,7 @@ const ENGLISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("draw.pen", "Pen"),
     ("draw.eraser", "Eraser"),
     ("draw.undo", "Undo"),
+    ("draw.redo", "Redo"),
     ("draw.clear", "Clear"),
     ("draw.save", "Save"),
     ("draw.save_as", "Save As…"),
@@ -654,7 +658,10 @@ const ENGLISH_ANNOTATIONS: &[(&str, &str)] = &[
 const TURKISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("toolbar.rotate", "Döndür (Ctrl+R)"),
     ("toolbar.draw", "Çizim"),
+    ("toolbar.pan", "Kaydır"),
     ("toolbar.sign", "İmzala"),
+    ("toolbar.dock_top", "Araç çubuğunu üste taşı"),
+    ("toolbar.dock_bottom", "Araç çubuğunu alta taşı"),
     ("toolbar.text", "Metin Ekle"),
     ("toolbar.typewriter", "Metin Ekle"),
     ("toolbar.crop", "Sayfaları Kırp"),
@@ -669,6 +676,7 @@ const TURKISH_ANNOTATIONS: &[(&str, &str)] = &[
     ("draw.pen", "Kalem"),
     ("draw.eraser", "Silgi"),
     ("draw.undo", "Geri Al"),
+    ("draw.redo", "Yinele"),
     ("draw.clear", "Temizle"),
     ("draw.save", "Kaydet"),
     ("draw.save_as", "Farklı Kaydet…"),
@@ -753,19 +761,58 @@ mod tests {
     #[test]
     fn test_translation_completeness() {
         for table in ENGLISH_TABLES {
-            for &(key, _) in *table {
+            for &(key, en_val) in *table {
+                let tr_val = lookup_tables(TURKISH_TABLES, key);
                 assert!(
-                    lookup_tables(TURKISH_TABLES, key).is_some(),
+                    tr_val.is_some(),
                     "Missing Turkish translation for key: {key}"
                 );
+                let tr_val = tr_val.unwrap();
+                assert!(!en_val.is_empty(), "Empty English translation for: {key}");
+                assert!(!tr_val.is_empty(), "Empty Turkish translation for: {key}");
+
+                // Placeholder parity check: {placeholder} in en_val must be in tr_val
+                let en_placeholders: Vec<&str> = en_val
+                    .match_indices('{')
+                    .filter_map(|(start, _)| {
+                        en_val[start..]
+                            .find('}')
+                            .map(|end| &en_val[start..=start + end])
+                    })
+                    .collect();
+                for placeholder in en_placeholders {
+                    assert!(
+                        tr_val.contains(placeholder),
+                        "Turkish translation for '{key}' is missing placeholder '{placeholder}' from English '{en_val}'"
+                    );
+                }
             }
         }
         for table in TURKISH_TABLES {
-            for &(key, _) in *table {
+            for &(key, tr_val) in *table {
+                let en_val = lookup_tables(ENGLISH_TABLES, key);
                 assert!(
-                    lookup_tables(ENGLISH_TABLES, key).is_some(),
+                    en_val.is_some(),
                     "Missing English translation for key: {key}"
                 );
+                let en_val = en_val.unwrap();
+                assert!(!tr_val.is_empty(), "Empty Turkish translation for: {key}");
+                assert!(!en_val.is_empty(), "Empty English translation for: {key}");
+
+                let tr_placeholders: Vec<&str> = tr_val
+                    .match_indices('{')
+                    .filter_map(|(start, _)| {
+                        tr_val[start..]
+                            .find('}')
+                            .map(|end| &tr_val[start..=start + end])
+                    })
+                    .collect();
+                for placeholder in tr_placeholders {
+                    assert!(
+                        en_val.contains(placeholder),
+                        "English translation for '{key}' is missing placeholder '{placeholder}' from Turkish '{tr_val}'"
+                    );
+                }
             }
         }
     }
@@ -809,7 +856,18 @@ mod tests {
         let pairs = [
             ("toolbar.rotate", "Rotate (Ctrl+R)", "Döndür (Ctrl+R)"),
             ("toolbar.draw", "Draw", "Çizim"),
+            ("toolbar.pan", "Pan", "Kaydır"),
             ("toolbar.sign", "Sign", "İmzala"),
+            (
+                "toolbar.dock_top",
+                "Move toolbar to top",
+                "Araç çubuğunu üste taşı",
+            ),
+            (
+                "toolbar.dock_bottom",
+                "Move toolbar to bottom",
+                "Araç çubuğunu alta taşı",
+            ),
             ("context.find", "Find in Document", "Belgede Bul"),
             ("context.highlight", "Highlight", "Vurgula"),
             (
@@ -821,6 +879,7 @@ mod tests {
             ("draw.pen", "Pen", "Kalem"),
             ("draw.eraser", "Eraser", "Silgi"),
             ("draw.undo", "Undo", "Geri Al"),
+            ("draw.redo", "Redo", "Yinele"),
             ("draw.clear", "Clear", "Temizle"),
             ("draw.save", "Save", "Kaydet"),
             ("draw.save_as", "Save As…", "Farklı Kaydet…"),

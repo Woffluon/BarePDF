@@ -211,7 +211,6 @@ pub(super) fn wire_callbacks(
 
     let weak = window.as_weak();
     let state_update_check = state.clone();
-    let preferences_path_check = preferences_path.to_path_buf();
     let update_sender_check = update_sender.clone();
     let update_check_canceller_check = update_check_canceller.clone();
     window.on_request_check_update(move || {
@@ -221,7 +220,6 @@ pub(super) fn wire_callbacks(
                 &update_check_canceller_check,
                 &state_update_check,
                 &window,
-                &preferences_path_check,
             );
         }
     });

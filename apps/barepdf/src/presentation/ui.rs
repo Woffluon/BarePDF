@@ -73,9 +73,7 @@ use super::models::{
     refresh_thumbnail_selection,
 };
 use super::state::{fit_bitmap_to_budget, AppState, FlatOutlineEntry, LayoutKey};
-use super::update_ui::{
-    queue_update_check, render_update_ui, startup_update_check_should_run, unix_timestamp,
-};
+use super::update_ui::{queue_update_check, render_update_ui, startup_update_check_should_run};
 
 pub(crate) fn run() -> Result<(), AppError> {
     let pdf_engine = match PdfiumEngine::new() {
@@ -143,15 +141,13 @@ pub(crate) fn run() -> Result<(), AppError> {
             print_controller.clone(),
         ),
     );
+    super::window_chrome::apply_initial_window_state(
+        &window,
+        state.borrow().preferences.window_maximized,
+    );
 
-    if startup_update_check_should_run(&state.borrow(), unix_timestamp()) {
-        queue_update_check(
-            &update_sender,
-            &update_check_canceller,
-            &state,
-            &window,
-            &preferences_path,
-        );
+    if startup_update_check_should_run(&state.borrow()) {
+        queue_update_check(&update_sender, &update_check_canceller, &state, &window);
     }
 
     let argument = env::args_os().nth(1);
@@ -214,6 +210,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     let mut app = state.borrow_mut();
     app.preferences.last_window_width = ((size.width as f32) / scale).round() as u32;
     app.preferences.last_window_height = ((size.height as f32) / scale).round() as u32;
+    app.preferences.window_maximized = super::window_chrome::is_maximized(&window);
     let (sessions, active_index) = snapshot_sessions(&app);
     app.preferences.open_tabs = sessions;
     app.preferences.active_tab_index = active_index;
@@ -1658,6 +1655,9 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_toolbar_more, "toolbar.more");
     set_text!(set_text_toolbar_rotate, "toolbar.rotate");
     set_text!(set_text_toolbar_draw, "toolbar.draw");
+    set_text!(set_text_toolbar_pan, "toolbar.pan");
+    set_text!(set_text_toolbar_dock_top, "toolbar.dock_top");
+    set_text!(set_text_toolbar_dock_bottom, "toolbar.dock_bottom");
     set_text!(set_text_toolbar_sign, "toolbar.sign");
     set_text!(set_text_context_find, "context.find");
     set_text!(set_text_context_highlight, "context.highlight");
@@ -1666,6 +1666,7 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
     set_text!(set_text_draw_pen, "draw.pen");
     set_text!(set_text_draw_eraser, "draw.eraser");
     set_text!(set_text_draw_undo, "draw.undo");
+    set_text!(set_text_draw_redo, "draw.redo");
     set_text!(set_text_draw_clear, "draw.clear");
     set_text!(set_text_draw_save, "draw.save");
     set_text!(set_text_draw_save_as, "draw.save_as");

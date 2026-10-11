@@ -61,7 +61,7 @@ impl VerifiedUpdate {
     }
 
     #[cfg(test)]
-    pub(super) fn for_test(version: &str, installer_sha256: String, installer_size: u64) -> Self {
+    pub(crate) fn for_test(version: &str, installer_sha256: String, installer_size: u64) -> Self {
         Self {
             version: version.to_owned(),
             release_url: format!("https://github.com/Woffluon/BarePDF/releases/tag/v{version}"),

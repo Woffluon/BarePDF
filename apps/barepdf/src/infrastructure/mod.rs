@@ -14,7 +14,8 @@ pub(crate) use tool_worker::ToolTask;
 pub(crate) use tool_worker::{
     ToolEvent, ToolJobKey, ToolOperation, ToolOutcome, ToolRequest, ToolWorker,
 };
+#[allow(unused_imports)]
 pub(crate) use update::{
     start_worker as start_update_worker, UpdateCheckCanceller, UpdateCommand, UpdateEvent,
-    VerifiedUpdate, AUTO_CHECK_INTERVAL_SECONDS, CURRENT_VERSION,
+    UpdateFailure, VerifiedUpdate, AUTO_CHECK_INTERVAL_SECONDS, CURRENT_VERSION,
 };

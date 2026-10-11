@@ -145,7 +145,7 @@ pub(super) fn start(
                 break;
             };
             had_activity = true;
-            handle_update_event(event, &window, &state);
+            handle_update_event(event, &window, &state, &preferences_path);
         }
         if let Some(controller) = print_controller.as_ref() {
             for _ in 0..EVENTS_PER_TICK {

@@ -13,6 +13,7 @@ use std::time::Duration;
 pub(crate) use manifest::VerifiedUpdate;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[allow(dead_code)]
 pub const AUTO_CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 const EVENT_CAPACITY: usize = 16;
@@ -56,6 +57,12 @@ pub(crate) enum UpdateFailure {
         #[source]
         source: barepdf_platform::PlatformError,
     },
+}
+
+impl UpdateFailure {
+    pub(crate) fn is_network_error(&self) -> bool {
+        matches!(self, Self::Transport { .. } | Self::Io { .. })
+    }
 }
 
 #[derive(Debug)]
@@ -205,6 +212,69 @@ pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
     )
 }
 
+pub(crate) const CHECK_BACKOFF_SCHEDULE: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_millis(1000),
+    Duration::from_millis(2000),
+];
+
+fn sleep_with_cancellation(
+    duration: Duration,
+    worker_cancelled: &AtomicBool,
+    check_cancelled: &AtomicBool,
+) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < duration {
+        if worker_cancelled.load(Ordering::Acquire) || check_cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+        let remaining = duration.saturating_sub(start.elapsed());
+        let step = remaining.min(Duration::from_millis(25));
+        std::thread::sleep(step);
+    }
+    !worker_cancelled.load(Ordering::Acquire) && !check_cancelled.load(Ordering::Acquire)
+}
+
+fn check_with_retry<F>(
+    mut check: F,
+    check_cancelled: &AtomicBool,
+    worker_cancelled: &AtomicBool,
+    backoff_schedule: &[Duration],
+) -> Result<Option<VerifiedUpdate>, UpdateFailure>
+where
+    F: FnMut() -> Result<Option<VerifiedUpdate>, UpdateFailure>,
+{
+    let mut attempt = 0;
+    loop {
+        if worker_cancelled.load(Ordering::Acquire) || check_cancelled.load(Ordering::Acquire) {
+            return Err(UpdateFailure::Cancelled);
+        }
+        match check() {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                if worker_cancelled.load(Ordering::Acquire)
+                    || check_cancelled.load(Ordering::Acquire)
+                {
+                    return Err(UpdateFailure::Cancelled);
+                }
+                if error.is_network_error() && attempt < backoff_schedule.len() {
+                    crate::diagnostics::warn_redacted(
+                        crate::diagnostics::DiagnosticEvent::Update,
+                        &error,
+                    );
+                    let backoff = backoff_schedule[attempt];
+                    attempt += 1;
+                    if !sleep_with_cancellation(backoff, worker_cancelled, check_cancelled) {
+                        return Err(UpdateFailure::Cancelled);
+                    }
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
+
 fn run_worker(
     commands: &Receiver<UpdateCommand>,
     events: &SyncSender<UpdateEvent>,
@@ -220,7 +290,12 @@ fn run_worker(
         }
         let event = match command {
             UpdateCommand::Check(check_cancelled) => {
-                match manifest::check_for_update(&agent, &check_cancelled) {
+                match check_with_retry(
+                    || manifest::check_for_update(&agent, &check_cancelled),
+                    &check_cancelled,
+                    cancelled,
+                    &CHECK_BACKOFF_SCHEDULE,
+                ) {
                     Ok(Some(update)) => UpdateEvent::Available(update),
                     Ok(None) => UpdateEvent::UpToDate,
                     Err(error) => UpdateEvent::Error(error),
@@ -453,5 +528,156 @@ mod tests {
 
         // Sender must unblock due to cancellation without deadlocking
         assert!(handle.join().is_ok());
+    }
+
+    #[test]
+    fn default_backoff_schedule_has_three_exponential_intervals() {
+        assert_eq!(CHECK_BACKOFF_SCHEDULE.len(), 3);
+        assert!(CHECK_BACKOFF_SCHEDULE[0] < CHECK_BACKOFF_SCHEDULE[1]);
+        assert!(CHECK_BACKOFF_SCHEDULE[1] < CHECK_BACKOFF_SCHEDULE[2]);
+    }
+
+    #[test]
+    fn check_with_retry_succeeds_without_retries_on_first_try() {
+        let check_cancelled = AtomicBool::new(false);
+        let worker_cancelled = AtomicBool::new(false);
+        let mut attempts = 0;
+        let schedule = [
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+
+        let result = check_with_retry(
+            || {
+                attempts += 1;
+                Ok(Some(VerifiedUpdate::for_test(
+                    "2.0.0",
+                    "a".repeat(64),
+                    1024,
+                )))
+            },
+            &check_cancelled,
+            &worker_cancelled,
+            &schedule,
+        );
+
+        assert_eq!(attempts, 1);
+        assert!(matches!(result, Ok(Some(update)) if update.version() == "2.0.0"));
+    }
+
+    #[test]
+    fn check_with_retry_retries_on_transient_network_error_and_succeeds() {
+        let check_cancelled = AtomicBool::new(false);
+        let worker_cancelled = AtomicBool::new(false);
+        let mut attempts = 0;
+        let schedule = [
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+
+        let result = check_with_retry(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(UpdateFailure::Io {
+                        operation: "test transient error",
+                        source: std::io::Error::other("connection reset"),
+                    })
+                } else {
+                    Ok(None)
+                }
+            },
+            &check_cancelled,
+            &worker_cancelled,
+            &schedule,
+        );
+
+        assert_eq!(attempts, 3);
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn check_with_retry_exhausts_retries_on_persistent_network_error() {
+        let check_cancelled = AtomicBool::new(false);
+        let worker_cancelled = AtomicBool::new(false);
+        let mut attempts = 0;
+        let schedule = [
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+
+        let result = check_with_retry(
+            || {
+                attempts += 1;
+                Err(UpdateFailure::Io {
+                    operation: "test persistent error",
+                    source: std::io::Error::other("host unreachable"),
+                })
+            },
+            &check_cancelled,
+            &worker_cancelled,
+            &schedule,
+        );
+
+        // 1 initial attempt + 3 retries = 4 attempts total
+        assert_eq!(attempts, 4);
+        assert!(matches!(result, Err(UpdateFailure::Io { .. })));
+    }
+
+    #[test]
+    fn check_with_retry_does_not_retry_on_non_network_error() {
+        let check_cancelled = AtomicBool::new(false);
+        let worker_cancelled = AtomicBool::new(false);
+        let mut attempts = 0;
+        let schedule = [
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+
+        let result = check_with_retry(
+            || {
+                attempts += 1;
+                Err(UpdateFailure::Rejected("invalid signature"))
+            },
+            &check_cancelled,
+            &worker_cancelled,
+            &schedule,
+        );
+
+        assert_eq!(attempts, 1);
+        assert!(matches!(result, Err(UpdateFailure::Rejected(_))));
+    }
+
+    #[test]
+    fn check_with_retry_aborts_promptly_when_cancelled_during_backoff() {
+        let check_cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::new(AtomicBool::new(false));
+        let schedule = [Duration::from_millis(500)];
+
+        let canceller = check_cancelled.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            canceller.store(true, Ordering::Release);
+        });
+
+        let start = Instant::now();
+        let result = check_with_retry(
+            || {
+                Err(UpdateFailure::Io {
+                    operation: "test abort error",
+                    source: std::io::Error::other("offline"),
+                })
+            },
+            &check_cancelled,
+            &worker_cancelled,
+            &schedule,
+        );
+
+        assert!(matches!(result, Err(UpdateFailure::Cancelled)));
+        assert!(start.elapsed() < Duration::from_millis(250));
     }
 }

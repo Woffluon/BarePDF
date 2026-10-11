@@ -6,6 +6,25 @@ use barepdf_ui::AppWindow;
 use raw_window_handle::HasWindowHandle;
 use slint::ComponentHandle;
 
+pub(crate) fn is_maximized(window: &AppWindow) -> bool {
+    let window_handle = window.window().window_handle();
+    if let Ok(handle) = window_handle.window_handle() {
+        is_window_maximized(handle)
+    } else {
+        false
+    }
+}
+
+pub(crate) fn apply_initial_window_state(window: &AppWindow, maximized: bool) {
+    if maximized {
+        let window_handle = window.window().window_handle();
+        if let Ok(handle) = window_handle.window_handle() {
+            let _ = send_window_command(handle, WindowCommand::Maximize);
+            window.set_window_maximized(is_window_maximized(handle));
+        }
+    }
+}
+
 pub(crate) fn sync_window_maximized(window: &AppWindow) {
     let window_handle = window.window().window_handle();
     if let Ok(handle) = window_handle.window_handle() {

@@ -714,14 +714,26 @@ pub(crate) fn refresh_thumbnail_selection(
     }
 }
 
+pub(crate) fn compute_thumbnail_dimensions(width: f32, height: f32) -> (f32, f32) {
+    let aspect_ratio = height / width.max(1.0);
+    if aspect_ratio > 150.0 / 140.0 {
+        let display_height = 150.0;
+        let display_width = (150.0 * width / height.max(1.0)).min(140.0);
+        (display_width, display_height)
+    } else {
+        let display_width = 140.0;
+        let display_height = (140.0 * height / width.max(1.0)).min(150.0);
+        (display_width, display_height)
+    }
+}
+
 fn thumbnail_item(app: &mut AppState, index: u32) -> ThumbnailItem {
     let (width, height) = app
         .page_dimensions
         .get(index as usize)
         .copied()
         .unwrap_or(app.first_page_dimensions);
-    let display_width = 140.0;
-    let display_height = (display_width * height / width.max(1.0)).min(150.0);
+    let (display_width, display_height) = compute_thumbnail_dimensions(width, height);
     let image = app.active_document().and_then(|document| {
         app.thumbnail_images
             .get(document, index, RenderKind::Thumbnail)
@@ -744,6 +756,28 @@ fn thumbnail_page_label(language: ResolvedLanguage, index: u32) -> SharedString 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_thumbnail_dimensions_scales_within_bounding_box() {
+        // A4 portrait (595 x 842): aspect ratio > 150/140, height should be 150.0, width scaled down proportionally (~106.0)
+        let (w_port, h_port) = compute_thumbnail_dimensions(595.0, 842.0);
+        assert_eq!(h_port, 150.0);
+        let expected_w = (150.0 * 595.0 / 842.0_f32).min(140.0);
+        assert!((w_port - expected_w).abs() < 1e-3);
+        assert!(w_port < 140.0);
+
+        // Landscape (842 x 595): aspect ratio < 150/140, width should be 140.0, height scaled down proportionally (~98.9)
+        let (w_land, h_land) = compute_thumbnail_dimensions(842.0, 595.0);
+        assert_eq!(w_land, 140.0);
+        let expected_h = (140.0 * 595.0 / 842.0_f32).min(150.0);
+        assert!((h_land - expected_h).abs() < 1e-3);
+        assert!(h_land < 150.0);
+
+        // Square (500 x 500): aspect ratio 1.0 < 150/140 (~1.071), width should be 140.0, height should be 140.0
+        let (w_sq, h_sq) = compute_thumbnail_dimensions(500.0, 500.0);
+        assert_eq!(w_sq, 140.0);
+        assert_eq!(h_sq, 140.0);
+    }
 
     #[test]
     fn thumbnail_page_label_uses_the_selected_language() {
