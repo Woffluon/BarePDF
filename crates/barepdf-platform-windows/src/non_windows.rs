@@ -9,7 +9,7 @@ use raw_window_handle::WindowHandle;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
-pub use barepdf_platform::printing::PrintOrientation;
+pub use barepdf_platform::printing::{InstalledPrinter, PrintOrientation};
 pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeEvent, FileChangeWatcher};
 pub use barepdf_platform_linux::{
     ask_yes_no, open_url, show_fatal_error, LinuxClipboard as WindowsClipboard,
