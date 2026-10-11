@@ -7,12 +7,13 @@
   </picture>
 
   <h1>BarePDF</h1>
-  <p><strong>Windows 10 ve 11 için hızlı, özel ve hafif PDF okuyucu.</strong></p>
+  <p><strong>Windows 10/11 ve Linux (Pardus 23/25) için hızlı, özel ve hafif PDF okuyucu.</strong></p>
 
   [![Son sürüm](https://img.shields.io/github/v/release/Woffluon/BarePDF?display_name=tag&style=flat-square&color=f7931e)](https://github.com/Woffluon/BarePDF/releases/latest)
   [![CI](https://img.shields.io/github/actions/workflow/status/Woffluon/BarePDF/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Woffluon/BarePDF/actions/workflows/ci.yml)
   [![Belgeler](https://img.shields.io/badge/docs-online-0969da?style=flat-square)](https://woffluon.github.io/BarePDF/docs/)
   [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows11&logoColor=white)](#sistem-gereksinimleri)
+  [![Linux](https://img.shields.io/badge/Linux-Pardus%20%7C%20Debian%20%7C%20Ubuntu-e95420?style=flat-square&logo=linux&logoColor=white)](#sistem-gereksinimleri)
   [![Lisans: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](./LICENSE)
 
   [İndir](https://woffluon.github.io/BarePDF/download/) ·
@@ -80,13 +81,33 @@ winget install Woffluon.BarePDF
 - Dosya uzantılarını Windows Varsayılan Uygulamalar ve "Birlikte Aç" menülerine temiz biçimde kaydeder.
 - Yerel Windows Dosya Gezgini küçük resim sağlayıcı DLL dosyasını kaydeder.
 
-### 3. Taşınabilir Arşiv (Portable ZIP)
+### 3. Taşınabilir Arşiv (Windows Portable ZIP)
 
 Kurulum yapmadan çalıştırmak için `BarePDF-Portable-x64-vX.Y.Z.zip` dosyasını indirin.
 
 - İstediğiniz klasöre veya USB belleğe çıkarın.
 - `BarePDF.exe` dosyasını doğrudan çalıştırın.
 - Kayıt defterine hiçbir anahtar yazmaz.
+
+### 4. Debian / Pardus Paketi (.deb)
+
+`barepdf_<version>_amd64.deb` paketini [resmi indirme sayfasından](https://woffluon.github.io/BarePDF/download/) veya [GitHub Releases](https://github.com/Woffluon/BarePDF/releases/latest) üzerinden indirin.
+
+- **Pardus Paket Kurucu:** `.deb` paketine çift tıklayarak Pardus'un grafik paket yöneticisi ile kolayca kurun.
+- **Terminal Kurulumu:**
+  ```bash
+  sudo apt install ./barepdf_*_amd64.deb
+  ```
+- `/usr/bin/barepdf` altına kurulur ve `application/pdf` dosya türüyle masaüstü menülerine entegre olur.
+
+### 5. Taşınabilir Linux AppImage
+
+Kurulumsuz evrensel Linux kullanımı için `BarePDF-<version>-x86_64.AppImage` dosyasını indirin:
+
+```bash
+chmod +x BarePDF-*-x86_64.AppImage
+./BarePDF-*-x86_64.AppImage
+```
 
 ### Kriptografik Sağlama Doğrulaması
 
@@ -225,7 +246,7 @@ Ayrıntılı performans bulguları [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md) 
 
 | Özellik | Gereksinim |
 | :--- | :--- |
-| **İşletim Sistemi** | Windows 10 veya Windows 11 (yapı 19041 veya üzeri) |
+| **İşletim Sistemi** | Windows 10/11 (yapı 19041+) veya Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) |
 | **Mimari** | 64 bit x86 (`x86_64`) |
 | **Bellek** | En az 512 MB (1 GB önerilir) |
 | **Disk Alanı** | Uygulama dosyaları ve PDFium çalışma zamanı için yaklaşık 50 MB |

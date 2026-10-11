@@ -12,12 +12,14 @@ const downloadMetrics = await getDownloadMetrics();
 const installerAsset = release.assets.find((a) => a.type === 'installer');
 const portableAsset = release.assets.find((a) => a.type === 'portable');
 const checksumAsset = release.assets.find((a) => a.type === 'checksum');
+const debAsset = release.assets.find((a) => a.type === 'deb');
+const appimageAsset = release.assets.find((a) => a.type === 'appimage');
 const hasReleaseMetadata = release.state === 'published';
 ---
 
 <BaseLayout
-  title="Download BarePDF: Official Windows Releases"
-  description="Download official Windows installer setup executable or portable ZIP package for BarePDF."
+  title="Download BarePDF: Official Windows & Linux Releases"
+  description="Download official Windows setup installer, portable ZIP package, Debian / Pardus (.deb), or Linux AppImage for BarePDF."
   currentPath={`${baseUrl}/download`}
 >
   <section class="download-page-header">
@@ -29,9 +31,9 @@ const hasReleaseMetadata = release.state === 'published';
       </span>
       <h1 class="page-title" data-i18n data-en="Download BarePDF" data-tr="BarePDF’i İndirin">Download BarePDF</h1>
       <p class="page-subtitle" data-i18n
-        data-en="Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private."
-        data-tr="Windows 10 ve 11 (64-bit) için resmi sürüm paketleri. Hızlı, hafif ve tamamen özel.">
-        Official release packages for Windows 10 and Windows 11 (64-bit). Fast, lightweight, and completely private.
+        data-en="Official release packages for Windows 10/11 and Linux (Pardus 23/25, Debian, Ubuntu). Fast, lightweight, and completely private."
+        data-tr="Windows 10/11 ve Linux (Pardus 23/25, Debian, Ubuntu) için resmi sürüm paketleri. Hızlı, hafif ve tamamen özel.">
+        Official release packages for Windows 10/11 and Linux (Pardus 23/25, Debian, Ubuntu). Fast, lightweight, and completely private.
       </p>
     </div>
   </section>
@@ -39,37 +41,75 @@ const hasReleaseMetadata = release.state === 'published';
   <section class="download-options-section">
     <div class="container">
       {hasReleaseMetadata ? (
-        <div class="cards-grid">
-          {installerAsset && (
+        <>
+          <div class="platform-heading">
+            <h2 class="section-heading" data-i18n data-en="Windows Packages" data-tr="Windows Paketleri">Windows Packages</h2>
+            <p class="section-sub" data-i18n data-en="64-bit packages for Windows 10 and Windows 11." data-tr="Windows 10 ve Windows 11 için 64-bit paketler.">64-bit packages for Windows 10 and Windows 11.</p>
+          </div>
+          <div class="cards-grid">
+            {installerAsset && (
+              <DownloadCard
+                asset={installerAsset}
+                title="Windows Setup Installer"
+                description="Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without administrator privileges."
+                badge="Recommended"
+                iconType="installer"
+              />
+            )}
+
+            {portableAsset && (
+              <DownloadCard
+                asset={portableAsset}
+                title="Portable ZIP Package"
+                description="Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or system installation."
+                badge="Portable"
+                iconType="portable"
+              />
+            )}
+
+            {checksumAsset && (
+              <DownloadCard
+                asset={checksumAsset}
+                title="SHA-256 Checksums"
+                description="Official SHA256SUMS.txt manifest file to verify the cryptographic integrity of downloaded release binaries."
+                badge="Verification"
+                iconType="checksum"
+              />
+            )}
+          </div>
+
+          <div class="platform-heading">
+            <h2 class="section-heading" data-i18n data-en="Linux / Pardus Packages" data-tr="Linux / Pardus Paketleri">Linux / Pardus Packages</h2>
+            <p class="section-sub" data-i18n data-en="Native packages for Pardus 23/25, Debian 12/13, Ubuntu 22.04+, and universal Linux." data-tr="Pardus 23/25, Debian 12/13, Ubuntu 22.04+ ve evrensel Linux için yerel paketler.">Native packages for Pardus 23/25, Debian 12/13, Ubuntu 22.04+, and universal Linux.</p>
+          </div>
+          <div class="cards-grid cards-grid-linux">
             <DownloadCard
-              asset={installerAsset}
-              title="Windows Setup Installer"
-              description="Recommended for desktop installation. Registers BarePDF in Windows Open With and Default Apps settings without administrator privileges."
+              asset={debAsset ?? {
+                name: `barepdf_${release.tag.replace(/^v/, '')}_amd64.deb`,
+                size: 26000000,
+                downloadUrl: `${release.url}/download/${release.tag}/barepdf_${release.tag.replace(/^v/, '')}_amd64.deb`,
+                type: 'deb',
+              }}
+              title="Debian / Pardus Package"
+              description="Standard package for Pardus 23/25, Debian, and Ubuntu. Install via Pardus Paket Kurucu or sudo apt install."
               badge="Recommended"
-              iconType="installer"
+              iconType="deb"
             />
-          )}
 
-          {portableAsset && (
             <DownloadCard
-              asset={portableAsset}
-              title="Portable ZIP Package"
-              description="Zero-install archive. Extract anywhere and run BarePDF.exe directly without registry modifications or system installation."
+              asset={appimageAsset ?? {
+                name: `BarePDF-${release.tag.replace(/^v/, '')}-x86_64.AppImage`,
+                size: 32000000,
+                downloadUrl: `${release.url}/download/${release.tag}/BarePDF-${release.tag.replace(/^v/, '')}-x86_64.AppImage`,
+                type: 'appimage',
+              }}
+              title="AppImage Package"
+              description="Universal standalone portable Linux package. Make executable (chmod +x) and run anywhere."
               badge="Portable"
-              iconType="portable"
+              iconType="appimage"
             />
-          )}
-
-          {checksumAsset && (
-            <DownloadCard
-              asset={checksumAsset}
-              title="SHA-256 Checksums"
-              description="Official SHA256SUMS.txt manifest file to verify the cryptographic integrity of downloaded release binaries."
-              badge="Verification"
-              iconType="checksum"
-            />
-          )}
-        </div>
+          </div>
+        </>
       ) : (
         <div class="release-metadata-notice">
           <h3 class="guide-title" data-i18n data-en="Release Metadata Unavailable" data-tr="Sürüm Bilgisi Kullanılamıyor">Release Metadata Unavailable</h3>
@@ -172,11 +212,32 @@ const hasReleaseMetadata = release.state === 'published';
     padding: 3rem 0 5rem;
   }
 
+  .platform-heading {
+    margin-bottom: 1.25rem;
+  }
+
+  .section-heading {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 0 0.25rem;
+    letter-spacing: -0.02em;
+  }
+
+  .section-sub {
+    font-size: 0.95rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
   .cards-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 1.5rem;
     margin-bottom: 3rem;
+  }
+
+  .cards-grid-linux {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .verification-guide-box,

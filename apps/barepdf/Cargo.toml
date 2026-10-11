@@ -34,7 +34,26 @@ uuid = { version = "1.24", features = ["v4"] }
 [target.'cfg(windows)'.build-dependencies]
 winres.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+barepdf-platform-linux = { path = "../../crates/barepdf-platform-linux" }
+
+[package.metadata.deb]
+name = "barepdf"
+maintainer = "BarePDF Contributors <contact@barepdf.app>"
+copyright = "2026, BarePDF Contributors"
+license-file = ["../../LICENSE", "4"]
+depends = "$auto, libxkbcommon0, libfontconfig1, libgbm1, xdg-utils"
+section = "graphics"
+priority = "optional"
+assets = [
+    ["target/release/barepdf", "usr/bin/barepdf", "755"],
+    ["target/release/libpdfium.so", "usr/lib/barepdf/libpdfium.so", "644"],
+    ["../../packaging/linux/barepdf.desktop", "usr/share/applications/barepdf.desktop", "644"],
+    ["../../packaging/linux/icons/barepdf.svg", "usr/share/icons/hicolor/scalable/apps/barepdf.svg", "644"],
+]
+
 [lints]
 workspace = true
+
 
 

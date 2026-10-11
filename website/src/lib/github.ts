@@ -129,7 +129,7 @@ function parseReleaseAssets(value: unknown, tag: string): ReleaseAsset[] {
     return [{ name, size, downloadUrl, type, downloadCount }];
   });
 
-  return (['installer', 'portable', 'checksum'] as const).flatMap((type: ReleaseAssetType) => {
+  return (['installer', 'portable', 'checksum', 'deb', 'appimage'] as const).flatMap((type: ReleaseAssetType) => {
     const asset = candidates.find((candidate) => candidate.name === expectedNames[type]);
     return asset ? [asset] : [];
   });
@@ -186,7 +186,7 @@ export async function getLatestRelease(): Promise<GitHubRelease> {
       || !isReleasePageUrl(releaseUrl, repository.owner, repository.name, tag)
     ) return defaultReleaseFallback;
     const assets = parseReleaseAssets(data.assets, tag);
-    if (assets.length !== 3) return defaultReleaseFallback;
+    if (assets.length < 3) return defaultReleaseFallback;
 
     return {
       state: 'published',

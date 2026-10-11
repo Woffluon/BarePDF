@@ -25,10 +25,11 @@ BarePDF is structured into decoupled crates to isolate platform API bindings, re
 - **Responsibility**: Priority-queued render scheduler and memory management.
 - **Key Mechanics**: A single PDFium actor, high/low priority channels, byte-budgeted LRU caches (`lru`), deduplication, and generation-token cancellation.
 
-### 4. `barepdf-platform` & `barepdf-platform-windows`
-- **Responsibility**: System dialogs, clipboard, and printing.
-- **Abstract Layer**: `barepdf-platform` defines traits for native OS dialogs.
-- **Windows Impl**: `barepdf-platform-windows` implements file open dialogs via `rfd`, clipboard via `arboard`, and print spooling.
+### 4. `barepdf-platform`, `barepdf-platform-windows` & `barepdf-platform-linux`
+- **Responsibility**: System dialogs, clipboard, and printing / shell integration.
+- **Abstract Layer**: `barepdf-platform` defines traits for native OS dialogs, clipboard, and printing.
+- **Windows Impl**: `barepdf-platform-windows` implements file open dialogs via `rfd`, clipboard via `arboard`, and Win32 print spooling.
+- **Linux Impl**: `barepdf-platform-linux` implements file dialogs via `rfd`, clipboard via `arboard`, and URL/shell dispatch via `xdg-open`.
 
 ### 5. `barepdf-i18n`
 - **Responsibility**: Type-safe internationalization.

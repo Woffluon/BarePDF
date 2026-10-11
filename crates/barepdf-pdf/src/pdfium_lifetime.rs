@@ -29,8 +29,20 @@ pub fn resolve_pdfium_library_path_with_policy(
         .map(|directory| directory.join(dll_name))
         .filter(|path| path.exists());
 
-    if sibling.is_some() || !allow_fallbacks {
+    if sibling.is_some() {
         return sibling;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let system_path = PathBuf::from("/usr/lib/barepdf").join(dll_name);
+        if system_path.exists() {
+            return Some(system_path);
+        }
+    }
+
+    if !allow_fallbacks {
+        return None;
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -98,4 +110,56 @@ pub(crate) fn process_pdfium() -> Result<&'static Pdfium, PdfError> {
     PDFIUM
         .get()
         .ok_or_else(|| PdfError::PlatformError("PDFium initialization failed".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolve_pdfium_library_path_with_policy_resolves_candidate_when_given_paths() {
+        let temp = tempdir().expect("create temp dir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let fake_exe = bin_dir.join("barepdf");
+        fs::write(&fake_exe, b"").expect("write fake exe");
+
+        let dll_name = "libpdfium.so";
+
+        // When no candidate exists and fallbacks are disabled: None
+        assert_eq!(
+            resolve_pdfium_library_path_with_policy(&fake_exe, dll_name, false),
+            None
+        );
+
+        // When sibling candidate exists: returns sibling path even with fallbacks disabled
+        let sibling = bin_dir.join(dll_name);
+        fs::write(&sibling, b"test-lib").expect("write sibling");
+        assert_eq!(
+            resolve_pdfium_library_path_with_policy(&fake_exe, dll_name, false),
+            Some(sibling.clone())
+        );
+
+        // When fallbacks are enabled: returns sibling path
+        assert_eq!(
+            resolve_pdfium_library_path_with_policy(&fake_exe, dll_name, true),
+            Some(sibling)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolve_pdfium_library_path_with_policy_resolves_linux_system_path_when_present() {
+        let exe = Path::new("/usr/bin/barepdf");
+        let dll_name = "libpdfium.so";
+        let system_candidate = PathBuf::from("/usr/lib/barepdf").join(dll_name);
+        if system_candidate.exists() {
+            assert_eq!(
+                resolve_pdfium_library_path_with_policy(exe, dll_name, false),
+                Some(system_candidate)
+            );
+        }
+    }
 }

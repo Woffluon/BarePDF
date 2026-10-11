@@ -7,9 +7,9 @@ order: 2
 
 # Installation & Setup
 
-BarePDF provides two distribution channels: an interactive **Windows Setup Installer** and a zero-install **Portable ZIP Package**.
+BarePDF provides release packages for both Windows (Interactive Setup & Portable ZIP) and Linux (Debian / Pardus `.deb` & Portable `AppImage`).
 
-## Option 1: Windows Setup Installer (Recommended)
+## Option 1: Windows Setup Installer (Recommended for Windows)
 
 [Open the BarePDF download page](/BarePDF/download/) and download the single Windows installer for the latest stable release.
 
@@ -24,13 +24,47 @@ BarePDF provides two distribution channels: an interactive **Windows Setup Insta
 
 ---
 
-## Option 2: Portable ZIP Package
+## Option 2: Portable Windows ZIP Package
 
 [Open the BarePDF download page](/BarePDF/download/) and download the single portable package for the latest stable release.
 
 1. Extract the ZIP archive anywhere on your disk or portable USB drive (e.g. `C:\Tools\BarePDF-Portable`).
 2. Double-click `BarePDF.exe` to run immediately.
 3. The portable build requires no installation, leaves no registry traces, and operates completely self-contained.
+
+---
+
+## Option 3: Debian / Pardus (.deb) (Recommended for Linux)
+
+[Open the BarePDF download page](/BarePDF/download/) and download the `.deb` package (`barepdf_<version>_amd64.deb`) for Pardus 23 "Yirmiüç", Pardus 25 "Bilge", Debian 12+, or Ubuntu 22.04+.
+
+### Installation on Pardus
+1. **Via GUI (Pardus Paket Kurucu):** Double-click the downloaded `.deb` file. Pardus Paket Kurucu will prompt to install BarePDF with full desktop and MIME associations.
+2. **Via Terminal:**
+   ```bash
+   sudo apt install ./barepdf_*_amd64.deb
+   ```
+
+### Desktop Integration
+- Installs the binary to `/usr/bin/barepdf` and bundled PDFium runtime to `/usr/lib/barepdf/`.
+- Integrates into your application menu under **Office** / **Ofis** with native desktop icons.
+- Associates MIME type `application/pdf` for seamless double-click opening in File Managers (Thunar, Dolphin, Nautilus).
+
+---
+
+## Option 4: Portable Linux AppImage
+
+[Open the BarePDF download page](/BarePDF/download/) and download the universal standalone Linux executable (`BarePDF-<version>-x86_64.AppImage`).
+
+1. Open your terminal or file manager and grant execution permissions:
+   ```bash
+   chmod +x BarePDF-*-x86_64.AppImage
+   ```
+2. Run BarePDF directly:
+   ```bash
+   ./BarePDF-*-x86_64.AppImage
+   ```
+3. The AppImage bundles all required runtime libraries including PDFium and runs on any modern 64-bit Linux distribution without system changes.
 
 ---
 

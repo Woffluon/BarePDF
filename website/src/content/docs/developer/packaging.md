@@ -26,6 +26,30 @@ The release pipeline executes in the following sequence:
 6. **Generating Checksums**:
    `generate-checksums.ps1` hashes the versioned installer and portable package, then copies one canonical versioned copy of each into `target/release/artifacts/`. It writes one versioned checksum manifest plus `latest.json` in the same directory.
 
+## Linux Packaging (.deb & AppImage)
+
+BarePDF produces Debian packages (`.deb`) for Pardus 23/25, Debian, and Ubuntu, along with universal portable `AppImage` binaries.
+
+### Debian / Pardus Package (`cargo deb`)
+Metadata is configured under `[package.metadata.deb]` in `apps/barepdf/Cargo.toml`.
+- **Generation**:
+  ```bash
+  cargo deb --package barepdf
+  ```
+- **Structure**:
+  - Binary: `/usr/bin/barepdf`
+  - PDFium engine: `/usr/lib/barepdf/libpdfium.so`
+  - Desktop entry: `/usr/share/applications/barepdf.desktop`
+  - App icon: `/usr/share/icons/hicolor/scalable/apps/barepdf.svg`
+- **Dependencies**: Automatically resolved via `$auto`, requiring `libxkbcommon0`, `libfontconfig1`, `libgbm1`, and `xdg-utils`.
+
+### Standalone AppImage (`appimagetool`)
+An `AppDir` staging directory packages the binary, bundled `libpdfium.so`, desktop entry, icons, and `AppRun` launcher:
+```bash
+./appimagetool AppDir BarePDF-<version>-x86_64.AppImage
+```
+The resulting AppImage runs portably on any x86_64 Linux system without requiring administrator privileges or system library installations.
+
 ## GitHub Actions Release Workflow
 
 The `.github/workflows/release.yml` workflow starts automatically after a successful `CI` push run on `main`, or through a manual dispatch. The Ed25519 manifest signing key must match the public key pinned in the repository before release discovery begins; a missing or mismatched key fails closed.

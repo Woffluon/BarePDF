@@ -2,7 +2,7 @@ export interface ReleaseAsset {
   name: string;
   size: number;
   downloadUrl: string;
-  type?: 'installer' | 'portable' | 'checksum' | 'other';
+  type?: 'installer' | 'portable' | 'checksum' | 'deb' | 'appimage' | 'other';
   downloadCount?: number;
 }
 

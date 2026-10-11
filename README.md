@@ -7,12 +7,13 @@
   </picture>
 
   <h1>BarePDF</h1>
-  <p><strong>Fast, private PDF reader for Windows 10 and 11.</strong></p>
+  <p><strong>Fast, private PDF reader for Windows 10/11 and Linux (Pardus 23/25).</strong></p>
 
   [![Latest release](https://img.shields.io/github/v/release/Woffluon/BarePDF?display_name=tag&style=flat-square&color=f7931e)](https://github.com/Woffluon/BarePDF/releases/latest)
   [![CI](https://img.shields.io/github/actions/workflow/status/Woffluon/BarePDF/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Woffluon/BarePDF/actions/workflows/ci.yml)
   [![Documentation](https://img.shields.io/badge/docs-online-0969da?style=flat-square)](https://woffluon.github.io/BarePDF/docs/)
   [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows11&logoColor=white)](#system-requirements)
+  [![Linux](https://img.shields.io/badge/Linux-Pardus%20%7C%20Debian%20%7C%20Ubuntu-e95420?style=flat-square&logo=linux&logoColor=white)](#system-requirements)
   [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](./LICENSE)
 
   [Download](https://woffluon.github.io/BarePDF/download/) ·
@@ -77,13 +78,33 @@ Download `BarePDF-Setup-x64-vX.Y.Z.exe` from the [official download page](https:
 - Registers file associations cleanly in Windows Default Apps and "Open with" menus.
 - Installs the native Windows Explorer thumbnail provider DLL.
 
-### 3. Portable Archive
+### 3. Portable Archive (Windows)
 
 Download `BarePDF-Portable-x64-vX.Y.Z.zip` for a zero-install deployment.
 
 - Extract to any directory or USB drive.
 - Run `BarePDF.exe` directly.
 - Writes no keys to the Windows registry.
+
+### 4. Debian / Pardus Package (.deb)
+
+Download `barepdf_<version>_amd64.deb` from the [official download page](https://woffluon.github.io/BarePDF/download/) or [GitHub Releases](https://github.com/Woffluon/BarePDF/releases/latest).
+
+- **Pardus Paket Kurucu:** Double-click the `.deb` package to install through Pardus's graphical package manager.
+- **Terminal Installation:**
+  ```bash
+  sudo apt install ./barepdf_*_amd64.deb
+  ```
+- Installs to `/usr/bin/barepdf` and registers desktop entry with `application/pdf` MIME type.
+
+### 5. Portable Linux AppImage
+
+Download `BarePDF-<version>-x86_64.AppImage` for universal Linux portability:
+
+```bash
+chmod +x BarePDF-*-x86_64.AppImage
+./BarePDF-*-x86_64.AppImage
+```
 
 ### Cryptographic Hash Verification
 
@@ -217,7 +238,7 @@ Detailed performance findings are documented in [`docs/BENCHMARKS.md`](./docs/BE
 
 | Specification | Requirement |
 | :--- | :--- |
-| **Operating System** | Windows 10 or Windows 11 (build 19041 or higher) |
+| **Operating System** | Windows 10/11 (build 19041+) or Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) |
 | **Architecture** | 64-bit x86 (`x86_64`) |
 | **Memory** | 512 MB minimum (1 GB recommended) |
 | **Disk Space** | Approximately 50 MB for application files and PDFium runtime |

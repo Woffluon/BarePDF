@@ -11,6 +11,7 @@ Follow this guide to set up your build environment and compile BarePDF from sour
 
 ## Prerequisites
 
+### Windows
 1. **Rust Toolchain**: Install stable Rust (Edition 2021+) via [rustup.rs](https://rustup.rs/).
    ```powershell
    rustup update stable
@@ -19,6 +20,21 @@ Follow this guide to set up your build environment and compile BarePDF from sour
 3. **Inno Setup** (Optional, for installer generation):
    ```powershell
    choco install innosetup --no-progress -y
+   ```
+
+### Linux (Pardus 23/25, Debian, Ubuntu)
+1. **Rust Toolchain**: Install stable Rust via [rustup.rs](https://rustup.rs/).
+   ```bash
+   rustup update stable
+   ```
+2. **System Libraries**: Install required font, input, and graphics development packages:
+   ```bash
+   sudo apt update
+   sudo apt install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev
+   ```
+3. **Packaging Tools** (Optional, for `.deb` and `AppImage` generation):
+   ```bash
+   cargo install cargo-deb --locked
    ```
 
 ## Development Build

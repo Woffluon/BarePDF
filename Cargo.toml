@@ -5,6 +5,7 @@ members = [
     "crates/barepdf-render",
     "crates/barepdf-platform",
     "crates/barepdf-platform-windows",
+    "crates/barepdf-platform-linux",
     "crates/barepdf-i18n",
     "crates/barepdf-ui",
     "crates/barepdf-thumbnail",
@@ -13,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.19.0"
+version = "1.20.0"
 edition = "2021"
 rust-version = "1.92"
 authors = ["BarePDF Contributors"]

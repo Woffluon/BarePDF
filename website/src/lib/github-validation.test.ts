@@ -24,12 +24,18 @@ test('accepts one exact versioned name for each public release asset', () => {
   assert.equal(releaseAssetType(names.installer, tag), 'installer');
   assert.equal(releaseAssetType(names.portable, tag), 'portable');
   assert.equal(releaseAssetType(names.checksum, tag), 'checksum');
+  assert.equal(releaseAssetType(names.deb, tag), 'deb');
+  assert.equal(releaseAssetType(names.appimage, tag), 'appimage');
   assert.equal(releaseAssetType('BarePDF-Setup-x64.exe', tag), null);
   assert.equal(releaseAssetType('BarePDF-Portable-x64.zip', tag), null);
   assert.equal(releaseAssetType('BarePDF-SHA256SUMS.txt', tag), null);
   assert.equal(releaseAssetType('BarePDF-Setup-x64-v1.0.0.exe', tag), null);
+  assert.equal(releaseAssetType('barepdf_1.0.0_amd64.deb', tag), null);
+  assert.equal(releaseAssetType('BarePDF-1.0.0-x86_64.AppImage', tag), null);
   assert.equal(releaseAssetType('unrelated.exe', tag), null);
   assert.equal(releaseAssetType('unrelated.zip', tag), null);
+  assert.equal(releaseAssetType('unrelated.deb', tag), null);
+  assert.equal(releaseAssetType('unrelated.AppImage', tag), null);
 });
 
 test('requires exact GitHub release and commit URLs', () => {

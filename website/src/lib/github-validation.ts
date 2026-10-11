@@ -1,4 +1,4 @@
-export type ReleaseAssetType = 'installer' | 'portable' | 'checksum';
+export type ReleaseAssetType = 'installer' | 'portable' | 'checksum' | 'deb' | 'appimage';
 
 const GITHUB_HOST = 'github.com';
 const TRUSTED_ASSET_HOSTS = new Set([
@@ -54,6 +54,8 @@ export function releaseAssetNames(tag: string): Record<ReleaseAssetType, string>
     installer: `BarePDF-Setup-x64-v${version}.exe`,
     portable: `BarePDF-Portable-x64-v${version}.zip`,
     checksum: `BarePDF-v${version}-SHA256SUMS.txt`,
+    deb: `barepdf_${version}_amd64.deb`,
+    appimage: `BarePDF-${version}-x86_64.AppImage`,
   };
 }
 
@@ -61,7 +63,7 @@ export function releaseAssetType(name: string, tag: string): ReleaseAssetType | 
   const names = releaseAssetNames(tag);
   if (!names) return null;
 
-  for (const type of ['installer', 'portable', 'checksum'] as const) {
+  for (const type of ['installer', 'portable', 'checksum', 'deb', 'appimage'] as const) {
     if (names[type] === name) return type;
   }
   return null;

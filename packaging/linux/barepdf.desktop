@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=BarePDF
+GenericName=PDF Viewer
+GenericName[tr]=PDF Görüntüleyici
+Comment=Bare, Fast, Yours. Ultra-lightweight PDF reader
+Comment[tr]=Yalın, hızlı ve hafif PDF görüntüleyici
+Exec=barepdf %U
+Icon=barepdf
+Terminal=false
+Categories=Office;Viewer;Graphics;
+MimeType=application/pdf;application/x-pdf;
+Keywords=PDF;Reader;Viewer;Office;Pardus;
+StartupWMClass=barepdf
