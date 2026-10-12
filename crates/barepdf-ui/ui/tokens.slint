@@ -26,12 +26,20 @@ export global ThemeTokens {
     out property <color> control-subtle: dark ? #ffffff0d : #00000008;
     out property <color> control-hover: dark ? #383838 : #eaeaea;
     out property <color> control-pressed: dark ? #242424 : #dfdfdf;
+    in-out property <bool> smartboard-mode: false;
+    in-out property <float> scale-multiplier: smartboard-mode ? 1.5 : 1.0;
+    out property <length> touch-min: smartboard-mode ? 48px : 32px;
+    out property <length> touch-critical: smartboard-mode ? 56px : 36px;
+    out property <length> touch-spacing: smartboard-mode ? 12px : 6px;
+    out property <length> board-bar-height: smartboard-mode ? 64px : 40px;
+
     out property <color> stroke: dark ? #3a3a3a : #dcdcdc;
     out property <color> divider: dark ? #333333 : #e2e2e2;
     out property <color> text: dark ? #f5f5f5 : #1b1b1b;
-    out property <color> text-muted: dark ? #a6a6a6 : #5c5c5c;
+    out property <color> text-muted: dark ? #d0d0d0 : #333333;
     out property <color> accent: #f69423;
     out property <color> accent-hover: #faad52;
+    out property <color> accent-pressed: #df7d13;
     out property <color> accent-content: #181105;
     out property <color> selection: dark ? #f6942333 : #f6942326;
     out property <color> danger: dark ? #ff99a4 : #c42b1c;

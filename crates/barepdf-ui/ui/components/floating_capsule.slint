@@ -11,11 +11,16 @@ export component FloatingCapsule inherits Rectangle {
     in property <string> next-label: "Next page";
     in property <string> zoom-in-label: "Zoom In";
     in property <string> zoom-out-label: "Zoom Out";
+    in property <string> undo-label: "Undo";
+    in property <bool> can-undo: true;
+    in-out property <int> dock-alignment: 1; // 0: Sol, 1: Merkez, 2: Sağ
     callback prev();
     callback next();
     callback zoom-in();
     callback zoom-out();
     callback exit();
+    callback open-numpad();
+    callback undo();
 
     width: 100%;
     height: 100%;
@@ -79,13 +84,13 @@ export component FloatingCapsule inherits Rectangle {
 
     // Bottom-hover reveal zone (touch-friendly)
     bottom-zone := TouchArea {
-        x: (parent.width - capsule.width) / 2 - 20px;
+        x: 0px;
         y: parent.height - 88px;
-        width: capsule.width + 40px;
+        width: parent.width;
         height: 88px;
 
         capsule := Rectangle {
-            x: 20px;
+            x: root.dock-alignment == 0 ? 20px : (root.dock-alignment == 2 ? parent.width - capsule.width - 20px : (parent.width - capsule.width) / 2);
             y: parent.height - self.height - 20px;
             width: capsule-layout.preferred-width;
             height: 44px;
@@ -98,6 +103,7 @@ export component FloatingCapsule inherits Rectangle {
             drop-shadow-color: ThemeTokens.overlay-shadow;
             opacity: (bottom-zone.has-hover || bottom-zone.pressed) ? 1.0 : 0.85;
             animate opacity { duration: ThemeTokens.motion-medium; }
+            animate x { duration: ThemeTokens.motion-medium; }
 
             TouchArea {}
 
@@ -114,12 +120,32 @@ export component FloatingCapsule inherits Rectangle {
                     clicked => { root.prev(); }
                 }
 
-                Text {
-                    text: root.page-info;
-                    color: ThemeTokens.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                    vertical-alignment: center;
+                // Page number text with touch area for numpad popover
+                page-info-box := Rectangle {
+                    border-radius: ThemeTokens.control-radius;
+                    background: page-touch.pressed ? ThemeTokens.accent-pressed
+                        : (page-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                    border-width: page-touch.has-hover ? 1px : 0px;
+                    border-color: ThemeTokens.accent;
+                    animate background { duration: ThemeTokens.motion-fast; }
+
+                    page-touch := TouchArea {
+                        clicked => { root.open-numpad(); }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+
+                        Text {
+                            text: root.page-info;
+                            color: page-touch.pressed ? #ffffff : ThemeTokens.text;
+                            font-size: 12px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
 
                 IconButton {
@@ -127,6 +153,21 @@ export component FloatingCapsule inherits Rectangle {
                     tooltip: root.next-label;
                     enabled: root.can-next;
                     clicked => { root.next(); }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    background: ThemeTokens.divider;
+                }
+
+                // Accessible Undo button (available even when drawing toolbar is closed)
+                IconButton {
+                    icon: @image-url("../../../../assets/icons/arrow_undo_20_regular.svg");
+                    tooltip: root.undo-label;
+                    enabled: root.can-undo;
+                    clicked => { root.undo(); }
                 }
 
                 if root.show-zoom : Rectangle {
@@ -146,6 +187,22 @@ export component FloatingCapsule inherits Rectangle {
                     icon: @image-url("../../../../assets/icons/zoom_in_20_regular.svg");
                     tooltip: root.zoom-in-label;
                     clicked => { root.zoom-in(); }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    background: ThemeTokens.divider;
+                }
+
+                // Dock alignment toggle button (Sol / Merkez / Sağ)
+                IconButton {
+                    icon: @image-url("../../../../assets/icons/chevron_right_20_regular.svg");
+                    tooltip: "Hizalama Değiştir (Sol / Merkez / Sağ)";
+                    clicked => {
+                        root.dock-alignment = Math.mod(root.dock-alignment + 1, 3);
+                    }
                 }
 
                 Rectangle {

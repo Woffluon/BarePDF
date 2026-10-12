@@ -108,7 +108,7 @@ fn update_drawing_undo_redo_ui(app: &AppState, window: &AppWindow) {
     window.set_drawing_can_redo(false);
 }
 
-pub(super) fn connect_annotation_and_signature_callbacks(
+pub(crate) fn connect_annotation_and_signature_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
@@ -399,6 +399,8 @@ pub(super) fn connect_annotation_and_signature_callbacks(
                 refresh_annotation_overlays(&mut app, &window);
             }
         } else {
+            app.stroke_start_time = Some(std::time::Instant::now());
+            app.stroke_start_point = Some(pt);
             app.active_stroke = Some(barepdf_core::InkStroke {
                 page: page_idx,
                 points: vec![pt],
@@ -450,10 +452,22 @@ pub(super) fn connect_annotation_and_signature_callbacks(
                     refresh_annotation_overlays(&mut app, &window);
                 }
             }
-        } else if let Some(stroke) = app.active_stroke.as_mut() {
-            if stroke.page == page_idx && stroke.points.len() < 4096 {
-                stroke.points.push(pt);
-                refresh_annotation_overlays(&mut app, &window);
+        } else {
+            let start_pt = app.stroke_start_point;
+            if let Some(stroke) = app.active_stroke.as_mut() {
+                if stroke.page == page_idx && stroke.points.len() < 4096 {
+                    if stroke.points.len() == 1 {
+                        let start = start_pt.unwrap_or(stroke.points[0]);
+                        let dx = pt.0 - start.0;
+                        let dy = pt.1 - start.1;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < 0.002 {
+                            return;
+                        }
+                    }
+                    stroke.points.push(pt);
+                    refresh_annotation_overlays(&mut app, &window);
+                }
             }
         }
     });
@@ -484,9 +498,33 @@ pub(super) fn connect_annotation_and_signature_callbacks(
             update_drawing_undo_redo_ui(&app, &window);
             return;
         }
+
+        let start_time = app.stroke_start_time.take();
+        let start_point = app.stroke_start_point.take();
+
         if let Some(mut stroke) = app.active_stroke.take() {
+            let duration_ms = start_time
+                .map(|t| t.elapsed().as_millis())
+                .unwrap_or(u128::MAX);
+
+            let pt_up = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+            let total_movement = if let Some(sp) = start_point {
+                let dx = pt_up.0 - sp.0;
+                let dy = pt_up.1 - sp.1;
+                (dx * dx + dy * dy).sqrt()
+            } else {
+                1.0
+            };
+
+            // Software Palm Rejection Heuristic:
+            // Discard if duration <= 120ms and (points <= 1 or total movement < 0.004)
+            if duration_ms <= 120 && (stroke.points.len() <= 1 || total_movement < 0.004) {
+                refresh_annotation_overlays(&mut app, &window);
+                return;
+            }
+
             if stroke.points.is_empty() {
-                stroke.points.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
+                stroke.points.push(pt_up);
             }
             stroke.points = barepdf_core::smooth_ink_points(&stroke.points);
             let ann = app.annotations.entry(doc_id).or_default();

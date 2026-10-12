@@ -59,6 +59,12 @@ pub fn open_url(url: &str) -> Result<(), PlatformError> {
     ffi::open_url(url)
 }
 
+pub fn trigger_virtual_keyboard() {
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "tabtip.exe"])
+        .spawn();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

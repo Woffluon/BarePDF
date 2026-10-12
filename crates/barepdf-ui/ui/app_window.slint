@@ -17,6 +17,7 @@ import { TitleBar } from "./components/title_bar.slint";
 import { Flyout } from "./components/flyout.slint";
 import { MenuItem } from "./components/menu_item.slint";
 import { FloatingCapsule } from "./components/floating_capsule.slint";
+import { NumericKeypadPopover } from "./components/numpad_popover.slint";
 import { CommandPalette } from "./components/command_palette.slint";
 import { ContextMenu } from "./components/context_menu.slint";
 import { Scrubber } from "./components/scrubber.slint";
@@ -98,6 +99,8 @@ export component AppWindow inherits Window {
     in-out property <bool> invert-page-colors: false;
     in-out property <bool> command-palette-open: false;
     in-out property <bool> search-open: false;
+    in-out property <bool> numpad-open: false;
+    callback submit-numpad-page(string);
     in-out property <string> search-query: "";
     in property <string> search-match-counter: "";
     in-out property <bool> search-case-sensitive: false;
@@ -362,7 +365,10 @@ export component AppWindow inherits Window {
     in-out property <float> signature-box-y: 0.75;
     in-out property <float> signature-box-w: 0.25;
     in-out property <float> signature-box-h: 0.10;
+    in-out property <bool> unsaved-drawings-dialog-open: false;
 
+    callback confirm-close-tab();
+    callback cancel-close-tab();
     callback begin-drag();
     callback begin-resize(int);
     callback minimize-window();
@@ -498,6 +504,7 @@ export component AppWindow inherits Window {
     main-focus := FocusScope {
         key-pressed(event) => {
             if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                if (root.numpad-open) { root.numpad-open = false; return accept; }
                 if (root.window-mode != 0) {
                     root.search-open = false;
                     root.command-palette-open = false;
@@ -654,6 +661,8 @@ export component AppWindow inherits Window {
                 prev => { root.request-prev-page(); }
                 next => { root.request-next-page(); }
                 exit => { root.request-exit-special-mode(); }
+                open-numpad => { root.numpad-open = !root.numpad-open; }
+                undo => { root.drawing-undo(); }
             }
         }
     }
@@ -1980,6 +1989,16 @@ export component AppWindow inherits Window {
                                         background: swatch-color;
                                         border-width: 1px;
                                         border-color: ThemeTokens.stroke;
+
+                                        // WCAG 1.4.1: Contrast inner indicator for colorblind accessibility
+                                        if root.drawing-color-index == cidx : Rectangle {
+                                            width: 6px;
+                                            height: 6px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 3px;
+                                            background: cidx == 3 ? #181a1f : #ffffff;
+                                        }
                                     }
                                     TouchArea {
                                         clicked => {
@@ -2577,6 +2596,8 @@ export component AppWindow inherits Window {
         zoom-in => { root.request-zoom-in(); }
         zoom-out => { root.request-zoom-out(); }
         exit => { root.request-exit-special-mode(); }
+        open-numpad => { root.numpad-open = !root.numpad-open; }
+        undo => { root.drawing-undo(); }
     }
 
     // Thumbnail Scrubber Popover
@@ -2648,13 +2669,178 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Frameless Window 6px Resize Edge Strips (active in Normal unmaximized mode)
+    // Unsaved Drawings Modal Dialog
+    if root.unsaved-drawings-dialog-open : Rectangle {
+        z: 998;
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: #00000088;
+
+        TouchArea {
+            // Absorb clicks on backdrop so they do not pass through
+        }
+
+        FocusScope {
+            x: (parent.width - self.width) / 2;
+            y: ThemeTokens.smartboard-mode ? (parent.height - self.height) / 2 + 40px : (parent.height - self.height) / 2;
+            width: 400px;
+            height: 220px;
+
+            key-pressed(event) => {
+                if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                    root.cancel-close-tab();
+                    root.unsaved-drawings-dialog-open = false;
+                    return accept;
+                }
+                return reject;
+            }
+
+            dialog-card := Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 12px;
+                background: ThemeTokens.layer-elevated;
+                border-width: 1px;
+                border-color: ThemeTokens.stroke;
+                drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+                drop-shadow-color: ThemeTokens.overlay-shadow;
+                drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+
+                VerticalLayout {
+                    padding-left: 24px;
+                    padding-right: 24px;
+                    padding-top: 24px;
+                    padding-bottom: 24px;
+                    spacing: 16px;
+
+                    Text {
+                        text: "Kaydedilmemiş Çizimler Var";
+                        color: ThemeTokens.text;
+                        font-size: 20px;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "Bu sekmede henüz kaydedilmemiş çizimler veya notlar bulunuyor. Kapatmak istediğinize emin misiniz?";
+                        color: ThemeTokens.text-muted;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+
+                        Rectangle {
+                            height: 48px;
+                            min-width: 140px;
+                            border-radius: ThemeTokens.control-radius;
+                            background: discard-touch.pressed ? #a82315 : (discard-touch.has-hover ? #d13426 : #c42b1c);
+                            accessible-role: button;
+                            accessible-label: "Kaydetmeden Kapat";
+                            animate background { duration: ThemeTokens.motion-fast; }
+
+                            discard-touch := TouchArea {
+                                clicked => {
+                                    root.confirm-close-tab();
+                                    root.unsaved-drawings-dialog-open = false;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                alignment: center;
+                                Text {
+                                    text: "Kaydetmeden Kapat";
+                                    color: #ffffff;
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 48px;
+                            min-width: 90px;
+                            border-radius: ThemeTokens.control-radius;
+                            background: cancel-touch.pressed ? ThemeTokens.control-pressed : (cancel-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+                            border-width: 1px;
+                            border-color: ThemeTokens.stroke;
+                            accessible-role: button;
+                            accessible-label: "İptal";
+                            animate background { duration: ThemeTokens.motion-fast; }
+
+                            cancel-touch := TouchArea {
+                                clicked => {
+                                    root.cancel-close-tab();
+                                    root.unsaved-drawings-dialog-open = false;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                alignment: center;
+                                Text {
+                                    text: "İptal";
+                                    color: ThemeTokens.text;
+                                    font-size: 14px;
+                                    font-weight: 500;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Smartboard / Touch Numeric Keypad Popover Modal Overlay
+    if root.numpad-open : Rectangle {
+        z: 950;
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: #00000040;
+
+        // Dismiss backdrop on click outside
+        TouchArea {
+            clicked => {
+                root.numpad-open = false;
+            }
+        }
+
+        // Center positioned Numpad (accessible reach in smartboard mode)
+        NumericKeypadPopover {
+            x: (parent.width - self.width) / 2;
+            y: ThemeTokens.smartboard-mode ? (parent.height - self.height) / 2 + 40px : (parent.height - self.height) / 2;
+            cancel => {
+                root.numpad-open = false;
+            }
+            submit(page-val) => {
+                root.submit-numpad-page(page-val);
+                root.request-go-to-page(page-val);
+                root.numpad-open = false;
+            }
+        }
+    }
+
+    // Frameless Window Resize Edge Strips (active in Normal unmaximized mode)
+    property <length> resize-border: ThemeTokens.smartboard-mode ? 18px : 6px;
+
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
         x: 0px;
-        y: 6px;
-        width: 6px;
-        height: root.height - 12px;
+        y: root.resize-border;
+        width: root.resize-border;
+        height: root.height - root.resize-border * 2;
         mouse-cursor: ew-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2664,10 +2850,10 @@ export component AppWindow inherits Window {
     }
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
-        x: root.width - 6px;
-        y: 6px;
-        width: 6px;
-        height: root.height - 12px;
+        x: root.width - root.resize-border;
+        y: root.resize-border;
+        width: root.resize-border;
+        height: root.height - root.resize-border * 2;
         mouse-cursor: ew-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2677,10 +2863,10 @@ export component AppWindow inherits Window {
     }
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
-        x: 6px;
+        x: root.resize-border;
         y: 0px;
-        width: root.width - 12px;
-        height: 6px;
+        width: root.width - root.resize-border * 2;
+        height: root.resize-border;
         mouse-cursor: ns-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2690,10 +2876,10 @@ export component AppWindow inherits Window {
     }
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
-        x: 6px;
-        y: root.height - 6px;
-        width: root.width - 12px;
-        height: 6px;
+        x: root.resize-border;
+        y: root.height - root.resize-border;
+        width: root.width - root.resize-border * 2;
+        height: root.resize-border;
         mouse-cursor: ns-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2705,8 +2891,8 @@ export component AppWindow inherits Window {
         z: 999;
         x: 0px;
         y: 0px;
-        width: 6px;
-        height: 6px;
+        width: root.resize-border;
+        height: root.resize-border;
         mouse-cursor: nwse-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2716,10 +2902,10 @@ export component AppWindow inherits Window {
     }
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
-        x: root.width - 6px;
+        x: root.width - root.resize-border;
         y: 0px;
-        width: 6px;
-        height: 6px;
+        width: root.resize-border;
+        height: root.resize-border;
         mouse-cursor: nesw-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2730,9 +2916,9 @@ export component AppWindow inherits Window {
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
         x: 0px;
-        y: root.height - 6px;
-        width: 6px;
-        height: 6px;
+        y: root.height - root.resize-border;
+        width: root.resize-border;
+        height: root.resize-border;
         mouse-cursor: nesw-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
@@ -2742,10 +2928,10 @@ export component AppWindow inherits Window {
     }
     if root.window-mode == 0 && !root.window-maximized : TouchArea {
         z: 999;
-        x: root.width - 6px;
-        y: root.height - 6px;
-        width: 6px;
-        height: 6px;
+        x: root.width - root.resize-border;
+        y: root.height - root.resize-border;
+        width: root.resize-border;
+        height: root.resize-border;
         mouse-cursor: nwse-resize;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {

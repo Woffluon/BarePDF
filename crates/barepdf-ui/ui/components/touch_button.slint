@@ -1,0 +1,98 @@
+import { ThemeTokens } from "../tokens.slint";
+
+export component TouchButton inherits Rectangle {
+    in property <string> text: "";
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked();
+
+    min-width: ThemeTokens.smartboard-mode ? 48px : 36px;
+    min-height: ThemeTokens.smartboard-mode ? 48px : 36px;
+    border-radius: ThemeTokens.control-radius;
+
+    // Background color state hierarchy
+    background: !root.enabled ? #00000000
+        : root.danger ? (touch.pressed ? #a82315 : (touch.has-hover ? #d93829 : ThemeTokens.danger))
+        : root.primary ? (touch.pressed ? ThemeTokens.accent-pressed : (touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent))
+        : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control));
+
+    border-width: root.enabled ? 1px : 0px;
+    border-color: !root.enabled ? #00000000
+        : root.danger ? (touch.pressed ? #8e1d11 : ThemeTokens.danger)
+        : root.primary ? (touch.pressed ? #c2690d : ThemeTokens.accent)
+        : (touch.has-hover ? ThemeTokens.accent : ThemeTokens.stroke);
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+
+    animate background { duration: ThemeTokens.motion-fast; }
+    animate border-color { duration: ThemeTokens.motion-fast; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            focus-scope.focus();
+            root.clicked();
+        }
+    }
+
+    focus-scope := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled <=> root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: ThemeTokens.smartboard-mode ? 14px : 10px;
+        padding-right: ThemeTokens.smartboard-mode ? 14px : 10px;
+        spacing: 8px;
+        alignment: center;
+
+        if root.has-icon : Image {
+            source: root.icon;
+            width: ThemeTokens.smartboard-mode ? 24px : 20px;
+            height: ThemeTokens.smartboard-mode ? 24px : 20px;
+            colorize: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.4)
+                : (root.primary || root.danger) ? #ffffff
+                : ThemeTokens.text;
+            image-fit: contain;
+            accessible-role: none;
+            vertical-alignment: center;
+        }
+
+        if root.text != "" : Text {
+            text: root.text;
+            color: !root.enabled ? ThemeTokens.text-muted.with-alpha(0.4)
+                : (root.primary || root.danger) ? #ffffff
+                : ThemeTokens.text;
+            font-size: ThemeTokens.smartboard-mode ? 16px : 13px;
+            font-weight: (root.primary || root.danger) ? 600 : 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    // Warm Amber Focus / Pressed indicator ring
+    if (focus-scope.has-focus || touch.pressed) && root.enabled : Rectangle {
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+        border-width: ThemeTokens.focus-width;
+        border-color: ThemeTokens.focus;
+        border-radius: root.border-radius + 2px;
+        background: #00000000;
+    }
+}

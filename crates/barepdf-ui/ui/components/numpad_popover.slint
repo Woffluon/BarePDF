@@ -1,0 +1,134 @@
+import { ThemeTokens } from "../tokens.slint";
+import { TouchButton } from "./touch_button.slint";
+
+export component NumericKeypadPopover inherits Rectangle {
+    in-out property <string> buffer-value: "";
+    in property <string> placeholder: "Sayfa No...";
+    callback submit(string);
+    callback cancel();
+
+    width: 280px;
+    height: 360px;
+    border-radius: 14px;
+    background: ThemeTokens.layer-elevated;
+    border-width: 2px;
+    border-color: ThemeTokens.accent;
+    drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+    drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+    drop-shadow-color: ThemeTokens.overlay-shadow;
+
+    // Prevent click-through
+    TouchArea {}
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        alignment: space-between;
+
+        // Display area
+        Rectangle {
+            height: 52px;
+            border-radius: ThemeTokens.control-radius;
+            background: ThemeTokens.layer;
+            border-width: 1px;
+            border-color: ThemeTokens.stroke;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: center;
+
+                Text {
+                    text: root.buffer-value != "" ? root.buffer-value : root.placeholder;
+                    color: root.buffer-value != "" ? ThemeTokens.text : ThemeTokens.text-muted;
+                    font-size: 20px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 3x4 Button Grid (1-3, 4-6, 7-9, Sil-0-Git)
+        GridLayout {
+            spacing: 8px;
+
+            // Row 0: 1, 2, 3
+            Row {
+                TouchButton {
+                    text: "1";
+                    clicked => { root.buffer-value = root.buffer-value + "1"; }
+                }
+                TouchButton {
+                    text: "2";
+                    clicked => { root.buffer-value = root.buffer-value + "2"; }
+                }
+                TouchButton {
+                    text: "3";
+                    clicked => { root.buffer-value = root.buffer-value + "3"; }
+                }
+            }
+
+            // Row 1: 4, 5, 6
+            Row {
+                TouchButton {
+                    text: "4";
+                    clicked => { root.buffer-value = root.buffer-value + "4"; }
+                }
+                TouchButton {
+                    text: "5";
+                    clicked => { root.buffer-value = root.buffer-value + "5"; }
+                }
+                TouchButton {
+                    text: "6";
+                    clicked => { root.buffer-value = root.buffer-value + "6"; }
+                }
+            }
+
+            // Row 2: 7, 8, 9
+            Row {
+                TouchButton {
+                    text: "7";
+                    clicked => { root.buffer-value = root.buffer-value + "7"; }
+                }
+                TouchButton {
+                    text: "8";
+                    clicked => { root.buffer-value = root.buffer-value + "8"; }
+                }
+                TouchButton {
+                    text: "9";
+                    clicked => { root.buffer-value = root.buffer-value + "9"; }
+                }
+            }
+
+            // Row 3: Sil, 0, Git
+            Row {
+                TouchButton {
+                    text: "Sil";
+                    danger: true;
+                    clicked => {
+                        // Clear or backspace: reset buffer
+                        root.buffer-value = "";
+                    }
+                }
+                TouchButton {
+                    text: "0";
+                    clicked => {
+                        if (root.buffer-value != "") {
+                            root.buffer-value = root.buffer-value + "0";
+                        }
+                    }
+                }
+                TouchButton {
+                    text: "Git";
+                    primary: true;
+                    clicked => {
+                        if (root.buffer-value != "") {
+                            root.submit(root.buffer-value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

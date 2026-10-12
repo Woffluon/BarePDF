@@ -157,12 +157,26 @@ fn app_window_registers_and_invokes_core_callbacks() {
             });
         }
 
+        let numpad_page = Rc::new(Mutex::new(String::new()));
+        {
+            let numpad_page = Rc::clone(&numpad_page);
+            app.on_submit_numpad_page(move |page_str| {
+                *numpad_page.lock().unwrap() = page_str.as_str().to_string();
+            });
+        }
+
+        assert!(!app.get_numpad_open());
+        app.set_numpad_open(true);
+        assert!(app.get_numpad_open());
+
         app.invoke_request_open_file();
         app.invoke_request_zoom_in();
         app.invoke_request_activate_tab(42);
+        app.invoke_submit_numpad_page(SharedString::from("15"));
 
         assert!(opened.load(Ordering::SeqCst));
         assert!(zoomed_in.load(Ordering::SeqCst));
         assert_eq!(activated_tab.load(Ordering::SeqCst), 42);
+        assert_eq!(numpad_page.lock().unwrap().as_str(), "15");
     });
 }

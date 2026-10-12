@@ -121,37 +121,88 @@ pub(super) fn connect_tab_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let path = {
-            let mut app = state_close.borrow_mut();
-            let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
-                return;
-            };
-            let was_active = app.application.tabs.active_id() == Some(id);
-            if was_active {
-                snapshot_active_view(&mut app, &window);
-                let previous_document = app.active_document();
-                app.generation = scheduler_close.bump_generation();
-                close_worker_document(&mut app, &scheduler_close, previous_document);
-                clear_document_transients(&mut app, &window);
-            }
-            if !app.application.tabs.close(id) {
-                return;
-            }
-            if was_active {
-                restore_active_view(&mut app, &window);
-            }
-            app.application
-                .tabs
-                .active()
-                .and_then(|tab| tab.path.clone())
-                .filter(|_| was_active)
+        let doc_id = {
+            let app = state_close.borrow();
+            let tab_id = app.application.tabs.find_slint_id(raw_id);
+            tab_id.and_then(|tid| {
+                app.application
+                    .tabs
+                    .tabs()
+                    .iter()
+                    .find(|t| t.id == tid)
+                    .and_then(|t| match &t.document {
+                        Some(crate::application::DocumentState::Ready(doc)) => Some(doc.id),
+                        Some(
+                            crate::application::DocumentState::Opening { active, .. }
+                            | crate::application::DocumentState::PasswordRequired { active, .. }
+                            | crate::application::DocumentState::Failed { active, .. },
+                        ) => active.as_ref().map(|doc| doc.id),
+                        _ => None,
+                    })
+            })
         };
-        if let Some(path) = path {
-            begin_open(path, None, &state_close, &scheduler_close, &window);
-        } else if state_close.borrow().application.tabs.active_id().is_none() {
-            reset_empty_document(&mut state_close.borrow_mut(), &window);
+        let has_unsaved = if let Some(doc_id) = doc_id {
+            state_close
+                .borrow()
+                .annotations
+                .get(&doc_id)
+                .is_some_and(|a| !a.is_empty())
+        } else {
+            false
+        };
+        if has_unsaved {
+            if let Some(doc_id) = doc_id {
+                let mut app = state_close.borrow_mut();
+                app.pending_close_tab_id = Some(doc_id);
+                window.set_unsaved_drawings_dialog_open(true);
+                return;
+            }
         }
-        refresh_tab_model(&state_close.borrow(), &window);
+        close_tab_internal(raw_id, &window, &state_close, &scheduler_close);
+    });
+
+    let weak = window.as_weak();
+    let state_confirm = state.clone();
+    let scheduler_confirm = scheduler.clone();
+    window.on_confirm_close_tab(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let doc_id = state_confirm.borrow_mut().pending_close_tab_id.take();
+        if let Some(doc_id) = doc_id {
+            let mut app = state_confirm.borrow_mut();
+            app.annotations.remove(&doc_id);
+            let tab = app
+                .application
+                .tabs
+                .tabs()
+                .iter()
+                .find(|t| match &t.document {
+                    Some(crate::application::DocumentState::Ready(doc)) => doc.id == doc_id,
+                    Some(
+                        crate::application::DocumentState::Opening { active, .. }
+                        | crate::application::DocumentState::PasswordRequired { active, .. }
+                        | crate::application::DocumentState::Failed { active, .. },
+                    ) => active.as_ref().is_some_and(|d| d.id == doc_id),
+                    _ => false,
+                });
+            let raw_id = tab.map(|t| t.id.to_slint_id());
+            drop(app);
+            if let Some(raw_id) = raw_id {
+                close_tab_internal(raw_id, &window, &state_confirm, &scheduler_confirm);
+            }
+        }
+        window.set_unsaved_drawings_dialog_open(false);
+    });
+
+    let weak = window.as_weak();
+    let state_cancel = state.clone();
+    window.on_cancel_close_tab(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        state_cancel.borrow_mut().pending_close_tab_id = None;
+        window.set_unsaved_drawings_dialog_open(false);
     });
 
     let weak = window.as_weak();
@@ -177,6 +228,45 @@ pub(super) fn connect_tab_callbacks(
         reset_empty_document(&mut app, &window);
         refresh_tab_model(&app, &window);
     });
+}
+
+fn close_tab_internal(
+    raw_id: i32,
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+) {
+    let path = {
+        let mut app = state.borrow_mut();
+        let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
+            return;
+        };
+        let was_active = app.application.tabs.active_id() == Some(id);
+        if was_active {
+            snapshot_active_view(&mut app, window);
+            let previous_document = app.active_document();
+            app.generation = scheduler.bump_generation();
+            close_worker_document(&mut app, scheduler, previous_document);
+            clear_document_transients(&mut app, window);
+        }
+        if !app.application.tabs.close(id) {
+            return;
+        }
+        if was_active {
+            restore_active_view(&mut app, window);
+        }
+        app.application
+            .tabs
+            .active()
+            .and_then(|tab| tab.path.clone())
+            .filter(|_| was_active)
+    };
+    if let Some(path) = path {
+        begin_open(path, None, state, scheduler, window);
+    } else if state.borrow().application.tabs.active_id().is_none() {
+        reset_empty_document(&mut state.borrow_mut(), window);
+    }
+    refresh_tab_model(&state.borrow(), window);
 }
 
 pub(crate) fn snapshot_active_view(app: &mut AppState, window: &AppWindow) {

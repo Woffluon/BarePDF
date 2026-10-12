@@ -18,6 +18,15 @@ pub fn calculate_adaptive_memory_budget(profile: &SystemHardwareProfile) -> Memo
     MemoryBudget::new(final_mb * 1024 * 1024)
 }
 
+#[must_use]
+pub fn calculate_page_image_budget(is_smartboard: bool) -> usize {
+    if is_smartboard {
+        64 * 1024 * 1024
+    } else {
+        32 * 1024 * 1024
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,5 +50,11 @@ mod tests {
             primary_screen_dpi: 192.0,
         });
         assert_eq!(budget.get(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_calculate_page_image_budget() {
+        assert_eq!(calculate_page_image_budget(false), 32 * 1024 * 1024);
+        assert_eq!(calculate_page_image_budget(true), 64 * 1024 * 1024);
     }
 }

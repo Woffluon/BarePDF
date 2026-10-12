@@ -14,11 +14,11 @@ export component IconButton inherits Rectangle {
     min-width: root.show-label ? 42px : ThemeTokens.control-height;
     border-radius: ThemeTokens.control-radius;
     background: !root.enabled ? #00000000
-        : root.primary ? (touch.pressed ? #df7d13 : (touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent))
+        : root.primary ? (touch.pressed ? ThemeTokens.accent-pressed : (touch.has-hover ? ThemeTokens.accent-hover : ThemeTokens.accent))
         : root.active ? (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.selection))
-        : (touch.pressed ? ThemeTokens.control-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
-    border-width: root.enabled && (root.primary || root.active) ? 1px : 0px;
-    border-color: root.primary ? #d87912 : (root.active ? ThemeTokens.stroke : #00000000);
+        : (touch.pressed ? ThemeTokens.accent-pressed : (touch.has-hover ? ThemeTokens.control-hover : #00000000));
+    border-width: root.enabled && (root.primary || root.active || touch.has-hover) ? 1px : 0px;
+    border-color: root.primary ? #d87912 : (root.active ? ThemeTokens.stroke : (touch.has-hover ? ThemeTokens.stroke : #00000000));
     accessible-role: button;
     accessible-label: root.tooltip;
     accessible-enabled: root.enabled;

@@ -107,6 +107,25 @@ pub(super) fn connect_navigation_callbacks(
             window.set_current_page_str(SharedString::from(current.to_string()));
         }
     });
+
+    let weak = window.as_weak();
+    let state_numpad = state.clone();
+    let scheduler_numpad = scheduler.clone();
+    window.on_submit_numpad_page(move |page_str| {
+        let page_count = state_numpad.borrow().page_count();
+        if let Ok(target) = page_str.trim().parse::<usize>() {
+            if (1..=page_count as usize).contains(&target) {
+                if let Some(window) = weak.upgrade() {
+                    navigate_to_page(
+                        (target - 1) as u32,
+                        &state_numpad,
+                        &scheduler_numpad,
+                        &window,
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[derive(Clone, Copy)]

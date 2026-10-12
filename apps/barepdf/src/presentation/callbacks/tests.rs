@@ -622,3 +622,399 @@ fn typewriter_pointer_down_opens_dialog_and_custom_text_note_inserts() {
         assert_eq!(ft.color_rgba, [30, 100, 220, 255]);
     });
 }
+
+#[test]
+fn tab_close_prompts_for_unsaved_annotations_and_confirms_or_cancels() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::presentation::state::AppState;
+        use barepdf_core::{PageCount, PageIndex, PdfError, RawBitmap, Rotation, UserPreferences};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+
+        struct MockPdfDoc;
+        impl PdfDocument for MockPdfDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::ONE)
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<PageTextGeometry, PdfError> {
+                Ok(PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+        }
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        let scheduler = std::rc::Rc::new(barepdf_render::RenderScheduler::spawn(
+            MockBackend,
+            barepdf_core::MemoryBudget::new(1024 * 1024),
+        ));
+        crate::presentation::callbacks::tabs::connect_tab_callbacks(&window, &state, &scheduler);
+
+        let doc_id = DocumentId::new(10);
+        let tab_id = state
+            .borrow_mut()
+            .application
+            .tabs
+            .open(std::path::PathBuf::from("test.pdf"), "test".into());
+        let raw_id = match tab_id {
+            crate::application::OpenTab::Created(id)
+            | crate::application::OpenTab::Existing(id) => id.to_slint_id(),
+            _ => panic!("tab creation failed"),
+        };
+
+        // Put doc in ready state and add an annotation
+        if let Some(tab) = state.borrow_mut().application.tabs.active_mut() {
+            tab.document = Some(crate::application::DocumentState::Ready(
+                crate::application::ReadyDocument {
+                    id: doc_id,
+                    path: std::path::PathBuf::from("test.pdf"),
+                    page_count: barepdf_core::PageCount::ONE,
+                    started_at: std::time::Instant::now(),
+                },
+            ));
+        }
+        let mut ann = barepdf_core::DocumentAnnotations::default();
+        ann.free_texts.push(barepdf_core::FreeTextAnnotation {
+            id: uuid::Uuid::new_v4(),
+            page_index: 0,
+            x: 0.1,
+            y: 0.1,
+            text: "Unsaved".into(),
+            font_size: 14.0,
+            color_rgba: [0, 0, 0, 255],
+        });
+        state.borrow_mut().annotations.insert(doc_id, ann);
+
+        // Attempt closing tab -> should open unsaved drawings dialog
+        window.invoke_request_close_tab(raw_id);
+        assert!(window.get_unsaved_drawings_dialog_open());
+        assert_eq!(state.borrow().pending_close_tab_id, Some(doc_id));
+
+        // Cancel close
+        window.invoke_cancel_close_tab();
+        assert!(!window.get_unsaved_drawings_dialog_open());
+        assert_eq!(state.borrow().pending_close_tab_id, None);
+        assert!(state.borrow().annotations.contains_key(&doc_id));
+
+        // Attempt closing tab again and confirm close
+        window.invoke_request_close_tab(raw_id);
+        assert!(window.get_unsaved_drawings_dialog_open());
+        assert_eq!(state.borrow().pending_close_tab_id, Some(doc_id));
+
+        window.invoke_confirm_close_tab();
+        assert!(!window.get_unsaved_drawings_dialog_open());
+        assert_eq!(state.borrow().pending_close_tab_id, None);
+        assert!(!state.borrow().annotations.contains_key(&doc_id));
+    });
+}
+
+#[test]
+fn numpad_submit_page_valid_and_invalid() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::presentation::state::AppState;
+        use barepdf_core::{PageCount, PageIndex, PdfError, RawBitmap, Rotation, UserPreferences};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+
+        struct MockPdfDoc;
+        impl PdfDocument for MockPdfDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::new(10).unwrap())
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                Ok(RawBitmap::new(1, 1, vec![0; 4]).unwrap())
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<PageTextGeometry, PdfError> {
+                Ok(PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+        }
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        let scheduler = std::rc::Rc::new(barepdf_render::RenderScheduler::spawn(
+            MockBackend,
+            barepdf_core::MemoryBudget::new(1024 * 1024),
+        ));
+        crate::presentation::callbacks::navigation::connect_navigation_callbacks(
+            &window, &state, &scheduler,
+        );
+
+        let doc_id = DocumentId::new(1);
+        state
+            .borrow_mut()
+            .application
+            .tabs
+            .open(std::path::PathBuf::from("test.pdf"), "test".into());
+
+        if let Some(tab) = state.borrow_mut().application.tabs.active_mut() {
+            tab.document = Some(crate::application::DocumentState::Ready(
+                crate::application::ReadyDocument {
+                    id: doc_id,
+                    path: std::path::PathBuf::from("test.pdf"),
+                    page_count: PageCount::new(10).unwrap(),
+                    started_at: std::time::Instant::now(),
+                },
+            ));
+        }
+
+        assert_eq!(state.borrow().current_page, 0);
+
+        // Valid submit: target page 5 (1-based -> 0-based page index 4)
+        window.invoke_submit_numpad_page(SharedString::from(" 5 "));
+        assert_eq!(state.borrow().current_page, 4);
+
+        // Valid submit: target page 10
+        window.invoke_submit_numpad_page(SharedString::from("10"));
+        assert_eq!(state.borrow().current_page, 9);
+
+        // Invalid submit: out of bounds (15 > 10) -> stays at 9
+        window.invoke_submit_numpad_page(SharedString::from("15"));
+        assert_eq!(state.borrow().current_page, 9);
+
+        // Invalid submit: page 0 (0 < 1) -> stays at 9
+        window.invoke_submit_numpad_page(SharedString::from("0"));
+        assert_eq!(state.borrow().current_page, 9);
+
+        // Invalid submit: non-numeric string -> stays at 9
+        window.invoke_submit_numpad_page(SharedString::from("abc"));
+        assert_eq!(state.borrow().current_page, 9);
+
+        // Valid submit back to page 1 -> 0
+        window.invoke_submit_numpad_page(SharedString::from("1"));
+        assert_eq!(state.borrow().current_page, 0);
+    });
+}
+
+#[test]
+fn drawing_palm_rejection_discards_short_accidental_taps() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::application::{DocumentState, ReadyDocument};
+        use crate::presentation::callbacks::drawing::connect_annotation_and_signature_callbacks;
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::{
+            DocumentId, PageCount, PageIndex, PdfError, RawBitmap, Rotation, UserPreferences,
+        };
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+        use std::path::PathBuf;
+        use std::time::Instant;
+
+        struct MockPdfDoc;
+        impl PdfDocument for MockPdfDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::ONE)
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<PageTextGeometry, PdfError> {
+                Ok(PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+        }
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let doc_id = DocumentId::new(42);
+        {
+            let mut app = state.borrow_mut();
+            app.application
+                .tabs
+                .open(PathBuf::from("doc.pdf"), "doc.pdf".to_string());
+            if let Some(tab) = app.application.tabs.active_mut() {
+                tab.document = Some(DocumentState::Ready(ReadyDocument {
+                    id: doc_id,
+                    path: PathBuf::from("doc.pdf"),
+                    page_count: PageCount::new(1).unwrap(),
+                    started_at: Instant::now(),
+                }));
+            }
+            app.first_page_dimensions = (600.0, 800.0);
+            app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0)]);
+            app.activate_drawing_tool(DrawingTool::Pen);
+        }
+
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        let scheduler = std::rc::Rc::new(barepdf_render::RenderScheduler::spawn(
+            MockBackend,
+            barepdf_core::MemoryBudget::new(1024 * 1024),
+        ));
+        let dialogs = std::sync::Arc::new(barepdf_platform_windows::WindowsFileDialogs);
+
+        connect_annotation_and_signature_callbacks(&window, &state, &scheduler, dialogs);
+
+        // Case 1: Accidental palm touch: immediate down and up (<50ms, movement < 0.003, points <= 1)
+        window.invoke_drawing_pointer_down(0, 0.200, 0.200);
+        window.invoke_drawing_pointer_up(0, 0.201, 0.201); // movement ~ 0.0014 < 0.003
+
+        {
+            let app = state.borrow();
+            let ann = app.annotations.get(&doc_id);
+            assert!(
+                ann.is_none_or(|a| a.strokes.is_empty()),
+                "Accidental palm tap should be discarded"
+            );
+            assert!(app.active_stroke.is_none());
+        }
+
+        // Case 2: Intentional stroke with drag movement > 0.003 and multiple points
+        window.invoke_drawing_pointer_down(0, 0.200, 0.200);
+        window.invoke_drawing_pointer_move(0, 0.250, 0.250);
+        window.invoke_drawing_pointer_move(0, 0.300, 0.300);
+        window.invoke_drawing_pointer_up(0, 0.300, 0.300);
+
+        {
+            let app = state.borrow();
+            let ann = app.annotations.get(&doc_id).expect("annotations exist");
+            assert_eq!(
+                ann.strokes.len(),
+                1,
+                "Intentional stroke should be preserved"
+            );
+            assert!(app.active_stroke.is_none());
+        }
+    });
+}

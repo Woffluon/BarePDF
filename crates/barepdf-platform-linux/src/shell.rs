@@ -12,6 +12,22 @@ pub fn open_url(url: &str) -> Result<(), PlatformError> {
         })
 }
 
+pub fn trigger_virtual_keyboard() {
+    let _ = Command::new("onboard")
+        .spawn()
+        .or_else(|_| Command::new("maliit-keyboard").spawn())
+        .or_else(|_| {
+            Command::new("dbus-send")
+                .args([
+                    "--type=method_call",
+                    "--dest=org.onboard.Onboard",
+                    "/org/onboard/Onboard/Keyboard",
+                    "org.onboard.Onboard.Keyboard.ToggleVisible",
+                ])
+                .spawn()
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

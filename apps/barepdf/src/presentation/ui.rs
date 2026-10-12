@@ -53,7 +53,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const RAW_BITMAP_BUDGET: usize = 4 * 1024 * 1024;
 pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
-pub(crate) const PAGE_IMAGE_BUDGET: usize = 32 * 1024 * 1024;
+pub(crate) const PAGE_IMAGE_BUDGET: usize = 64 * 1024 * 1024;
 pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
 const THUMB_ROW_HEIGHT: f32 = 188.0;
 const THUMBNAIL_PREFETCH_ROWS: u32 = 2;
@@ -124,6 +124,7 @@ pub(crate) fn run() -> Result<(), AppError> {
         }
     };
     initialize_window(&window, &state.borrow());
+    update_smartboard_scale(&window, None);
     apply_theme(&window, state.borrow().preferences.theme);
     update_ui_strings(&window, state.borrow().preferences.language.resolve());
     refresh_recent_files(&mut state.borrow_mut(), &window);
@@ -1819,6 +1820,23 @@ fn unique_id() -> u64 {
     UNIQUE_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+pub fn update_smartboard_scale(window: &AppWindow, manual_scale: Option<f32>) {
+    let multiplier = manual_scale.unwrap_or_else(|| {
+        let size = window.window().size();
+        if size.width >= 3840 {
+            1.5
+        } else {
+            1.0
+        }
+    });
+    window
+        .global::<ThemeTokens>()
+        .set_smartboard_mode(multiplier > 1.2);
+    window
+        .global::<ThemeTokens>()
+        .set_scale_multiplier(multiplier);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2090,6 +2108,20 @@ mod tests {
             let high_zoom_indices = visible_page_indices(&app, &window);
             // Page 4 is visible; neighbors 3 and 5 are not prefetched if not in viewport
             assert_eq!(high_zoom_indices, vec![4]);
+        });
+    }
+
+    #[test]
+    fn update_smartboard_scale_applies_thresholds_and_manual_overrides() {
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let window = AppWindow::new().unwrap();
+            update_smartboard_scale(&window, Some(1.5));
+            assert!(window.global::<ThemeTokens>().get_smartboard_mode());
+            assert!((window.global::<ThemeTokens>().get_scale_multiplier() - 1.5).abs() < 1e-4);
+
+            update_smartboard_scale(&window, Some(1.0));
+            assert!(!window.global::<ThemeTokens>().get_smartboard_mode());
+            assert!((window.global::<ThemeTokens>().get_scale_multiplier() - 1.0).abs() < 1e-4);
         });
     }
 }

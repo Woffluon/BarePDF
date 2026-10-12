@@ -39,7 +39,7 @@ pub use printers::{enumerate_installed_printers, InstalledPrinter};
 #[cfg(windows)]
 pub use printing::{PrintOrientation, WindowsPrinterDialog, WindowsPrinterSink};
 #[cfg(windows)]
-pub use shell::open_url;
+pub use shell::{open_url, trigger_virtual_keyboard};
 #[cfg(windows)]
 pub use watcher::{DocumentFileWatcher, FileChangeWatcher, WindowsDocumentFileWatcher};
 #[cfg(windows)]
