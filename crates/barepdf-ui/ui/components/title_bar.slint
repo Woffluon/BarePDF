@@ -20,19 +20,20 @@ export component TitleBar inherits Rectangle {
     height: ThemeTokens.bar-height;
     background: ThemeTokens.window;
 
-    WindowMoveArea {
+    caption-touch := TouchArea {
         width: parent.width;
         height: parent.height;
-
-        caption-touch := TouchArea {
-            width: parent.width;
-            height: parent.height;
-            double-clicked => {
-                root.toggle-maximize();
+        double-clicked => {
+            root.toggle-maximize();
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.begin-drag();
             }
         }
+    }
 
-        HorizontalLayout {
+    HorizontalLayout {
             width: parent.width;
             height: parent.height;
             spacing: 0px;
@@ -234,7 +235,6 @@ export component TitleBar inherits Rectangle {
                 accessible-role: none;
             }
         }
-    }
     }
 
     // Bottom 1px divider line
