@@ -164,10 +164,18 @@ pub fn is_installed_build() -> bool {
         .unwrap_or(false)
 }
 
-pub fn launch_installer(_path: &Path) -> Result<(), PlatformError> {
-    Err(PlatformError::Unavailable {
-        operation: "launch_installer",
-    })
+pub fn launch_installer(path: &Path) -> Result<(), PlatformError> {
+    #[cfg(target_os = "linux")]
+    {
+        barepdf_platform_linux::launch_package_installer(path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err(PlatformError::Unavailable {
+            operation: "launch_installer",
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

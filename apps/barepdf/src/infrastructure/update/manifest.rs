@@ -37,17 +37,6 @@ pub(crate) struct VerifiedUpdate {
 }
 
 impl VerifiedUpdate {
-    fn from_manifest(manifest: UpdateManifest, installer_sha256: String) -> Self {
-        Self {
-            version: manifest.version,
-            release_url: manifest.release_url,
-            release_notes: manifest.release_notes,
-            installer_url: manifest.installer.url,
-            installer_sha256,
-            installer_size: manifest.installer.size,
-        }
-    }
-
     pub(crate) fn version(&self) -> &str {
         &self.version
     }
@@ -62,13 +51,19 @@ impl VerifiedUpdate {
 
     #[cfg(test)]
     pub(crate) fn for_test(version: &str, installer_sha256: String, installer_size: u64) -> Self {
+        #[cfg(target_os = "linux")]
+        let installer_url = format!(
+            "https://github.com/Woffluon/BarePDF/releases/download/v{version}/barepdf_{version}_amd64.deb"
+        );
+        #[cfg(not(target_os = "linux"))]
+        let installer_url = format!(
+            "https://github.com/Woffluon/BarePDF/releases/download/v{version}/BarePDF-Setup-x64-v{version}.exe"
+        );
         Self {
             version: version.to_owned(),
             release_url: format!("https://github.com/Woffluon/BarePDF/releases/tag/v{version}"),
             release_notes: String::new(),
-            installer_url: format!(
-                "https://github.com/Woffluon/BarePDF/releases/download/v{version}/BarePDF-Setup-x64-v{version}.exe"
-            ),
+            installer_url,
             installer_sha256,
             installer_size,
         }
@@ -86,6 +81,9 @@ struct UpdateManifest {
     #[serde(default)]
     expires_at: Option<u64>,
     installer: InstallerManifest,
+    #[serde(default)]
+    #[allow(dead_code)]
+    deb: Option<InstallerManifest>,
 }
 
 #[derive(Deserialize)]
@@ -319,23 +317,79 @@ pub(super) fn parse_manifest(
         return Ok(None);
     }
     validate_release_url(&manifest.release_url, &manifest.version)?;
-    validate_installer_url(&manifest.installer.url, &manifest.version)?;
-    let hash = manifest.installer.sha256.to_ascii_lowercase();
-    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
-    }
-    if manifest.installer.size == 0 || manifest.installer.size > MAX_INSTALLER_BYTES {
-        return Err(UpdateFailure::Rejected(
-            "Installer size is outside the allowed range",
-        ));
-    }
-    Ok(Some(VerifiedUpdate::from_manifest(manifest, hash)))
+    #[cfg(target_os = "linux")]
+    let (installer_url, installer_sha256, installer_size) = if let Some(deb) = manifest.deb {
+        validate_deb_url(&deb.url, &manifest.version)?;
+        let hash = deb.sha256.to_ascii_lowercase();
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
+        }
+        if deb.size == 0 || deb.size > MAX_INSTALLER_BYTES {
+            return Err(UpdateFailure::Rejected(
+                "Installer size is outside the allowed range",
+            ));
+        }
+        (deb.url, hash, deb.size)
+    } else {
+        let fallback_url = format!(
+            "https://github.com/Woffluon/BarePDF/releases/download/v{version}/barepdf_{version}_amd64.deb",
+            version = manifest.version
+        );
+        validate_deb_url(&fallback_url, &manifest.version)?;
+        let hash = manifest.installer.sha256.to_ascii_lowercase();
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
+        }
+        if manifest.installer.size == 0 || manifest.installer.size > MAX_INSTALLER_BYTES {
+            return Err(UpdateFailure::Rejected(
+                "Installer size is outside the allowed range",
+            ));
+        }
+        (fallback_url, hash, manifest.installer.size)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (installer_url, installer_sha256, installer_size) = {
+        validate_installer_url(&manifest.installer.url, &manifest.version)?;
+        let hash = manifest.installer.sha256.to_ascii_lowercase();
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
+        }
+        if manifest.installer.size == 0 || manifest.installer.size > MAX_INSTALLER_BYTES {
+            return Err(UpdateFailure::Rejected(
+                "Installer size is outside the allowed range",
+            ));
+        }
+        (manifest.installer.url, hash, manifest.installer.size)
+    };
+    Ok(Some(VerifiedUpdate {
+        version: manifest.version,
+        release_url: manifest.release_url,
+        release_notes: manifest.release_notes,
+        installer_url,
+        installer_sha256,
+        installer_size,
+    }))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn validate_deb_url(url: &str, version: &str) -> Result<(), UpdateFailure> {
+    let expected =
+        format!("/Woffluon/BarePDF/releases/download/v{version}/barepdf_{version}_amd64.deb");
+    validate_github_url(url, &expected)
 }
 
 pub(super) fn validate_installer_url(url: &str, version: &str) -> Result<(), UpdateFailure> {
-    let expected =
-        format!("/Woffluon/BarePDF/releases/download/v{version}/BarePDF-Setup-x64-v{version}.exe");
-    validate_github_url(url, &expected)
+    #[cfg(target_os = "linux")]
+    {
+        validate_deb_url(url, version)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let expected = format!(
+            "/Woffluon/BarePDF/releases/download/v{version}/BarePDF-Setup-x64-v{version}.exe"
+        );
+        validate_github_url(url, &expected)
+    }
 }
 
 fn validate_release_url(url: &str, version: &str) -> Result<(), UpdateFailure> {
@@ -580,5 +634,29 @@ mod tests {
         );
         let result = parse_manifest(&future_json, "1.1.0");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn manifest_with_deb_installer_field_is_parsed_cleanly() {
+        let hash = "b".repeat(64);
+        let json = format!(
+            r#"{{
+                "schemaVersion": 1,
+                "version": "1.2.0",
+                "releaseUrl": "https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0",
+                "installer": {{
+                    "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe",
+                    "sha256": "{hash}",
+                    "size": 1024
+                }},
+                "deb": {{
+                    "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb",
+                    "sha256": "{hash}",
+                    "size": 2048
+                }}
+            }}"#
+        );
+        let result = parse_manifest(&json, "1.1.0").expect("valid manifest");
+        assert!(result.is_some());
     }
 }

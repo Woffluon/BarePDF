@@ -293,9 +293,30 @@ mod tests {
 
             // 4. Available records new timestamp
             let update = VerifiedUpdate::for_test("2.0.0", "a".repeat(64), 1024);
-            handle_update_event(UpdateEvent::Available(update), &window, &state, &prefs_path);
+            handle_update_event(
+                UpdateEvent::Available(update.clone()),
+                &window,
+                &state,
+                &prefs_path,
+            );
             assert!(state.borrow().preferences.last_update_check_unix.is_some());
             assert_eq!(state.borrow().update.ui_state(), UpdateUiState::Available);
+
+            // 5. Downloaded transitions to Verified state
+            let path = std::path::PathBuf::from("/tmp/barepdf_2.0.0_amd64.deb");
+            let lang = state.borrow().preferences.language.resolve();
+            handle_update_event(
+                UpdateEvent::Downloaded { path, update },
+                &window,
+                &state,
+                &prefs_path,
+            );
+            assert_eq!(state.borrow().update.ui_state(), UpdateUiState::Verified);
+            assert_eq!(
+                window.get_update_action_label().as_str(),
+                barepdf_i18n::t(lang, "updates.action.install")
+            );
+            assert!(window.get_update_action_enabled());
         });
     }
 }

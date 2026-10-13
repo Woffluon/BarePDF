@@ -1,7 +1,11 @@
-use super::manifest::{expected_file_version, validate_installer_url, VerifiedUpdate};
+#[cfg(windows)]
+use super::manifest::expected_file_version;
+use super::manifest::{validate_installer_url, VerifiedUpdate};
 use super::transport::{check_cancelled, get_with_redirects, RequestTarget};
 use super::UpdateFailure;
+#[cfg(windows)]
 use barepdf_platform_windows::executable_file_version;
+#[cfg(windows)]
 use semver::Version;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -43,21 +47,43 @@ fn release_verified_installer_lock(path: &Path) {
     }
 }
 
+#[cfg(windows)]
+fn update_directory() -> Result<PathBuf, UpdateFailure> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or(UpdateFailure::Rejected("LOCALAPPDATA is unavailable"))?;
+    Ok(PathBuf::from(local_app_data)
+        .join("BarePDF")
+        .join("Updates"))
+}
+
+#[cfg(not(windows))]
+fn update_directory() -> Result<PathBuf, UpdateFailure> {
+    if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
+        Ok(PathBuf::from(cache_home).join("barepdf").join("updates"))
+    } else if let Some(home) = std::env::var_os("HOME") {
+        Ok(PathBuf::from(home)
+            .join(".cache")
+            .join("barepdf")
+            .join("updates"))
+    } else {
+        Ok(std::env::temp_dir().join("barepdf-updates"))
+    }
+}
+
 pub(super) fn download_update(
     agent: &Agent,
     update: &VerifiedUpdate,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, UpdateFailure> {
     validate_installer_url(&update.installer_url, update.version())?;
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .ok_or(UpdateFailure::Rejected("LOCALAPPDATA is unavailable"))?;
-    let directory = PathBuf::from(local_app_data)
-        .join("BarePDF")
-        .join("Updates");
+    let directory = update_directory()?;
     fs::create_dir_all(&directory).map_err(|source| UpdateFailure::Io {
         operation: "Could not create update directory",
         source,
     })?;
+    #[cfg(target_os = "linux")]
+    let final_path = directory.join(format!("barepdf_{}_amd64.deb", update.version()));
+    #[cfg(not(target_os = "linux"))]
     let final_path = directory.join(format!("BarePDF-Setup-x64-v{}.exe", update.version()));
     let (partial_path, partial_file) = create_unique_partial(&directory, update.version())?;
     let result = download_to_partial(agent, update, partial_file, cancelled).and_then(|()| {
@@ -84,21 +110,24 @@ pub(super) fn download_update(
 
 pub(super) fn verify_download(path: &Path, update: &VerifiedUpdate) -> Result<(), UpdateFailure> {
     let locked_file = verify_file_integrity(path, update.installer_size, &update.installer_sha256)?;
-    let actual_version =
-        executable_file_version(path).map_err(|source| UpdateFailure::Platform {
-            operation: "Could not read downloaded update version",
-            source,
-        })?;
-    let expected_version = Version::parse(update.version())
-        .map_err(|source| UpdateFailure::Version {
-            operation: "Invalid release version",
-            source,
-        })
-        .and_then(|version| expected_file_version(&version))?;
-    if actual_version != expected_version {
-        return Err(UpdateFailure::Rejected(
-            "Downloaded installer version does not match update metadata",
-        ));
+    #[cfg(windows)]
+    {
+        let actual_version =
+            executable_file_version(path).map_err(|source| UpdateFailure::Platform {
+                operation: "Could not read downloaded update version",
+                source,
+            })?;
+        let expected_version = Version::parse(update.version())
+            .map_err(|source| UpdateFailure::Version {
+                operation: "Invalid release version",
+                source,
+            })
+            .and_then(|version| expected_file_version(&version))?;
+        if actual_version != expected_version {
+            return Err(UpdateFailure::Rejected(
+                "Downloaded installer version does not match update metadata",
+            ));
+        }
     }
     retain_verified_installer_lock(path, locked_file);
     Ok(())
@@ -194,10 +223,17 @@ fn create_unique_partial(
         .map_err(|_| UpdateFailure::Rejected("System clock is before the Unix epoch"))?
         .as_nanos();
     for attempt in 0..16_u8 {
-        let path = directory.join(format!(
+        #[cfg(target_os = "linux")]
+        let filename = format!(
+            ".barepdf_{version}_amd64-{}-{nonce}-{attempt}.partial",
+            std::process::id()
+        );
+        #[cfg(not(target_os = "linux"))]
+        let filename = format!(
             ".BarePDF-Setup-x64-v{version}-{}-{nonce}-{attempt}.partial",
             std::process::id()
-        ));
+        );
+        let path = directory.join(filename);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(windows)]
