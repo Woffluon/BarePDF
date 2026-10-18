@@ -10,7 +10,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsZoomed, PostMessageW, SendMessageW, ShowWindow, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
     HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-    WM_CLOSE, WM_NCLBUTTONDOWN,
+    WM_CLOSE, WM_LBUTTONUP, WM_NCLBUTTONDOWN,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +97,11 @@ pub fn begin_native_drag(window: WindowHandle<'_>, hit: WindowHit) -> bool {
     }
     // SAFETY: `window` guarantees a live Win32 `HWND` on the calling thread. `WM_NCLBUTTONDOWN`
     // takes the hit-test code in `WPARAM` and `0` in `LPARAM` with no pointer dereferences.
+    // Following the synchronous modal move loop, post `WM_LBUTTONUP` so any listening UI frameworks
+    // release their mouse capture.
     unsafe {
         SendMessageW(hwnd, WM_NCLBUTTONDOWN, hit_test_code(hit), 0);
+        PostMessageW(hwnd, WM_LBUTTONUP, 0, 0);
     }
     true
 }

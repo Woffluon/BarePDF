@@ -1,15 +1,12 @@
 #[cfg(windows)]
 use barepdf_platform_windows::{
-    apply_frameless_style, begin_native_drag, is_window_maximized, send_window_command,
-    WindowCommand, WindowHit,
+    apply_frameless_style, is_window_maximized, send_window_command, WindowCommand,
 };
 use barepdf_ui::AppWindow;
+use i_slint_backend_winit::WinitWindowAccessor;
 #[cfg(windows)]
 use raw_window_handle::HasWindowHandle;
 use slint::ComponentHandle;
-
-#[cfg(not(windows))]
-use i_slint_backend_winit::WinitWindowAccessor;
 
 #[cfg(windows)]
 pub(crate) fn is_maximized(window: &AppWindow) -> bool {
@@ -68,9 +65,11 @@ pub(crate) fn connect_window_chrome_callbacks(window: &AppWindow) {
             let Some(window) = weak.upgrade() else {
                 return;
             };
+            window.window().with_winit_window(|w| {
+                let _ = w.drag_window();
+            });
             let window_handle = window.window().window_handle();
             if let Ok(handle) = window_handle.window_handle() {
-                let _ = begin_native_drag(handle, WindowHit::Caption);
                 window.set_window_maximized(is_window_maximized(handle));
             }
         });
@@ -79,15 +78,25 @@ pub(crate) fn connect_window_chrome_callbacks(window: &AppWindow) {
     {
         let weak = window.as_weak();
         window.on_begin_resize(move |edge| {
-            let Some(hit) = WindowHit::from_resize_edge(edge) else {
-                return;
+            let direction = match edge {
+                0 => winit::window::ResizeDirection::West,
+                1 => winit::window::ResizeDirection::East,
+                2 => winit::window::ResizeDirection::North,
+                3 => winit::window::ResizeDirection::South,
+                4 => winit::window::ResizeDirection::NorthWest,
+                5 => winit::window::ResizeDirection::NorthEast,
+                6 => winit::window::ResizeDirection::SouthWest,
+                7 => winit::window::ResizeDirection::SouthEast,
+                _ => return,
             };
             let Some(window) = weak.upgrade() else {
                 return;
             };
+            window.window().with_winit_window(|w| {
+                let _ = w.drag_resize_window(direction);
+            });
             let window_handle = window.window().window_handle();
             if let Ok(handle) = window_handle.window_handle() {
-                let _ = begin_native_drag(handle, hit);
                 window.set_window_maximized(is_window_maximized(handle));
             }
         });
