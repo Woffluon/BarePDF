@@ -33,4 +33,24 @@ ignore = [
     #   UI chrome text shaping, not for untrusted PDF content streams (which are rendered by PDFium).
     # - Re-evaluate when: Upgrading `slint` to a version that migrates text shaping to `harfrust`.
     "RUSTSEC-2026-0206",
+
+    # RUSTSEC-2026-0370 (Informational: unmaintained): `zvariant`
+    # - Dependency path: Transitive via `slint` 1.17.1 (`i-slint-backend-winit` -> `accesskit_unix` -> `atspi`)
+    #   and `rfd` 0.15.4 (`ashpd` -> `zbus`).
+    # - Impact analysis: Informational maintenance notice only; no known CVE. D-Bus IPC serialization used only
+    #   for Linux desktop integration (accessibility/file dialog portal); not reached on Windows or untrusted inputs.
+    # - Re-evaluate when: Upgrading upstream Linux desktop portal / accessibility dependencies.
+    "RUSTSEC-2026-0370",
+
+    # RUSTSEC-2026-0371 (Informational: unmaintained): `zbus_names`
+    # - Dependency path: Transitive via `slint` 1.17.1 and `rfd` 0.15.4 (`zbus`).
+    # - Impact analysis: Informational maintenance notice only; no known CVE. Used only for Linux D-Bus names.
+    # - Re-evaluate when: Upgrading upstream Linux desktop portal / accessibility dependencies.
+    "RUSTSEC-2026-0371",
+
+    # RUSTSEC-2026-0372 (Informational: unmaintained): `zvariant_derive`
+    # - Dependency path: Transitive compile-time proc-macro for `zvariant`.
+    # - Impact analysis: Informational maintenance notice only; compile-time derive macro with no runtime footprint.
+    # - Re-evaluate when: Upgrading upstream Linux desktop portal / accessibility dependencies.
+    "RUSTSEC-2026-0372",
 ]
