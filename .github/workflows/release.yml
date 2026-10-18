@@ -125,6 +125,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Checkout release commit
@@ -146,81 +147,47 @@ jobs:
             -ReleaseTag $env:RELEASE_TAG `
             -Version "${{ matrix.release.version }}"
 
-      - name: Install Rust toolchain
+      - name: Download CI release artifacts
         if: steps.state.outputs.needed == 'true'
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
-        with:
-          toolchain: 1.95.0
-          components: rustfmt, clippy
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_SHA: ${{ matrix.release.sha }}
+        run: |
+          $RunId = if ($env:EVENT_NAME -eq "workflow_run" -and $env:CI_RUN_ID) {
+            $env:CI_RUN_ID
+          } else {
+            (& gh run list --commit $env:RELEASE_SHA --workflow CI --status success --json databaseId --jq '.[0].databaseId').Trim()
+          }
+          if (-not $RunId) {
+            throw "No successful CI workflow run found for commit $env:RELEASE_SHA"
+          }
+          Write-Host "Downloading CI artifacts from run $RunId..."
+          New-Item -ItemType Directory -Path target/release/artifacts -Force | Out-Null
+          gh run download $RunId --name BarePDF-Windows-CI-Build --dir target/release/artifacts
+          gh run download $RunId --name BarePDF-Linux-CI-Build --dir target/release/artifacts
 
-      - name: Cargo Cache
-        if: steps.state.outputs.needed == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Validate release commit
+      - name: Consolidate Multi-Platform Checksums
         if: steps.state.outputs.needed == 'true'
         shell: powershell
         run: |
-          powershell -File scripts/test-versioning.ps1
-          powershell -File packaging/windows/scripts/validate-version.ps1 -CommitSha HEAD
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-          cargo test --workspace --all-features --locked
-          cargo install cargo-audit --version 0.22.0 --locked
-          cargo audit --deny warnings
-
-      - name: Setup Node.js
-        if: steps.state.outputs.needed == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-
-      - name: Setup pnpm
-        if: steps.state.outputs.needed == 'true'
-        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
-        with:
-          version: 10
-
-      - name: Validate website
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: |
-          pnpm --dir website install --frozen-lockfile
-          pnpm --dir website run test
-          pnpm --dir website run check
-          pnpm --dir website run build
-
-      - name: Install Inno Setup
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: choco install innosetup --version=6.7.1 --no-progress -y
-
-      - name: Fetch verified PDFium runtime
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/fetch-pdfium.ps1
-
-      - name: Stage release artifacts
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: powershell -File packaging/windows/scripts/stage-release.ps1
-
-      - name: Build portable package and installer
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: |
-          powershell -File packaging/windows/scripts/build-portable.ps1
-          powershell -File packaging/windows/scripts/build-installer.ps1
-
-      - name: Validate installer and generate release assets
-        if: steps.state.outputs.needed == 'true'
-        shell: powershell
-        run: |
-          $advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-          New-Item -Path $advanced -Force | Out-Null
-          Set-ItemProperty -Path $advanced -Name IconsOnly -Type DWord -Value 0
-          powershell -File packaging/windows/scripts/validate-installer.ps1
-          powershell -File packaging/windows/scripts/generate-checksums.ps1
+          $Version = "${{ matrix.release.version }}"
+          $ChecksumFile = "target/release/artifacts/BarePDF-v$Version-SHA256SUMS.txt"
+          $ExistingHashes = if (Test-Path $ChecksumFile) { Get-Content $ChecksumFile } else { @() }
+          $LinuxFiles = Get-ChildItem -LiteralPath target/release/artifacts -File |
+            Where-Object { $_.Name -like "*.deb" -or $_.Name -like "*.AppImage" }
+          $NewLines = foreach ($f in $LinuxFiles) {
+            if (-not ($ExistingHashes -match [regex]::Escape($f.Name))) {
+              "$((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower())  $($f.Name)"
+            }
+          }
+          if ($NewLines) {
+            $NewLines | Add-Content -Path $ChecksumFile
+          }
+          Write-Host "Consolidated SHA-256 Checksums:" -ForegroundColor Cyan
+          Get-Content $ChecksumFile
 
       - name: Sign update manifest
         if: steps.state.outputs.needed == 'true'
@@ -271,84 +238,10 @@ jobs:
           make_latest: "false"
           token: ${{ github.token }}
 
-  publish-linux:
-    name: Publish Linux Assets for ${{ matrix.release.tag }}
-    needs: [ discover, publish ]
-    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
-    strategy:
-      fail-fast: true
-      max-parallel: 1
-      matrix:
-        release: ${{ fromJson(needs.discover.outputs.releases) }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 35
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout release commit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ matrix.release.sha }}
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
-        with:
-          toolchain: 1.95.0
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
-
-      - name: Install cargo-deb
-        run: cargo install cargo-deb --locked
-
-      - name: Download Pinned Pdfium Linux Binary
-        run: |
-          mkdir -p target/release
-          curl -fsSL -o target/release/pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
-          tar -xzf target/release/pdfium-linux-x64.tgz -C target/release lib/libpdfium.so
-          mv target/release/lib/libpdfium.so target/release/
-          rm -rf target/release/lib target/release/pdfium-linux-x64.tgz
-
-      - name: Build BarePDF Release
-        run: cargo build --release --locked --package barepdf
-
-      - name: Build Debian/Pardus Package (.deb)
-        run: |
-          cargo deb --package barepdf --no-build
-          VERSION="${{ matrix.release.version }}"
-          mv target/debian/*.deb "target/debian/barepdf_${VERSION}_amd64.deb"
-
-      - name: Generate AppImage
-        run: |
-          VERSION="${{ matrix.release.version }}"
-          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool
-          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
-          cp target/release/barepdf AppDir/usr/bin/
-          cp target/release/libpdfium.so AppDir/usr/lib/
-          cp packaging/linux/barepdf.desktop AppDir/
-          cp packaging/linux/icons/barepdf.svg AppDir/usr/share/icons/hicolor/scalable/apps/
-          cp packaging/linux/icons/barepdf.svg AppDir/barepdf.svg
-          echo '#!/bin/sh' > AppDir/AppRun
-          echo 'HERE="$(dirname "$(readlink -f "${0}")")"' >> AppDir/AppRun
-          echo 'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' >> AppDir/AppRun
-          echo 'exec "${HERE}/usr/bin/barepdf" "$@"' >> AppDir/AppRun
-          chmod +x AppDir/AppRun
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "BarePDF-${VERSION}-x86_64.AppImage"
-
-      - name: Upload Linux Assets to GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ matrix.release.tag }}" target/debian/*.deb *.AppImage --clobber
-
   finalize:
     name: Finalize Latest Release
-    needs: [ discover, publish, publish-linux ]
-    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success' && needs.publish-linux.result == 'success'
+    needs: [ discover, publish ]
+    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write

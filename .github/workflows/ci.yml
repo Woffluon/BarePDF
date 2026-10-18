@@ -44,10 +44,10 @@ jobs:
           pnpm --dir website run check
           pnpm --dir website run build
 
-  rust-checks:
-    name: Rust Code Validation
+  rust-lints:
+    name: Rust Lints & Security
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -79,6 +79,33 @@ jobs:
       - name: Production Panic Policy
         run: cargo clippy --workspace --lib --bins --all-features --locked -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-audit@0.22.0
+
+      - name: RustSec Audit
+        run: cargo audit --deny warnings
+
+  rust-tests:
+    name: Rust Unit & Integration Tests
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: 1.95.0
+
+      - name: Cargo Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
       - name: Fetch verified PDFium runtime
         shell: powershell
         run: |
@@ -88,12 +115,6 @@ jobs:
 
       - name: Unit & Integration Tests
         run: cargo test --workspace --all-features --locked
-
-      - name: RustSec Audit
-        shell: powershell
-        run: |
-          cargo install cargo-audit --version 0.22.0 --locked
-          cargo audit --deny warnings
 
   windows-build-and-package:
     name: Windows Package & Installer Test
@@ -180,7 +201,9 @@ jobs:
           sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
 
       - name: Install cargo-deb
-        run: cargo install cargo-deb --locked
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-deb
 
       - name: Download Pinned Pdfium Linux Binary
         run: |

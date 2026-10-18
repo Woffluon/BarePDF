@@ -51,6 +51,12 @@ non_ascii_idents = "forbid"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
+
 [profile.dev.package."*"]
 opt-level = 2
 
