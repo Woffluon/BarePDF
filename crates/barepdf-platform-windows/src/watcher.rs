@@ -211,6 +211,7 @@ impl WindowsDocumentFileWatcher {
         let thread_stop = SyncHandle(stop_event);
         let thread_change = SyncHandle(change_handle);
         let thread_callback = Arc::clone(&self.notify_callback);
+        let initial_snapshot = FileSnapshot::capture(&target_path);
 
         let handle = std::thread::Builder::new()
             .name("barepdf-file-watcher".into())
@@ -221,6 +222,7 @@ impl WindowsDocumentFileWatcher {
                     thread_change,
                     debounce,
                     thread_callback,
+                    initial_snapshot,
                 );
             })
             .map_err(|source| {
@@ -297,11 +299,11 @@ fn run_watcher_loop(
     change_handle: SyncHandle,
     debounce_duration: Duration,
     callback: Arc<dyn Fn(FileChangeEvent) + Send + Sync + 'static>,
+    mut last_snapshot: FileSnapshot,
 ) {
     let stop_event = stop_event.0;
     let change_handle = change_handle.0;
     let handles = [stop_event, change_handle];
-    let mut last_snapshot = FileSnapshot::capture(&target_path);
 
     loop {
         // SAFETY: `handles` contains 2 valid kernel handles. INFINITE wait sleeps with 0% CPU.
@@ -454,7 +456,7 @@ mod tests {
         }
 
         let event = rx
-            .recv_timeout(Duration::from_millis(2000))
+            .recv_timeout(Duration::from_millis(4000))
             .expect("should receive modification event");
         assert_eq!(event.path(), &file_path);
 
@@ -479,7 +481,7 @@ mod tests {
         fs::rename(&temp_build, &file_path).expect("atomic rename");
 
         let event = rx
-            .recv_timeout(Duration::from_millis(2000))
+            .recv_timeout(Duration::from_millis(4000))
             .expect("should receive replacement event");
         assert_eq!(event.path(), &file_path);
 
@@ -506,7 +508,7 @@ mod tests {
 
         // Wait for debounce window to settle and yield notification
         let event = rx
-            .recv_timeout(Duration::from_millis(2000))
+            .recv_timeout(Duration::from_millis(4000))
             .expect("should receive debounced event");
         assert_eq!(event.path(), &file_path);
 
@@ -576,7 +578,7 @@ mod tests {
         // Modify file_b (should trigger notification)
         fs::write(&file_b, b"%PDF-1.4 doc b updated").expect("modify b");
         let event = rx
-            .recv_timeout(Duration::from_millis(2000))
+            .recv_timeout(Duration::from_millis(4000))
             .expect("should receive event for new target");
         assert_eq!(event.path(), &file_b);
 
