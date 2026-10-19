@@ -332,15 +332,16 @@ fn execute_job(
         .open_path(&request.path, request.password.as_deref())
         .map_err(|error| pdf_failure(&error))?;
     let page_count = document.page_count().map_err(|error| pdf_failure(&error))?;
-    PrintRange::new(request.range.first(), request.range.last(), page_count)
-        .map_err(|error| print_failure(&error))?;
-    let pages_per_copy = request
-        .range
-        .last()
-        .get()
-        .checked_sub(request.range.first().get())
-        .and_then(|distance| distance.checked_add(1))
-        .ok_or_else(|| JobFailure::Failed("print page count overflow".into()))?;
+    if request.range.is_empty()
+        || request
+            .range
+            .pages()
+            .any(|page| page.get() >= page_count.get())
+    {
+        return Err(print_failure(&PrintError::InvalidRange));
+    }
+    let pages_per_copy = u32::try_from(request.range.len())
+        .map_err(|_| JobFailure::Failed("print page count overflow".into()))?;
     let total = pages_per_copy
         .checked_mul(u32::from(request.copies.get()))
         .ok_or_else(|| JobFailure::Failed("print page count overflow".into()))?;
@@ -701,7 +702,12 @@ mod tests {
         let range = PrintRange::all(count(1));
         let cancel = Arc::new(AtomicBool::new(false));
         let (progress_sender, _progress_receiver) = mpsc::sync_channel(1);
-        let mut invalid = request(state.clone(), range, Copies::default(), cancel.clone());
+        let mut invalid = request(
+            state.clone(),
+            range.clone(),
+            Copies::default(),
+            cancel.clone(),
+        );
         invalid.sink = Some(Box::new(FakeSink {
             id: id(),
             dpi: 601,

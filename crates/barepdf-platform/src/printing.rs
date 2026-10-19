@@ -73,14 +73,33 @@ impl PrintDuplex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrintRange {
-    first: PageIndex,
-    last: PageIndex,
+    pages: Vec<PageIndex>,
 }
 
 impl PrintRange {
-    /// Creates an inclusive range whose indices belong to `page_count`.
+    /// Creates a sorted, deduplicated range from arbitrary pages belonging to `page_count`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrintError::InvalidRange`] if `pages` is empty or contains out-of-bounds indices.
+    pub fn from_pages(
+        mut pages: Vec<PageIndex>,
+        page_count: PageCount,
+    ) -> Result<Self, PrintError> {
+        if pages.is_empty() {
+            return Err(PrintError::InvalidRange);
+        }
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.iter().any(|p| p.get() >= page_count.get()) {
+            return Err(PrintError::InvalidRange);
+        }
+        Ok(Self { pages })
+    }
+
+    /// Creates an inclusive contiguous range whose indices belong to `page_count`.
     ///
     /// # Errors
     ///
@@ -90,31 +109,44 @@ impl PrintRange {
         last: PageIndex,
         page_count: PageCount,
     ) -> Result<Self, PrintError> {
-        (first <= last && last.get() < page_count.get())
-            .then_some(Self { first, last })
-            .ok_or(PrintError::InvalidRange)
-    }
-
-    #[must_use]
-    pub fn all(page_count: PageCount) -> Self {
-        Self {
-            first: PageIndex::zero(),
-            last: PageIndex::from_raw(page_count.get() - 1),
+        if first <= last && last.get() < page_count.get() {
+            let pages = (first.get()..=last.get())
+                .map(PageIndex::from_raw)
+                .collect();
+            Ok(Self { pages })
+        } else {
+            Err(PrintError::InvalidRange)
         }
     }
 
     #[must_use]
-    pub const fn first(self) -> PageIndex {
-        self.first
+    pub fn all(page_count: PageCount) -> Self {
+        let pages = (0..page_count.get()).map(PageIndex::from_raw).collect();
+        Self { pages }
     }
 
     #[must_use]
-    pub const fn last(self) -> PageIndex {
-        self.last
+    pub fn first(&self) -> Option<PageIndex> {
+        self.pages.first().copied()
     }
 
-    pub fn pages(self) -> impl Iterator<Item = PageIndex> {
-        (self.first.get()..=self.last.get()).map(PageIndex::from_raw)
+    #[must_use]
+    pub fn last(&self) -> Option<PageIndex> {
+        self.pages.last().copied()
+    }
+
+    pub fn pages(&self) -> impl Iterator<Item = PageIndex> + '_ {
+        self.pages.iter().copied()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pages.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
     }
 }
 
@@ -270,6 +302,62 @@ mod tests {
                 .map(PageIndex::get)
                 .collect::<Vec<_>>(),
             vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn print_range_from_pages_validates_sorts_deduplicates_and_iterates() {
+        let page_count = PageCount::new(5).unwrap();
+
+        // Empty pages (error)
+        assert_eq!(
+            PrintRange::from_pages(vec![], page_count),
+            Err(PrintError::InvalidRange)
+        );
+
+        // Out-of-bounds pages (error)
+        assert_eq!(
+            PrintRange::from_pages(vec![PageIndex::from_raw(5)], page_count),
+            Err(PrintError::InvalidRange)
+        );
+        assert_eq!(
+            PrintRange::from_pages(vec![PageIndex::zero(), PageIndex::from_raw(99)], page_count),
+            Err(PrintError::InvalidRange)
+        );
+
+        // Out-of-order and duplicates: sorted, deduplicated
+        let range = PrintRange::from_pages(
+            vec![
+                PageIndex::from_raw(3),
+                PageIndex::from_raw(1),
+                PageIndex::from_raw(3),
+                PageIndex::from_raw(0),
+                PageIndex::from_raw(1),
+            ],
+            page_count,
+        )
+        .expect("valid arbitrary page list");
+
+        assert_eq!(range.len(), 3);
+        assert!(!range.is_empty());
+        assert_eq!(range.first(), Some(PageIndex::zero()));
+        assert_eq!(range.last(), Some(PageIndex::from_raw(3)));
+        assert_eq!(
+            range.pages().map(PageIndex::get).collect::<Vec<_>>(),
+            vec![0, 1, 3]
+        );
+
+        // Contiguous range compatibility
+        let contiguous =
+            PrintRange::new(PageIndex::from_raw(1), PageIndex::from_raw(3), page_count)
+                .expect("valid contiguous range");
+        assert_eq!(contiguous.len(), 3);
+        assert!(!contiguous.is_empty());
+        assert_eq!(contiguous.first(), Some(PageIndex::from_raw(1)));
+        assert_eq!(contiguous.last(), Some(PageIndex::from_raw(3)));
+        assert_eq!(
+            contiguous.pages().map(PageIndex::get).collect::<Vec<_>>(),
+            vec![1, 2, 3]
         );
     }
 

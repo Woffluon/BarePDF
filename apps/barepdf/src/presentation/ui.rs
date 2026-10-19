@@ -310,11 +310,28 @@ pub(crate) fn process_view_changes(
     let width = window.get_pdf_viewport_width().max(240.0).round() as u32;
     let height = window.get_pdf_viewport_height().max(240.0).round() as u32;
     let scale = window.window().scale_factor().max(0.5);
-    let scroll = window.get_current_scroll_y();
     let thumbnail_scroll = window.get_thumbnail_scroll_y();
     let now = Instant::now();
 
     let mut app = state.borrow_mut();
+    if app.kinetic_scroll.active {
+        app.kinetic_scroll.velocity_y *= 0.94;
+        if app.kinetic_scroll.velocity_y.abs() < 0.5 {
+            app.kinetic_scroll.cancel();
+        } else {
+            let current_scroll = window.get_current_scroll_y();
+            let total_height = app.layout.total_height;
+            let max_scroll = (height as f32 - total_height).min(0.0);
+            let new_scroll =
+                (current_scroll + app.kinetic_scroll.velocity_y).clamp(max_scroll, 0.0);
+            window.set_current_scroll_y(new_scroll);
+            if new_scroll == 0.0 || new_scroll == max_scroll {
+                app.kinetic_scroll.cancel();
+            }
+        }
+    }
+    let scroll = window.get_current_scroll_y();
+
     if width != app.viewport_width
         || height != app.viewport_height
         || (scale - app.scale_factor).abs() > 0.01
@@ -2122,6 +2139,119 @@ mod tests {
             update_smartboard_scale(&window, Some(1.0));
             assert!(!window.global::<ThemeTokens>().get_smartboard_mode());
             assert!((window.global::<ThemeTokens>().get_scale_multiplier() - 1.0).abs() < 1e-4);
+        });
+    }
+
+    #[test]
+    fn kinetic_scroll_physics_decay_cutoff_and_boundary_clamping() {
+        use barepdf_core::{PageCount, PageIndex, PdfError, RawBitmap, Rotation};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+
+        struct MockDoc;
+        impl PdfDocument for MockDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::ONE)
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+                Ok(barepdf_core::PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+        }
+
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let window = AppWindow::new().unwrap();
+            let state = Rc::new(RefCell::new(AppState::new(UserPreferences::default())));
+            let scheduler =
+                RenderScheduler::spawn(MockBackend, barepdf_core::MemoryBudget::default());
+
+            // Configure document layout
+            let total_height = 2000.0;
+            let viewport_height = window.get_pdf_viewport_height().max(240.0).round();
+            let max_scroll = (viewport_height - total_height).min(0.0);
+            {
+                let mut app = state.borrow_mut();
+                app.viewport_height = viewport_height as u32;
+                app.layout.total_height = total_height;
+                window.set_current_scroll_y(-500.0);
+            }
+
+            // 1. Friction decay step
+            state.borrow_mut().kinetic_scroll.start(100.0);
+            process_view_changes(&window, &state, &scheduler);
+            assert!(state.borrow().kinetic_scroll.active);
+            let expected_vel = 100.0 * 0.94;
+            assert!((state.borrow().kinetic_scroll.velocity_y - expected_vel).abs() < 1e-4);
+            assert_eq!(window.get_current_scroll_y(), -500.0 + expected_vel);
+
+            // 2. Velocity cutoff below 0.5 deactivates kinetic scroll
+            state.borrow_mut().kinetic_scroll.velocity_y = 0.52; // 0.52 * 0.94 = 0.4888 < 0.5
+            process_view_changes(&window, &state, &scheduler);
+            assert!(!state.borrow().kinetic_scroll.active);
+
+            // 3. Clamping and cutoff at upper boundary (0.0)
+            window.set_current_scroll_y(-10.0);
+            state.borrow_mut().kinetic_scroll.start(50.0);
+            process_view_changes(&window, &state, &scheduler);
+            assert_eq!(window.get_current_scroll_y(), 0.0);
+            assert!(!state.borrow().kinetic_scroll.active);
+
+            // 4. Clamping and cutoff at lower boundary (max_scroll)
+            window.set_current_scroll_y(max_scroll + 20.0);
+            state.borrow_mut().kinetic_scroll.start(-50.0);
+            process_view_changes(&window, &state, &scheduler);
+            assert_eq!(window.get_current_scroll_y(), max_scroll);
+            assert!(!state.borrow().kinetic_scroll.active);
+
+            scheduler.shutdown();
         });
     }
 }

@@ -2,7 +2,7 @@ use super::{
     consume_ui_password,
     drawing::{erase_strokes_near, selection_to_highlight_quads},
     navigation::{is_safe_external_link_url, parse_zoom_percent},
-    print::{parse_print_preview_range, print_preview_dimensions, DeferredPrinterSink},
+    print::{parse_print_preview_pages, print_preview_dimensions, DeferredPrinterSink},
     tools::{selected_tool_pages, toggle_tool_page_selection, tool_drop_paths},
 };
 use crate::presentation::state::{PrintPreviewState, PRINT_PREVIEW_REQUEST_MASK};
@@ -34,7 +34,7 @@ fn print_preview_accepts_only_the_latest_matching_render_once() {
     let first = RequestId::new(PRINT_PREVIEW_REQUEST_MASK | 1);
     let latest = RequestId::new(PRINT_PREVIEW_REQUEST_MASK | 2);
     preview.expect_render(first, PageIndex::zero());
-    preview.set_page(1);
+    preview.step_next_page();
     preview.expect_render(latest, PageIndex::from_raw(1));
 
     assert!(!preview.accept_render(first, document, 11, PageIndex::zero()));
@@ -58,27 +58,55 @@ fn closing_print_preview_rejects_an_in_flight_render() {
 }
 
 #[test]
-fn print_preview_range_is_contiguous_and_bounded() {
+fn test_parse_print_preview_pages() {
+    let pages = page_count(10);
+    // Valid single
     assert_eq!(
-        parse_print_preview_range("", page_count(5)),
-        Some((PageIndex::zero(), PageIndex::from_raw(4)))
+        parse_print_preview_pages("1", pages),
+        Ok(vec![PageIndex::from_raw(0)])
     );
+    // Valid range
     assert_eq!(
-        parse_print_preview_range("2-4", page_count(5)),
-        Some((PageIndex::from_raw(1), PageIndex::from_raw(3)))
+        parse_print_preview_pages("2-4", pages),
+        Ok(vec![
+            PageIndex::from_raw(1),
+            PageIndex::from_raw(2),
+            PageIndex::from_raw(3),
+        ])
     );
+    // Multi-range out of order with deduplication
     assert_eq!(
-        parse_print_preview_range("3", page_count(5)),
-        Some((PageIndex::from_raw(2), PageIndex::from_raw(2)))
+        parse_print_preview_pages("5, 1, 3, 2-4, 5", pages),
+        Ok(vec![
+            PageIndex::from_raw(0),
+            PageIndex::from_raw(1),
+            PageIndex::from_raw(2),
+            PageIndex::from_raw(3),
+            PageIndex::from_raw(4),
+        ])
     );
+    // Empty input returns all pages
     assert_eq!(
-        parse_print_preview_range("1-2, 3-4", page_count(5)),
-        Some((PageIndex::zero(), PageIndex::from_raw(3)))
+        parse_print_preview_pages("", page_count(3)),
+        Ok(vec![
+            PageIndex::from_raw(0),
+            PageIndex::from_raw(1),
+            PageIndex::from_raw(2),
+        ])
     );
-    assert_eq!(parse_print_preview_range("4-2", page_count(5)), None);
-    assert_eq!(parse_print_preview_range("1,3", page_count(5)), None);
-    assert_eq!(parse_print_preview_range("1-3,5", page_count(5)), None);
-    assert_eq!(parse_print_preview_range("6", page_count(5)), None);
+    // Out of bounds
+    assert_eq!(parse_print_preview_pages("11", pages), Err("out_of_bounds"));
+    assert_eq!(
+        parse_print_preview_pages("1-12", pages),
+        Err("out_of_bounds")
+    );
+    assert_eq!(parse_print_preview_pages("0", pages), Err("out_of_bounds"));
+    // Invalid characters or formatting
+    assert_eq!(parse_print_preview_pages("abc", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("5-2", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("1--3", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("1-", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages(",,", pages), Err("invalid"));
 }
 
 #[test]

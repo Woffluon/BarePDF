@@ -16,6 +16,8 @@ export component PrintPreviewDialog inherits Rectangle {
     in-out property <int> range-mode: 0; // 0: All / Tümü, 1: Current / Geçerli, 2: Custom / Özel
     in-out property <int> paper-size: 0; // 0: A4, 1: Letter, 2: Legal
     in-out property <int> duplex: 0; // 0: Tek Taraflı, 1: Uzun Kenar, 2: Kısa Kenar
+    in property <bool> range-valid: true;
+    in property <string> range-error: "";
     in property <string> text-title: "Yazdır";
     in property <string> text-cancel-tooltip: "Kapat";
     in property <string> text-empty: "Sayfa önizlemesi";
@@ -55,7 +57,9 @@ export component PrintPreviewDialog inherits Rectangle {
     forward-focus: dialog-focus;
 
     TouchArea {
-        clicked => { root.cancel(); }
+        clicked => {}
+        scroll-event(event) => { return accept; }
+        pointer-event(event) => {}
     }
 
     dialog-focus := FocusScope {
@@ -159,9 +163,9 @@ export component PrintPreviewDialog inherits Rectangle {
                             // Paper preview canvas
                             Rectangle {
                                 x: (parent.width - self.width) / 2;
-                                y: 16px;
-                                width: Math.min(parent.width - 32px, 260px);
-                                height: parent.height - 76px;
+                                y: (parent.height - 48px - self.height) / 2;
+                                width: root.orientation == 2 ? Math.min(parent.width - 32px, 300px) : Math.min(parent.width - 32px, 220px);
+                                height: root.orientation == 2 ? 212px : Math.min(parent.height - 76px, 310px);
                                 border-radius: ThemeTokens.page-radius;
                                 background: white;
                                 border-width: 1px;
@@ -345,12 +349,25 @@ export component PrintPreviewDialog inherits Rectangle {
                                         clicked => { root.range-mode = 2; }
                                     }
                                 }
-                                if root.range-mode == 2 : LineEdit {
-                                    text <=> root.range;
-                                    placeholder-text: root.text-range-placeholder != "" ? root.text-range-placeholder : "1-3, 5, 8-10";
-                                    accessible-label: root.text-range-accessible;
-                                    accepted => { root.range-changed(root.range); }
-                                    changed text => { root.range-changed(self.text); }
+                                if root.range-mode == 2 : VerticalLayout {
+                                    spacing: 4px;
+                                    Rectangle {
+                                        border-radius: ThemeTokens.control-radius;
+                                        border-width: !root.range-valid ? 1.5px : 0px;
+                                        border-color: #e03131;
+                                        LineEdit {
+                                            text <=> root.range;
+                                            placeholder-text: root.text-range-placeholder != "" ? root.text-range-placeholder : "1-3, 5, 8-10";
+                                            accessible-label: root.text-range-accessible;
+                                            accepted => { root.range-changed(root.range); }
+                                            changed text => { root.range-changed(self.text); }
+                                        }
+                                    }
+                                    if !root.range-valid && root.range-error != "" : Text {
+                                        text: root.range-error;
+                                        color: #e03131;
+                                        font-size: 11px;
+                                    }
                                 }
 
                                 // 4. Yönlendirme (Otomatik / Dikey / Yatay)
@@ -445,6 +462,7 @@ export component PrintPreviewDialog inherits Rectangle {
                         TextButton {
                             text: root.text-continue != "" ? root.text-continue : "Yazdır";
                             primary: true;
+                            enabled: root.range-valid;
                             clicked => { root.confirm(); }
                         }
                     }

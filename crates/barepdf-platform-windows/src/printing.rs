@@ -13,7 +13,7 @@ pub struct WindowsPrinterDialog {
 
 pub use barepdf_platform::printing::{PrintDuplex, PrintOrientation};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PrintDialogOptions {
     range: PrintRange,
     orientation: PrintOrientation,
@@ -21,7 +21,7 @@ pub(crate) struct PrintDialogOptions {
 }
 
 impl PrintDialogOptions {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         range: PrintRange,
         orientation: PrintOrientation,
         duplex: PrintDuplex,
@@ -33,15 +33,15 @@ impl PrintDialogOptions {
         }
     }
 
-    pub(crate) const fn range(self) -> PrintRange {
-        self.range
+    pub(crate) fn range(&self) -> &PrintRange {
+        &self.range
     }
 
-    pub(crate) const fn orientation(self) -> PrintOrientation {
+    pub(crate) const fn orientation(&self) -> PrintOrientation {
         self.orientation
     }
 
-    pub(crate) const fn duplex(self) -> PrintDuplex {
+    pub(crate) const fn duplex(&self) -> PrintDuplex {
         self.duplex
     }
 }
@@ -293,12 +293,12 @@ mod tests {
             .expect("test range");
 
         let options = PrintDialogOptions::new(
-            range,
+            range.clone(),
             PrintOrientation::Landscape,
             PrintDuplex::TwoSidedLongEdge,
         );
 
-        assert_eq!(options.range(), range);
+        assert_eq!(options.range(), &range);
         assert_eq!(options.orientation(), PrintOrientation::Landscape);
         assert_eq!(options.duplex(), PrintDuplex::TwoSidedLongEdge);
     }

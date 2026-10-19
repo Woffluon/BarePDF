@@ -60,6 +60,8 @@ pub(crate) struct PrintPreviewState {
     pub(crate) generation: u64,
     pub(crate) page_count: PageCount,
     pub(crate) page_index: PageIndex,
+    pub(crate) preview_pages: Vec<PageIndex>,
+    pub(crate) preview_index: usize,
     pub(crate) orientation: i32,
     pub(crate) duplex: i32,
     pub(crate) range: String,
@@ -74,6 +76,8 @@ impl Default for PrintPreviewState {
             generation: 0,
             page_count: PageCount::ONE,
             page_index: PageIndex::zero(),
+            preview_pages: vec![PageIndex::zero()],
+            preview_index: 0,
             orientation: 0,
             duplex: 0,
             range: "1".into(),
@@ -94,7 +98,10 @@ impl PrintPreviewState {
         self.document_id = Some(document_id);
         self.generation = generation;
         self.page_count = page_count;
-        self.page_index = PageIndex::from_raw(page_index.get().min(page_count.get() - 1));
+        let clamped_page = page_index.get().min(page_count.get() - 1);
+        self.page_index = PageIndex::from_raw(clamped_page);
+        self.preview_pages = (0..page_count.get()).map(PageIndex::from_raw).collect();
+        self.preview_index = clamped_page as usize;
         self.orientation = 0;
         self.duplex = 0;
         self.range = default_print_preview_range(page_count);
@@ -134,11 +141,41 @@ impl PrintPreviewState {
         self.pending = None;
     }
 
-    pub(crate) fn set_page(&mut self, page: i32) -> PageIndex {
-        let maximum = self.page_count.get().saturating_sub(1);
-        let page = u32::try_from(page).unwrap_or(0).min(maximum);
-        self.page_index = PageIndex::from_raw(page);
-        self.page_index
+    pub(crate) fn set_preview_pages(&mut self, pages: Vec<PageIndex>) {
+        if pages.is_empty() {
+            return;
+        }
+        if let Some(pos) = pages.iter().position(|&p| p == self.page_index) {
+            self.preview_index = pos;
+        } else {
+            self.preview_index = self.preview_index.min(pages.len() - 1);
+            if let Some(&new_page) = pages.get(self.preview_index) {
+                self.page_index = new_page;
+            }
+        }
+        self.preview_pages = pages;
+    }
+
+    pub(crate) fn step_previous_page(&mut self) -> Option<PageIndex> {
+        if self.preview_index > 0 {
+            self.preview_index -= 1;
+            let page = self.preview_pages.get(self.preview_index).copied()?;
+            self.page_index = page;
+            Some(page)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn step_next_page(&mut self) -> Option<PageIndex> {
+        if self.preview_index + 1 < self.preview_pages.len() {
+            self.preview_index += 1;
+            let page = self.preview_pages.get(self.preview_index).copied()?;
+            self.page_index = page;
+            Some(page)
+        } else {
+            None
+        }
     }
 }
 
@@ -146,6 +183,28 @@ impl PrintPreviewState {
 pub(crate) struct DocumentStatus {
     pub(crate) first_page_ready: bool,
     pub(crate) profile_recorded: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(crate) struct KineticScrollState {
+    pub(crate) active: bool,
+    pub(crate) velocity_y: f32,
+    pub(crate) last_drag_time: Option<Instant>,
+    pub(crate) last_drag_y: f32,
+}
+
+impl KineticScrollState {
+    pub(crate) fn cancel(&mut self) {
+        self.active = false;
+        self.velocity_y = 0.0;
+        self.last_drag_time = None;
+    }
+
+    pub(crate) fn start(&mut self, velocity_y: f32) {
+        self.active = true;
+        self.velocity_y = velocity_y;
+        self.last_drag_time = None;
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +543,7 @@ pub(crate) struct AppState {
     pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
     pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
     pub(crate) sign_pen_thickness: f32,
+    pub(crate) kinetic_scroll: KineticScrollState,
     pub(crate) file_watcher: Option<barepdf_platform_windows::WindowsDocumentFileWatcher>,
     file_change_sender: std::sync::mpsc::Sender<PathBuf>,
     file_change_receiver: std::sync::mpsc::Receiver<PathBuf>,
@@ -573,6 +633,7 @@ impl AppState {
             sign_pad_active_stroke: None,
             sign_uploaded_image: None,
             sign_pen_thickness: 2.0,
+            kinetic_scroll: KineticScrollState::default(),
             file_watcher: None,
             file_change_sender,
             file_change_receiver,
@@ -683,7 +744,8 @@ impl AppState {
     }
 
     pub(crate) fn pump_requires_active(&self, now: Instant) -> bool {
-        self.update.is_busy()
+        self.kinetic_scroll.active
+            || self.update.is_busy()
             || self.active_tool_job.is_some()
             || self
                 .background_io_in_flight
@@ -906,6 +968,23 @@ mod tests {
         app.visible_page_indices.push(0);
 
         assert!(app.pump_requires_active(Instant::now()));
+    }
+
+    #[test]
+    fn kinetic_scroll_keeps_pump_active_and_decays_correctly() {
+        let mut app = AppState::new(UserPreferences::default());
+        let now = Instant::now();
+        assert!(!app.pump_requires_active(now));
+
+        app.kinetic_scroll.start(20.0);
+        assert!(app.kinetic_scroll.active);
+        assert_eq!(app.kinetic_scroll.velocity_y, 20.0);
+        assert!(app.pump_requires_active(now));
+
+        app.kinetic_scroll.cancel();
+        assert!(!app.kinetic_scroll.active);
+        assert_eq!(app.kinetic_scroll.velocity_y, 0.0);
+        assert!(!app.pump_requires_active(now));
     }
 
     #[test]

@@ -266,6 +266,18 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
         }
     });
 
+    let state_kinetic_cancel = state.clone();
+    window.on_cancel_kinetic_scroll(move || {
+        state_kinetic_cancel.borrow_mut().kinetic_scroll.cancel();
+    });
+
+    let state_kinetic_start = state.clone();
+    window.on_start_kinetic_scroll(move |velocity_y| {
+        let mut app = state_kinetic_start.borrow_mut();
+        app.kinetic_scroll.start(velocity_y);
+        app.wake_pump();
+    });
+
     let weak = window.as_weak();
     let state_eraser = state.clone();
     window.on_set_drawing_eraser(move |active| {

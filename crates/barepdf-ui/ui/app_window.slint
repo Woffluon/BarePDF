@@ -137,6 +137,8 @@ export component AppWindow inherits Window {
     in-out property <int> print-preview-page: 0;
     in-out property <string> print-preview-range: "";
     in-out property <int> print-preview-orientation: 0;
+    in-out property <bool> print-preview-range-valid: true;
+    in-out property <string> print-preview-range-error: "";
     in property <image> print-preview-image;
     in property <bool> print-preview-has-image: false;
     in property <[string]> print-preview-printers: ["Microsoft Print to PDF", "OneNote (Desktop)", "Varsayılan Yazıcı"];
@@ -468,6 +470,8 @@ export component AppWindow inherits Window {
     callback save-annotations();
     callback save-annotations-as();
     callback discard-annotations();
+    callback cancel-kinetic-scroll();
+    callback start-kinetic-scroll(float);
     callback drawing-pointer-down(int, float, float);
     callback drawing-pointer-move(int, float, float);
     callback drawing-pointer-up(int, float, float);
@@ -503,6 +507,12 @@ export component AppWindow inherits Window {
 
     main-focus := FocusScope {
         key-pressed(event) => {
+            if (root.print-preview-open) {
+                if (event.text == "\u{001b}" || event.text == Key.Escape) {
+                    root.request-close-print-preview();
+                }
+                return accept;
+            }
             if (event.text == "\u{001b}" || event.text == Key.Escape) {
                 if (root.numpad-open) { root.numpad-open = false; return accept; }
                 if (root.window-mode != 0) {
@@ -1705,6 +1715,9 @@ export component AppWindow inherits Window {
                         width: parent.viewport-width;
                         height: parent.viewport-height;
                         scroll-event(event) => {
+                            if (root.print-preview-open) {
+                                return accept;
+                            }
                             if (event.modifiers.control) {
                                 if (event.delta-y > 0) { root.request-zoom-in(); }
                                 else if (event.delta-y < 0) { root.request-zoom-out(); }
@@ -1746,6 +1759,7 @@ export component AppWindow inherits Window {
                         page-touch := TouchArea {
                             property <length> pan-last-abs-y: 0px;
                             property <length> pan-last-abs-x: 0px;
+                            property <length> pan-last-dy: 0px;
                             mouse-cursor: (root.drawing-mode-active && !root.pan-mode-active) ? (root.drawing-typewriter-active ? text : crosshair) : (root.pan-mode-active ? (self.pressed ? grabbing : grab) : text);
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
@@ -1761,8 +1775,10 @@ export component AppWindow inherits Window {
                                     if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-down(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active) {
+                                        root.cancel-kinetic-scroll();
                                         self.pan-last-abs-y = self.absolute-position.y + self.mouse-y;
                                         self.pan-last-abs-x = self.absolute-position.x + self.mouse-x;
+                                        self.pan-last-dy = 0px;
                                     } else {
                                         root.pointer-down(page.page-index, self.mouse-x, self.mouse-y, 1);
                                     }
@@ -1770,12 +1786,19 @@ export component AppWindow inherits Window {
                                 if ((event.kind == PointerEventKind.up && event.button == PointerEventButton.left) || event.kind == PointerEventKind.cancel) {
                                     if (root.drawing-mode-active && !root.pan-mode-active) {
                                         root.drawing-pointer-up(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
+                                    } else if (root.pan-mode-active) {
+                                        if (Math.abs(self.pan-last-dy / 1px) > 3.0) {
+                                            root.start-kinetic-scroll(self.pan-last-dy / 1px);
+                                        }
+                                        self.pan-last-dy = 0px;
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-up(page.page-index, self.mouse-x, self.mouse-y);
                                     }
                                 }
                                 if (event.kind == PointerEventKind.move) {
-                                    if (root.drawing-mode-active && !root.pan-mode-active && self.pressed) {
+                                    if (root.print-preview-open) {
+                                        // shield background scrolling
+                                    } else if (root.drawing-mode-active && !root.pan-mode-active && self.pressed) {
                                         root.drawing-pointer-move(page.page-index, self.mouse-x / Math.max(1px, self.width), self.mouse-y / Math.max(1px, self.height));
                                     } else if (root.pan-mode-active && self.pressed) {
                                         let current-abs-y = self.absolute-position.y + self.mouse-y;
@@ -1784,6 +1807,7 @@ export component AppWindow inherits Window {
                                         let dx = current-abs-x - self.pan-last-abs-x;
                                         self.pan-last-abs-y = current-abs-y;
                                         self.pan-last-abs-x = current-abs-x;
+                                        self.pan-last-dy = dy;
                                         root.current-scroll-y = Math.min(0px, Math.max(continuous-scroll.height - continuous-scroll.viewport-height, root.current-scroll-y + dy));
                                         continuous-scroll.viewport-x = Math.min(0px, Math.max(continuous-scroll.width - continuous-scroll.viewport-width, continuous-scroll.viewport-x + dx));
                                     } else if (!root.pan-mode-active) {
@@ -1792,6 +1816,9 @@ export component AppWindow inherits Window {
                                 }
                             }
                             scroll-event(event) => {
+                                if (root.print-preview-open) {
+                                    return accept;
+                                }
                                 if (root.drawing-mode-active && !root.pan-mode-active) {
                                     return accept;
                                 }
@@ -2336,6 +2363,8 @@ export component AppWindow inherits Window {
                     range-mode <=> root.print-preview-range-mode;
                     paper-size <=> root.print-preview-paper-size;
                     duplex <=> root.print-preview-duplex;
+                    range-valid: root.print-preview-range-valid;
+                    range-error: root.print-preview-range-error;
                     text-title: root.text-print-preview-title;
                     text-cancel-tooltip: root.text-print-preview-cancel-tooltip;
                     text-empty: root.text-print-preview-empty;

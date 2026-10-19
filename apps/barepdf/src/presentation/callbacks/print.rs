@@ -18,39 +18,49 @@ use super::super::state::{
 use super::super::ui::{send_render_command, show_banner};
 use super::window_language;
 
-pub(super) fn parse_print_preview_range(
+pub(super) fn parse_print_preview_pages(
     input: &str,
     page_count: PageCount,
-) -> Option<(PageIndex, PageIndex)> {
+) -> Result<Vec<PageIndex>, &'static str> {
     let input = input.trim();
     if input.is_empty() {
-        return Some((PageIndex::zero(), PageIndex::from_raw(page_count.get() - 1)));
+        return Ok((0..page_count.get()).map(PageIndex::from_raw).collect());
     }
-    let mut first_page: Option<u32> = None;
-    let mut previous_last: Option<u32> = None;
+    let mut pages = Vec::new();
     for segment in input.split(',') {
         let segment = segment.trim();
-        let (first, last) = segment
+        if segment.is_empty() {
+            return Err("invalid");
+        }
+        let (first_str, last_str) = segment
             .split_once('-')
             .map_or((segment, segment), |parts| parts);
-        if first.contains('-') || last.contains('-') {
-            return None;
+        if first_str.contains('-') || last_str.contains('-') {
+            return Err("invalid");
         }
-        let first = first.trim().parse::<u32>().ok()?;
-        let last = last.trim().parse::<u32>().ok()?;
-        if first < 1 || first > last || last > page_count.get() {
-            return None;
+        let first_str = first_str.trim();
+        let last_str = last_str.trim();
+        if first_str.is_empty() || last_str.is_empty() {
+            return Err("invalid");
         }
-        if previous_last.is_some_and(|previous| first != previous.saturating_add(1)) {
-            return None;
+        let first = first_str.parse::<u32>().map_err(|_| "invalid")?;
+        let last = last_str.parse::<u32>().map_err(|_| "invalid")?;
+        if first < 1 || last < 1 {
+            return Err("out_of_bounds");
         }
-        first_page.get_or_insert(first);
-        previous_last = Some(last);
+        if first > last {
+            return Err("invalid");
+        }
+        if first > page_count.get() || last > page_count.get() {
+            return Err("out_of_bounds");
+        }
+        for p in first..=last {
+            pages.push(PageIndex::from_raw(p - 1));
+        }
     }
-    Some((
-        PageIndex::from_raw(first_page? - 1),
-        PageIndex::from_raw(previous_last? - 1),
-    ))
+    pages.sort_unstable();
+    pages.dedup();
+    Ok(pages)
 }
 
 pub(super) fn print_preview_dimensions(dimensions: (f32, f32), rotation: Rotation) -> (u32, u32) {
@@ -92,7 +102,38 @@ pub(super) fn request_print_preview_render(
         .get(page_index.get() as usize)
         .copied()
         .unwrap_or(app.first_page_dimensions);
-    let (target_width, target_height) = print_preview_dimensions(dimensions, app.rotation);
+
+    // Dynamic orientation preview adaptation:
+    // 0 = Auto: render with app.rotation
+    // 1 = Portrait: if width > height with app.rotation, apply +90 degree rotation
+    // 2 = Landscape: if height > width with app.rotation, apply +90 degree rotation
+    let (effective_width, effective_height) = {
+        let (w, h) = dimensions;
+        if matches!(app.rotation, Rotation::Degrees90 | Rotation::Degrees270) {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    };
+    let render_rotation = match app.print_preview.orientation {
+        1 => {
+            if effective_width > effective_height {
+                app.rotation.rotate_cw()
+            } else {
+                app.rotation
+            }
+        }
+        2 => {
+            if effective_height > effective_width {
+                app.rotation.rotate_cw()
+            } else {
+                app.rotation
+            }
+        }
+        _ => app.rotation,
+    };
+
+    let (target_width, target_height) = print_preview_dimensions(dimensions, render_rotation);
     let request_id = next_print_preview_request_id();
     app.print_preview.expect_render(request_id, page_index);
     let command = RenderCommand::RenderPage(RenderJob {
@@ -102,7 +143,7 @@ pub(super) fn request_print_preview_render(
         page_index,
         target_width,
         target_height,
-        rotation: app.rotation,
+        rotation: render_rotation,
         priority: Priority::Visible,
         kind: RenderKind::Page,
     });
@@ -271,6 +312,8 @@ pub(super) fn connect_print_callbacks(
         }
         window.set_print_preview_copies(1);
         window.set_print_preview_range_mode(0);
+        window.set_print_preview_range_valid(true);
+        window.set_print_preview_range_error(SharedString::default());
 
         request_print_preview_render(&mut app, &scheduler_print, &window);
     });
@@ -278,14 +321,21 @@ pub(super) fn connect_print_callbacks(
     let weak = window.as_weak();
     let state_page = state.clone();
     let scheduler_page = scheduler.clone();
-    window.on_request_print_preview_page(move |page| {
+    window.on_request_print_preview_page(move |target_page| {
         let Some(window) = weak.upgrade() else {
             return;
         };
         let page = {
             let mut app = state_page.borrow_mut();
             if app.print_preview.open {
-                Some(app.print_preview.set_page(page))
+                let current_page = app.print_preview.page_index.get() as i32;
+                if target_page > current_page {
+                    app.print_preview.step_next_page()
+                } else if target_page < current_page {
+                    app.print_preview.step_previous_page()
+                } else {
+                    Some(app.print_preview.page_index)
+                }
             } else {
                 None
             }
@@ -297,19 +347,54 @@ pub(super) fn connect_print_callbacks(
         request_print_preview_render(&mut state_page.borrow_mut(), &scheduler_page, &window);
     });
 
+    let weak = window.as_weak();
     let state_range = state.clone();
+    let scheduler_range = scheduler.clone();
     window.on_request_print_preview_range(move |range| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
         let mut app = state_range.borrow_mut();
-        if app.print_preview.open {
-            app.print_preview.range = range.to_string();
+        if !app.print_preview.open {
+            return;
+        }
+        app.print_preview.range = range.to_string();
+        let page_count = app.print_preview.page_count;
+        match parse_print_preview_pages(&app.print_preview.range, page_count) {
+            Ok(pages) => {
+                app.print_preview.set_preview_pages(pages);
+                window.set_print_preview_range_valid(true);
+                window.set_print_preview_range_error(SharedString::default());
+                window.set_print_preview_page(
+                    i32::try_from(app.print_preview.page_index.get()).unwrap_or(i32::MAX),
+                );
+                request_print_preview_render(&mut app, &scheduler_range, &window);
+            }
+            Err(err_code) => {
+                window.set_print_preview_range_valid(false);
+                let err_msg = match err_code {
+                    "out_of_bounds" => format!(
+                        "Sayfa numarası 1 ile {} arasında olmalıdır",
+                        page_count.get()
+                    ),
+                    _ => "Geçersiz sayfa aralığı formatı (örn: 1-3, 5, 8-10)".to_string(),
+                };
+                window.set_print_preview_range_error(SharedString::from(err_msg));
+            }
         }
     });
 
+    let weak = window.as_weak();
     let state_orientation = state.clone();
+    let scheduler_orientation = scheduler.clone();
     window.on_request_print_preview_orientation(move |orientation| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
         let mut app = state_orientation.borrow_mut();
         if app.print_preview.open {
             app.print_preview.orientation = orientation.clamp(0, 2);
+            request_print_preview_render(&mut app, &scheduler_orientation, &window);
         }
     });
 
@@ -336,6 +421,9 @@ pub(super) fn connect_print_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
+        if !window.get_print_preview_range_valid() {
+            return;
+        }
         let language = window_language(&window);
         let Some(controller) = controller_confirm.as_ref() else {
             show_banner(
@@ -402,8 +490,7 @@ pub(super) fn connect_print_callbacks(
                     .unwrap_or_else(|_| PrintRange::all(page_count))
             }
             2 => {
-                let Some((first, last)) = parse_print_preview_range(&range_input, page_count)
-                else {
+                let Ok(pages) = parse_print_preview_pages(&range_input, page_count) else {
                     show_banner(
                         &window,
                         barepdf_i18n::t(language, "print.start_failed"),
@@ -411,7 +498,7 @@ pub(super) fn connect_print_callbacks(
                     );
                     return;
                 };
-                let Ok(range) = PrintRange::new(first, last, page_count) else {
+                let Ok(range) = PrintRange::from_pages(pages, page_count) else {
                     show_banner(
                         &window,
                         barepdf_i18n::t(language, "print.start_failed"),

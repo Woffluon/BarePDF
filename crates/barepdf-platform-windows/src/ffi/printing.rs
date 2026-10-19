@@ -43,10 +43,16 @@ struct DialogInitialValues {
 
 fn dialog_initial_values(page_count: u32, options: PrintDialogOptions) -> DialogInitialValues {
     let maximum = u16::try_from(page_count).unwrap_or(u16::MAX).max(1);
-    let from_page = u16::try_from(options.range().first().get().saturating_add(1))
-        .unwrap_or(maximum)
+    let from_page = options
+        .range()
+        .first()
+        .and_then(|first| u16::try_from(first.get().saturating_add(1)).ok())
+        .unwrap_or(1)
         .clamp(1, maximum);
-    let to_page = u16::try_from(options.range().last().get().saturating_add(1))
+    let to_page = options
+        .range()
+        .last()
+        .and_then(|last| u16::try_from(last.get().saturating_add(1)).ok())
         .unwrap_or(maximum)
         .clamp(from_page, maximum);
     let orientation = match options.orientation() {
