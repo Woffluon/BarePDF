@@ -74,6 +74,14 @@ if ($Missing.Count -gt 0) { throw "Existing immutable release is incomplete: $($
 $Unexpected = @($Names | Where-Object { $_ -notin $Allowed })
 if ($Unexpected.Count -gt 0) { throw "Existing immutable release contains unexpected assets: $($Unexpected -join ', ')" }
 
+$DigestByName = @{}
+foreach ($Asset in $Assets) {
+    $DigestProp = $Asset.PSObject.Properties["digest"]
+    if ($DigestProp -and $DigestProp.Value -match '(?i)^sha256:(?<hash>[a-f0-9]{64})$') {
+        $DigestByName[$Asset.name] = $Matches.hash.ToLowerInvariant()
+    }
+}
+
 $BytesByName = @{}
 $HashByName = @{}
 Add-Type -AssemblyName System.Net.Http
@@ -128,8 +136,14 @@ function Read-ChecksumMap([byte[]]$Bytes, [string]$Name) {
 }
 
 $VersionedMap = Read-ChecksumMap $BytesByName[$VersionedChecksums] $VersionedChecksums
-if ($VersionedMap.Count -ne 2 -or $VersionedMap[$VersionedInstaller] -cne $HashByName[$VersionedInstaller] -or $VersionedMap[$VersionedPortable] -cne $HashByName[$VersionedPortable]) {
+if (-not $VersionedMap.ContainsKey($VersionedInstaller) -or -not $VersionedMap.ContainsKey($VersionedPortable) -or $VersionedMap[$VersionedInstaller] -cne $HashByName[$VersionedInstaller] -or $VersionedMap[$VersionedPortable] -cne $HashByName[$VersionedPortable]) {
     throw "Versioned checksum manifest does not match release assets."
+}
+foreach ($ChecksumFile in $VersionedMap.Keys) {
+    $ExpectedHash = if ($HashByName.ContainsKey($ChecksumFile)) { $HashByName[$ChecksumFile] } elseif ($DigestByName.ContainsKey($ChecksumFile)) { $DigestByName[$ChecksumFile] } else { $null }
+    if (-not $ExpectedHash -or $VersionedMap[$ChecksumFile] -cne $ExpectedHash) {
+        throw "Versioned checksum manifest does not match release assets: $ChecksumFile"
+    }
 }
 if (-not $UsesCanonicalAssets) {
     $AliasMap = Read-ChecksumMap $BytesByName[$AliasChecksums] $AliasChecksums
