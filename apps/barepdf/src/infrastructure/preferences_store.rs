@@ -1,6 +1,6 @@
 use barepdf_core::UserPreferences;
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 const MAX_PREFERENCES_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB limit
@@ -78,9 +78,12 @@ pub(crate) fn try_save_to_file(
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let json = serde_json::to_string_pretty(preferences)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    file.write_all(json.as_bytes())?;
+    {
+        let mut writer = BufWriter::new(&mut file);
+        serde_json::to_writer_pretty(&mut writer, preferences)?;
+        writer.flush()?;
+    }
     file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
     Ok(())

@@ -56,15 +56,18 @@ impl PdfOperations {
             ));
         }
 
+        for input in inputs {
+            if !input.path.is_file() {
+                return Err(PdfError::FileNotFound(input.path.display().to_string()));
+            }
+        }
+
         let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pdfium = process_pdfium()?;
         let mut new_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
         let mut total_merged_pages: u32 = 0;
 
         for input in inputs {
-            if !input.path.is_file() {
-                return Err(PdfError::FileNotFound(input.path.display().to_string()));
-            }
             let src_doc = pdfium
                 .load_pdf_from_file(input.path, input.password)
                 .map_err(|error| map_pdfium_load_error(error, input.password.is_some()))?;
@@ -95,7 +98,11 @@ impl PdfOperations {
             }
         }
 
-        new_doc.save_to_file(output).map_err(map_pdfium_error)?;
+        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(new_doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 
@@ -165,7 +172,12 @@ impl PdfOperations {
                 .map_err(map_pdfium_error)?;
         }
 
-        new_doc.save_to_file(output).map_err(map_pdfium_error)?;
+        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(new_doc);
+        drop(src_doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 
@@ -221,24 +233,32 @@ impl PdfOperations {
         let validated_total =
             validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
 
-        let mut output_paths = Vec::with_capacity(validated_total.get() as usize);
-        let split_result = (|| -> Result<(), PdfError> {
-            for i in 0..total_pages {
-                let file_name = format!("{trimmed_base}_page_{}.pdf", i + 1);
-                let out_path = output_dir.join(file_name);
-                let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
-                page_doc
-                    .pages_mut()
-                    .copy_page_from_document(&src_doc, i, 0)
-                    .map_err(map_pdfium_error)?;
-                let bytes = page_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        let mut page_bytes_list = Vec::with_capacity(validated_total.get() as usize);
+        for i in 0..total_pages {
+            let file_name = format!("{trimmed_base}_page_{}.pdf", i + 1);
+            let out_path = output_dir.join(file_name);
+            let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+            page_doc
+                .pages_mut()
+                .copy_page_from_document(&src_doc, i, 0)
+                .map_err(map_pdfium_error)?;
+            let bytes = page_doc.save_to_bytes().map_err(map_pdfium_error)?;
+            page_bytes_list.push((out_path, bytes));
+        }
+
+        drop(src_doc);
+        drop(_ffi_guard);
+
+        let mut output_paths = Vec::with_capacity(page_bytes_list.len());
+        let write_result = (|| -> Result<(), PdfError> {
+            for (out_path, bytes) in page_bytes_list {
                 atomic_write_file(&out_path, &bytes)?;
                 output_paths.push(out_path);
             }
             Ok(())
         })();
 
-        if let Err(error) = split_result {
+        if let Err(error) = write_result {
             for created_path in &output_paths {
                 let _ = std::fs::remove_file(created_path);
             }
@@ -301,7 +321,12 @@ impl PdfOperations {
                 .map_err(map_pdfium_error)?;
         }
 
-        new_doc.save_to_file(output).map_err(map_pdfium_error)?;
+        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(new_doc);
+        drop(src_doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 
@@ -369,7 +394,12 @@ impl PdfOperations {
             page.set_rotation(to_pdfium_rotation(*rotation));
         }
 
-        new_doc.save_to_file(output).map_err(map_pdfium_error)?;
+        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(new_doc);
+        drop(src_doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 
@@ -454,7 +484,12 @@ impl PdfOperations {
                 .map_err(map_pdfium_error)?;
         }
 
-        new_doc.save_to_file(output).map_err(map_pdfium_error)?;
+        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
+        drop(new_doc);
+        drop(src_doc);
+        drop(_ffi_guard);
+
+        atomic_write_file(output, &bytes)?;
         Ok(())
     }
 

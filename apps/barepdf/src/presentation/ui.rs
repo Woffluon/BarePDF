@@ -48,7 +48,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 pub(crate) const RAW_BITMAP_BUDGET: usize = 128 * 1024 * 1024;
@@ -1502,26 +1502,105 @@ pub(crate) fn show_banner(window: &AppWindow, message: impl Into<SharedString>, 
     window.set_banner_visible(true);
 }
 
+struct PrefsSaveRequest {
+    preferences: UserPreferences,
+    path: PathBuf,
+    done: Option<mpsc::SyncSender<bool>>,
+}
+
+fn get_prefs_sender() -> Option<&'static mpsc::Sender<PrefsSaveRequest>> {
+    static SENDER: OnceLock<Option<mpsc::Sender<PrefsSaveRequest>>> = OnceLock::new();
+    SENDER
+        .get_or_init(|| {
+            let (sender, receiver) = mpsc::channel();
+            match std::thread::Builder::new()
+                .name("barepdf-prefs-io".into())
+                .spawn(move || run_prefs_worker(receiver))
+            {
+                Ok(_) => Some(sender),
+                Err(error) => {
+                    diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, &error);
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn run_prefs_worker(receiver: mpsc::Receiver<PrefsSaveRequest>) {
+    while let Ok(mut request) = receiver.recv() {
+        let mut done_senders = Vec::new();
+        if let Some(done) = request.done.take() {
+            done_senders.push(done);
+        }
+
+        while let Ok(next) = receiver.try_recv() {
+            if next.path == request.path {
+                request.preferences = next.preferences;
+                if let Some(done) = next.done {
+                    done_senders.push(done);
+                }
+            } else {
+                let res = save_to_file(&request.preferences, &request.path);
+                let ok = res.is_ok();
+                if let Err(ref error) = res {
+                    diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, error);
+                }
+                for tx in done_senders.drain(..) {
+                    let _ = tx.send(ok);
+                }
+
+                request = next;
+                if let Some(done) = request.done.take() {
+                    done_senders.push(done);
+                }
+            }
+        }
+
+        let res = save_to_file(&request.preferences, &request.path);
+        let ok = res.is_ok();
+        if let Err(ref error) = res {
+            diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, error);
+        }
+        for tx in done_senders {
+            let _ = tx.send(ok);
+        }
+    }
+}
+
 pub(crate) fn persist_preferences(
     preferences: &UserPreferences,
     preferences_path: &Path,
     window: Option<&AppWindow>,
 ) {
     if window.is_some() {
-        let preferences = preferences.clone();
-        let preferences_path = preferences_path.to_path_buf();
-        if std::thread::Builder::new()
-            .name("barepdf-prefs-io".into())
-            .spawn(move || {
-                if let Err(error) = save_to_file(&preferences, &preferences_path) {
-                    diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, &error);
+        if let Some(sender) = get_prefs_sender() {
+            let req = PrefsSaveRequest {
+                preferences: preferences.clone(),
+                path: preferences_path.to_path_buf(),
+                done: None,
+            };
+            if sender.send(req).is_ok() {
+                return;
+            }
+        }
+    } else if let Some(sender) = get_prefs_sender() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let req = PrefsSaveRequest {
+            preferences: preferences.clone(),
+            path: preferences_path.to_path_buf(),
+            done: Some(tx),
+        };
+        if sender.send(req).is_ok() {
+            if let Ok(ok) = rx.recv_timeout(Duration::from_secs(5)) {
+                if !ok {
+                    // Failure diagnostic event was already recorded in run_prefs_worker
                 }
-            })
-            .is_ok()
-        {
-            return;
+                return;
+            }
         }
     }
+
     if let Err(error) = save_to_file(preferences, preferences_path) {
         diagnostics::warn_redacted(DiagnosticEvent::PreferencesSave, &error);
         if let Some(window) = window {
@@ -2253,5 +2332,51 @@ mod tests {
 
             scheduler.shutdown();
         });
+    }
+
+    #[test]
+    fn persist_preferences_synchronously_saves_when_window_is_none() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("config.json");
+        let prefs = UserPreferences {
+            last_window_width: 1234,
+            last_window_height: 5678,
+            ..UserPreferences::default()
+        };
+
+        persist_preferences(&prefs, &path, None);
+
+        let loaded = crate::infrastructure::load(&path);
+        assert_eq!(loaded.last_window_width, 1234);
+        assert_eq!(loaded.last_window_height, 5678);
+    }
+
+    #[test]
+    fn persist_preferences_coalesces_rapid_updates() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("config_coalesce.json");
+
+        if let Some(sender) = get_prefs_sender() {
+            for i in 1..=20 {
+                let prefs = UserPreferences {
+                    last_window_width: 1000 + i,
+                    ..UserPreferences::default()
+                };
+                let _ = sender.send(PrefsSaveRequest {
+                    preferences: prefs,
+                    path: path.clone(),
+                    done: None,
+                });
+            }
+        }
+
+        let prefs = UserPreferences {
+            last_window_width: 9999,
+            ..UserPreferences::default()
+        };
+        persist_preferences(&prefs, &path, None);
+
+        let loaded = crate::infrastructure::load(&path);
+        assert_eq!(loaded.last_window_width, 9999);
     }
 }

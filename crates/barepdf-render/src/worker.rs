@@ -4,7 +4,7 @@ use crate::memory_budget::{calculate_adaptive_memory_budget, SystemHardwareProfi
 use crate::observability::RenderObservability;
 use crate::protocol::{RenderCommand, RenderEvent, RenderJob, RenderKind, RenderRequestKey};
 use crate::queue::receive_command;
-use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId};
+use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId, MAX_OPEN_TABS};
 use barepdf_pdf::{PdfBackend, PdfDocument, RawBitmap};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use std::collections::HashSet;
@@ -71,7 +71,7 @@ impl<B: PdfBackend> RenderWorker<B> {
         Self {
             backend,
             active_docs: lru::LruCache::new(
-                std::num::NonZeroUsize::new(4).unwrap_or(std::num::NonZeroUsize::MIN),
+                std::num::NonZeroUsize::new(MAX_OPEN_TABS).unwrap_or(std::num::NonZeroUsize::MIN),
             ),
             cache: BitmapCache::new(budget),
             current_generation,
@@ -477,7 +477,7 @@ impl<B: PdfBackend> RenderWorker<B> {
 mod tests {
     use super::*;
     use crate::protocol::{Priority, RenderKind};
-    use barepdf_core::{DocumentId, PageCount, PageIndex, Rotation};
+    use barepdf_core::{DocumentId, PageCount, PageIndex, Rotation, MAX_OPEN_TABS};
     use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
     use crossbeam_channel::unbounded;
     use std::sync::atomic::AtomicU64;
@@ -833,5 +833,49 @@ mod tests {
             }
             other => panic!("expected inverted PageRendered event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn worker_keeps_max_open_tabs_documents_active_without_eviction() {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, _event_rx) = unbounded();
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(1024 * 1024),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        );
+
+        for id in 1..=MAX_OPEN_TABS {
+            let doc_id = DocumentId::new(id as u64);
+            assert!(worker.open_document(doc_id, Path::new("dummy.pdf"), None));
+        }
+
+        assert_eq!(worker.active_docs.len(), MAX_OPEN_TABS);
+
+        // Verify all 16 documents are still active and can be rendered without eviction
+        for id in 1..=MAX_OPEN_TABS {
+            let doc_id = DocumentId::new(id as u64);
+            assert!(worker.render_page(&RenderJob {
+                request_id: RequestId::new(id as u64),
+                generation: 1,
+                document_id: doc_id,
+                page_index: PageIndex::zero(),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                priority: Priority::Visible,
+                kind: RenderKind::Page,
+            }));
+        }
+
+        // Opening a 17th document should evict the LRU document
+        let doc_17 = DocumentId::new((MAX_OPEN_TABS + 1) as u64);
+        assert!(worker.open_document(doc_17, Path::new("dummy.pdf"), None));
+        assert_eq!(worker.active_docs.len(), MAX_OPEN_TABS);
     }
 }
