@@ -90,13 +90,13 @@ pub(super) fn request_print_preview_render(
     let Some(document_id) = app.active_document() else {
         return;
     };
-    if !app.print_preview.open
-        || app.print_preview.document_id != Some(document_id)
-        || app.print_preview.generation != app.generation
+    if !app.print.print_preview.open
+        || app.print.print_preview.document_id != Some(document_id)
+        || app.print.print_preview.generation != app.generation
     {
         return;
     }
-    let page_index = app.print_preview.page_index;
+    let page_index = app.print.print_preview.page_index;
     let dimensions = app
         .page_dimensions
         .get(page_index.get() as usize)
@@ -115,7 +115,7 @@ pub(super) fn request_print_preview_render(
             (w, h)
         }
     };
-    let render_rotation = match app.print_preview.orientation {
+    let render_rotation = match app.print.print_preview.orientation {
         1 => {
             if effective_width > effective_height {
                 app.rotation.rotate_cw()
@@ -135,7 +135,9 @@ pub(super) fn request_print_preview_render(
 
     let (target_width, target_height) = print_preview_dimensions(dimensions, render_rotation);
     let request_id = next_print_preview_request_id();
-    app.print_preview.expect_render(request_id, page_index);
+    app.print
+        .print_preview
+        .expect_render(request_id, page_index);
     let command = RenderCommand::RenderPage(RenderJob {
         request_id,
         generation: app.generation,
@@ -150,11 +152,12 @@ pub(super) fn request_print_preview_render(
     window.set_print_preview_has_image(false);
     if !send_render_command(app, scheduler, command)
         && app
+            .print
             .print_preview
             .pending
             .is_some_and(|p| p.request_id == request_id)
     {
-        app.print_preview.pending = None;
+        app.print.print_preview.pending = None;
     }
 }
 
@@ -164,10 +167,10 @@ pub(crate) fn requeue_print_preview_for_generation(
     window: &AppWindow,
 ) {
     let document_id = app.active_document();
-    if app.print_preview.open && app.print_preview.document_id == document_id {
-        app.print_preview.generation = app.generation;
-        app.print_preview.pending = None;
-    } else if app.print_preview.open {
+    if app.print.print_preview.open && app.print.print_preview.document_id == document_id {
+        app.print.print_preview.generation = app.generation;
+        app.print.print_preview.pending = None;
+    } else if app.print.print_preview.open {
         close_print_preview(app, window);
         return;
     }
@@ -175,7 +178,7 @@ pub(crate) fn requeue_print_preview_for_generation(
 }
 
 pub(super) fn close_print_preview(app: &mut AppState, window: &AppWindow) {
-    app.print_preview.close();
+    app.print.print_preview.close();
     window.set_print_preview_open(false);
     window.set_print_preview_has_image(false);
     window.set_print_preview_image(Image::default());
@@ -291,19 +294,20 @@ pub(super) fn connect_print_callbacks(
         let page_count = document.page_count();
         let generation = app.generation;
         let current_page = PageIndex::from_raw(app.current_page);
-        app.print_preview
+        app.print
+            .print_preview
             .open(doc_id, generation, page_count, current_page);
         window.set_print_preview_page(
-            i32::try_from(app.print_preview.page_index.get()).unwrap_or(i32::MAX),
+            i32::try_from(app.print.print_preview.page_index.get()).unwrap_or(i32::MAX),
         );
-        window.set_print_preview_range(SharedString::from(app.print_preview.range.clone()));
-        window.set_print_preview_orientation(app.print_preview.orientation);
-        window.set_print_preview_duplex(app.print_preview.duplex);
+        window.set_print_preview_range(SharedString::from(app.print.print_preview.range.clone()));
+        window.set_print_preview_orientation(app.print.print_preview.orientation);
+        window.set_print_preview_duplex(app.print.print_preview.duplex);
         window.set_print_preview_has_image(false);
         window.set_print_preview_image(Image::default());
         window.set_print_preview_open(true);
 
-        populate_print_preview_printers(&window, &app.cached_printers);
+        populate_print_preview_printers(&window, &app.print.cached_printers);
         if !app.in_flight.printer_enum {
             app.in_flight.printer_enum = true;
             app.spawn_background_io(|| {
@@ -327,14 +331,14 @@ pub(super) fn connect_print_callbacks(
         };
         let page = {
             let mut app = state_page.borrow_mut();
-            if app.print_preview.open {
-                let current_page = app.print_preview.page_index.get() as i32;
+            if app.print.print_preview.open {
+                let current_page = app.print.print_preview.page_index.get() as i32;
                 if target_page > current_page {
-                    app.print_preview.step_next_page()
+                    app.print.print_preview.step_next_page()
                 } else if target_page < current_page {
-                    app.print_preview.step_previous_page()
+                    app.print.print_preview.step_previous_page()
                 } else {
-                    Some(app.print_preview.page_index)
+                    Some(app.print.print_preview.page_index)
                 }
             } else {
                 None
@@ -355,18 +359,18 @@ pub(super) fn connect_print_callbacks(
             return;
         };
         let mut app = state_range.borrow_mut();
-        if !app.print_preview.open {
+        if !app.print.print_preview.open {
             return;
         }
-        app.print_preview.range = range.to_string();
-        let page_count = app.print_preview.page_count;
-        match parse_print_preview_pages(&app.print_preview.range, page_count) {
+        app.print.print_preview.range = range.to_string();
+        let page_count = app.print.print_preview.page_count;
+        match parse_print_preview_pages(&app.print.print_preview.range, page_count) {
             Ok(pages) => {
-                app.print_preview.set_preview_pages(pages);
+                app.print.print_preview.set_preview_pages(pages);
                 window.set_print_preview_range_valid(true);
                 window.set_print_preview_range_error(SharedString::default());
                 window.set_print_preview_page(
-                    i32::try_from(app.print_preview.page_index.get()).unwrap_or(i32::MAX),
+                    i32::try_from(app.print.print_preview.page_index.get()).unwrap_or(i32::MAX),
                 );
                 request_print_preview_render(&mut app, &scheduler_range, &window);
             }
@@ -392,8 +396,8 @@ pub(super) fn connect_print_callbacks(
             return;
         };
         let mut app = state_orientation.borrow_mut();
-        if app.print_preview.open {
-            app.print_preview.orientation = orientation.clamp(0, 2);
+        if app.print.print_preview.open {
+            app.print.print_preview.orientation = orientation.clamp(0, 2);
             request_print_preview_render(&mut app, &scheduler_orientation, &window);
         }
     });
@@ -401,8 +405,8 @@ pub(super) fn connect_print_callbacks(
     let state_duplex = state.clone();
     window.on_request_print_preview_duplex(move |duplex| {
         let mut app = state_duplex.borrow_mut();
-        if app.print_preview.open {
-            app.print_preview.duplex = duplex.clamp(0, 2);
+        if app.print.print_preview.open {
+            app.print.print_preview.duplex = duplex.clamp(0, 2);
         }
     });
 
@@ -435,14 +439,14 @@ pub(super) fn connect_print_callbacks(
         };
         let preview_target = {
             let app = state_confirm.borrow();
-            if app.print_preview.open {
-                app.print_preview.document_id.map(|document_id| {
+            if app.print.print_preview.open {
+                app.print.print_preview.document_id.map(|document_id| {
                     (
                         document_id,
-                        app.print_preview.generation,
-                        app.print_preview.page_count,
-                        app.print_preview.orientation,
-                        app.print_preview.range.clone(),
+                        app.print.print_preview.generation,
+                        app.print.print_preview.page_count,
+                        app.print.print_preview.orientation,
+                        app.print.print_preview.range.clone(),
                     )
                 })
             } else {

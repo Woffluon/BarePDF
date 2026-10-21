@@ -123,7 +123,7 @@ pub(super) fn start(
                     }
                     DropRoutingOutcome::ToolsMerge(files) => {
                         let mut app = state.borrow_mut();
-                        app.tools_merge_files.extend(files);
+                        app.tools.tools_merge_files.extend(files);
                         refresh_merge_files(&window, &mut app);
                         window.set_tools_error(SharedString::default());
                     }
@@ -159,6 +159,7 @@ pub(super) fn start(
         for _ in 0..EVENTS_PER_TICK {
             let event = state
                 .borrow()
+                .tools
                 .tool_worker
                 .as_ref()
                 .and_then(ToolWorker::try_recv_event);

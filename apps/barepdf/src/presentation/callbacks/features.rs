@@ -151,9 +151,7 @@ pub(super) fn connect_niche_feature_callbacks(
         let mut app = state_search.borrow_mut();
         let query_text = query_str.as_str().trim();
         if query_text.is_empty() {
-            app.search_query = None;
-            app.search_matches.clear();
-            app.active_search_match = 0;
+            app.search.clear();
             window.set_search_has_matches(false);
             window.set_search_match_counter(SharedString::from("0 / 0"));
             refresh_page_model(&mut app, &window);
@@ -168,9 +166,7 @@ pub(super) fn connect_niche_feature_callbacks(
             whole_word,
         );
         let Some(query) = query else {
-            app.search_query = None;
-            app.search_matches.clear();
-            app.active_search_match = 0;
+            app.search.clear();
             window.set_search_has_matches(false);
             window.set_search_match_counter(SharedString::from("0 / 0"));
             refresh_page_model(&mut app, &window);
@@ -208,9 +204,9 @@ pub(super) fn connect_niche_feature_callbacks(
 
         let total = matches.len();
         let has_matches = total > 0;
-        app.search_query = Some(query);
-        app.search_matches = matches;
-        app.active_search_match = 0;
+        app.search.search_query = Some(query);
+        app.search.search_matches = matches;
+        app.search.active_search_match = 0;
 
         window.set_search_has_matches(has_matches);
         window.set_search_match_counter(SharedString::from(
@@ -219,7 +215,7 @@ pub(super) fn connect_niche_feature_callbacks(
         refresh_page_model(&mut app, &window);
 
         if has_matches {
-            if let Some(target_match) = app.search_matches.first() {
+            if let Some(target_match) = app.search.search_matches.first() {
                 let target_page = target_match.page_index.get();
                 drop(app);
                 navigate_to_page(target_page, &state_search, &scheduler_search, &window);
@@ -235,17 +231,23 @@ pub(super) fn connect_niche_feature_callbacks(
             return;
         };
         let mut app = state_search_next.borrow_mut();
-        let total = app.search_matches.len();
+        let total = app.search.search_matches.len();
         if total == 0 {
             return;
         }
-        app.active_search_match =
-            crate::controllers::search_controller::next_match(app.active_search_match, total);
-        let current = app.active_search_match;
+        app.search.active_search_match = crate::controllers::search_controller::next_match(
+            app.search.active_search_match,
+            total,
+        );
+        let current = app.search.active_search_match;
         window.set_search_match_counter(SharedString::from(
             crate::controllers::search_controller::match_summary(current, total),
         ));
-        let target_page = app.search_matches.get(current).map(|m| m.page_index.get());
+        let target_page = app
+            .search
+            .search_matches
+            .get(current)
+            .map(|m| m.page_index.get());
         if let Some(target_page) = target_page {
             drop(app);
             navigate_to_page(
@@ -265,17 +267,23 @@ pub(super) fn connect_niche_feature_callbacks(
             return;
         };
         let mut app = state_search_prev.borrow_mut();
-        let total = app.search_matches.len();
+        let total = app.search.search_matches.len();
         if total == 0 {
             return;
         }
-        app.active_search_match =
-            crate::controllers::search_controller::prev_match(app.active_search_match, total);
-        let current = app.active_search_match;
+        app.search.active_search_match = crate::controllers::search_controller::prev_match(
+            app.search.active_search_match,
+            total,
+        );
+        let current = app.search.active_search_match;
         window.set_search_match_counter(SharedString::from(
             crate::controllers::search_controller::match_summary(current, total),
         ));
-        let target_page = app.search_matches.get(current).map(|m| m.page_index.get());
+        let target_page = app
+            .search
+            .search_matches
+            .get(current)
+            .map(|m| m.page_index.get());
         if let Some(target_page) = target_page {
             drop(app);
             navigate_to_page(

@@ -144,6 +144,7 @@ pub(super) fn connect_tab_callbacks(
         let has_unsaved = if let Some(doc_id) = doc_id {
             state_close
                 .borrow()
+                .drawing
                 .annotations
                 .get(&doc_id)
                 .is_some_and(|a| !a.is_empty())
@@ -171,7 +172,7 @@ pub(super) fn connect_tab_callbacks(
         let doc_id = state_confirm.borrow_mut().pending_close_tab_id.take();
         if let Some(doc_id) = doc_id {
             let mut app = state_confirm.borrow_mut();
-            app.annotations.remove(&doc_id);
+            app.drawing.annotations.remove(&doc_id);
             let tab = app
                 .application
                 .tabs

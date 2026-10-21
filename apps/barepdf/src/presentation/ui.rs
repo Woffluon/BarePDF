@@ -396,10 +396,18 @@ pub(crate) fn process_view_changes(
 }
 
 pub(crate) fn invert_rgba_pixels(pixels: &mut [u8]) {
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk[0] = 255 - chunk[0];
-        chunk[1] = 255 - chunk[1];
-        chunk[2] = 255 - chunk[2];
+    const MASK: u64 = u64::from_ne_bytes([0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00]);
+    let mut chunks = pixels.chunks_exact_mut(8);
+    for chunk in &mut chunks {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(chunk);
+        let val = u64::from_ne_bytes(bytes);
+        chunk.copy_from_slice(&(val ^ MASK).to_ne_bytes());
+    }
+    for pixel in chunks.into_remainder().chunks_exact_mut(4) {
+        pixel[0] ^= 0xFF;
+        pixel[1] ^= 0xFF;
+        pixel[2] ^= 0xFF;
     }
 }
 
@@ -518,23 +526,22 @@ pub(crate) fn handle_render_event(
             kind,
             bitmap,
         } => {
-            {
-                let mut app = state.borrow_mut();
-                if app
-                    .print_preview
-                    .accept_render(request_id, document_id, generation, page_index)
-                {
-                    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                        bitmap.pixels(),
-                        bitmap.width(),
-                        bitmap.height(),
-                    );
-                    window.set_print_preview_image(Image::from_rgba8(buffer));
-                    window.set_print_preview_has_image(true);
-                    return;
-                }
-            }
             let mut app = state.borrow_mut();
+            if app.print.print_preview.accept_render(
+                request_id,
+                document_id,
+                generation,
+                page_index,
+            ) {
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    bitmap.pixels(),
+                    bitmap.width(),
+                    bitmap.height(),
+                );
+                window.set_print_preview_image(Image::from_rgba8(buffer));
+                window.set_print_preview_has_image(true);
+                return;
+            }
             if !RenderController::accepts(
                 &app.application,
                 document_id,
@@ -543,15 +550,31 @@ pub(crate) fn handle_render_event(
             ) {
                 return;
             }
-            let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                bitmap.pixels(),
-                bitmap.width(),
-                bitmap.height(),
-            );
-            if app.preferences.invert_colors && !scheduler.invert_colors() {
-                invert_rgba_pixels(buffer.make_mut_bytes());
-            }
-            let image = Image::from_rgba8(buffer);
+            let cached_image = match kind {
+                RenderKind::Page => {
+                    app.page_images
+                        .get(document_id, page_index.get(), RenderKind::Page)
+                }
+                RenderKind::Thumbnail => {
+                    app.thumbnail_images
+                        .get(document_id, page_index.get(), RenderKind::Thumbnail)
+                }
+            };
+            let image = if let Some(existing) = cached_image.filter(|img| {
+                img.size().width == bitmap.width() && img.size().height == bitmap.height()
+            }) {
+                existing
+            } else {
+                let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    bitmap.pixels(),
+                    bitmap.width(),
+                    bitmap.height(),
+                );
+                if app.preferences.invert_colors && !scheduler.invert_colors() {
+                    invert_rgba_pixels(buffer.make_mut_bytes());
+                }
+                Image::from_rgba8(buffer)
+            };
             match kind {
                 RenderKind::Page => {
                     app.failed_pages.remove(&(document_id, page_index.get()));
@@ -1398,7 +1421,7 @@ pub(crate) fn compute_search_highlights(
     target_width: f32,
     target_height: f32,
 ) -> Vec<SelectionBox> {
-    if app.search_matches.is_empty() {
+    if app.search.search_matches.is_empty() {
         return Vec::new();
     }
     let (page_width, page_height) = app
@@ -1407,7 +1430,7 @@ pub(crate) fn compute_search_highlights(
         .copied()
         .unwrap_or(app.first_page_dimensions);
     let mut boxes = Vec::new();
-    for m in &app.search_matches {
+    for m in &app.search.search_matches {
         if m.page_index.get() == page {
             for glyph in &m.glyph_boxes {
                 if glyph.width > 0.0 && glyph.height > 0.0 {
@@ -2132,6 +2155,24 @@ mod tests {
             pixels,
             [255, 245, 55, 255, 0, 10, 200, 128, 127, 127, 127, 0,]
         );
+    }
+
+    #[test]
+    fn invert_rgba_pixels_handles_arbitrary_pixel_counts() {
+        for count in [0, 1, 2, 3, 4, 7, 8, 15, 16, 65] {
+            let mut pixels = Vec::with_capacity(count * 4);
+            let mut expected = Vec::with_capacity(count * 4);
+            for i in 0..count {
+                let r = (i * 7) as u8;
+                let g = (i * 13) as u8;
+                let b = (i * 17) as u8;
+                let a = (i * 23) as u8;
+                pixels.extend_from_slice(&[r, g, b, a]);
+                expected.extend_from_slice(&[255 - r, 255 - g, 255 - b, a]);
+            }
+            invert_rgba_pixels(&mut pixels);
+            assert_eq!(pixels, expected, "failed for count={count}");
+        }
     }
 
     #[test]

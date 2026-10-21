@@ -19,6 +19,7 @@ use super::{clear_tool_password_ui, consume_ui_password, window_language, ToolKi
 
 pub(crate) fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
     let files = app
+        .tools
         .tools_merge_files
         .iter()
         .map(|path| {
@@ -34,6 +35,7 @@ pub(crate) fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
         .ready_document()
         .map(|document| (document.id(), document.path().to_path_buf()));
     let previews = app
+        .tools
         .tools_merge_files
         .iter()
         .map(|path| {
@@ -52,7 +54,7 @@ pub(crate) fn refresh_merge_files(window: &AppWindow, app: &mut AppState) {
 }
 
 fn current_tool_source(app: &AppState) -> Option<PathBuf> {
-    app.tools_source_path.clone().or_else(|| {
+    app.tools.tools_source_path.clone().or_else(|| {
         app.application
             .ready_document()
             .map(|document| document.path().to_path_buf())
@@ -60,9 +62,9 @@ fn current_tool_source(app: &AppState) -> Option<PathBuf> {
 }
 
 pub(crate) fn set_tool_source(app: &mut AppState, source: PathBuf) {
-    if app.tools_source_path.as_ref() != Some(&source) {
-        app.tools_source_path = Some(source);
-        app.tool_source_token = app.tool_source_token.wrapping_add(1).max(1);
+    if app.tools.tools_source_path.as_ref() != Some(&source) {
+        app.tools.tools_source_path = Some(source);
+        app.tools.tool_source_token = app.tools.tool_source_token.wrapping_add(1).max(1);
     }
 }
 
@@ -116,9 +118,9 @@ pub(super) fn toggle_tool_page_selection(
 }
 
 fn next_tool_job_key(app: &mut AppState) -> ToolJobKey {
-    let id = app.next_tool_job_id;
-    app.next_tool_job_id = app.next_tool_job_id.wrapping_add(1).max(1);
-    ToolJobKey::new(id, app.generation, app.tool_source_token)
+    let id = app.tools.next_tool_job_id;
+    app.tools.next_tool_job_id = app.tools.next_tool_job_id.wrapping_add(1).max(1);
+    ToolJobKey::new(id, app.generation, app.tools.tool_source_token)
 }
 
 fn queue_tool_operation(
@@ -128,20 +130,21 @@ fn queue_tool_operation(
 ) {
     let result = (|| -> Result<(), String> {
         let mut app = state.borrow_mut();
-        if app.active_tool_job.is_some() {
+        if app.tools.active_tool_job.is_some() {
             Err(barepdf_i18n::t(app.preferences.language.resolve(), "tools.error.busy").to_owned())
         } else {
-            if app.tool_worker.is_none() {
-                app.tool_worker = Some(ToolWorker::spawn().map_err(|error| error.to_string())?);
+            if app.tools.tool_worker.is_none() {
+                app.tools.tool_worker =
+                    Some(ToolWorker::spawn().map_err(|error| error.to_string())?);
             }
             let key = next_tool_job_key(&mut app);
             let request = ToolRequest::new(key, operation);
-            let Some(worker) = app.tool_worker.as_ref() else {
+            let Some(worker) = app.tools.tool_worker.as_ref() else {
                 return Err("PDF tool worker is unavailable".to_owned());
             };
             let cancellation = worker.submit(request).map_err(|error| error.to_string())?;
-            app.active_tool_job = Some(ActiveToolJob { key, cancellation });
-            app.tool_password_source = None;
+            app.tools.active_tool_job = Some(ActiveToolJob { key, cancellation });
+            app.tools.tool_password_source = None;
             app.wake_pump();
             Ok(())
         }
@@ -157,15 +160,15 @@ fn queue_tool_operation(
 
 fn cancel_active_tool(state: &Rc<RefCell<AppState>>, window: &AppWindow) {
     let mut app = state.borrow_mut();
-    let Some(active) = app.active_tool_job.as_ref() else {
+    let Some(active) = app.tools.active_tool_job.as_ref() else {
         return;
     };
-    if let Some(worker) = app.tool_worker.as_ref() {
+    if let Some(worker) = app.tools.tool_worker.as_ref() {
         worker.cancel(active.key, &active.cancellation);
     }
     clear_tool_password_ui(window);
     window.set_tool_password_prompt_open(false);
-    app.tool_password_source = None;
+    app.tools.tool_password_source = None;
     window.set_tools_working(false);
     app.wake_pump();
 }
@@ -179,19 +182,20 @@ pub(crate) fn handle_tool_event(
     let key = event.key();
     let current = {
         let app = state.borrow();
-        app.active_tool_job.as_ref().is_some_and(|active| {
-            active.key == key && key.is_current(app.generation, app.tool_source_token)
+        app.tools.active_tool_job.as_ref().is_some_and(|active| {
+            active.key == key && key.is_current(app.generation, app.tools.tool_source_token)
         })
     };
     if !current {
         if event.is_terminal() {
             let mut app = state.borrow_mut();
             if app
+                .tools
                 .active_tool_job
                 .as_ref()
                 .is_some_and(|active| active.key == key)
             {
-                app.active_tool_job = None;
+                app.tools.active_tool_job = None;
                 window.set_tools_working(false);
                 clear_tool_password_ui(window);
                 window.set_tool_password_prompt_open(false);
@@ -213,14 +217,14 @@ pub(crate) fn handle_tool_event(
                     "tools.password.required"
                 },
             );
-            state.borrow_mut().tool_password_source = Some(source);
+            state.borrow_mut().tools.tool_password_source = Some(source);
             clear_tool_password_ui(window);
             window.set_tool_password_error(SharedString::from(error));
             window.set_tool_password_prompt_open(true);
         }
         ToolEvent::Completed { outcome, .. } => {
-            state.borrow_mut().active_tool_job = None;
-            state.borrow_mut().tool_password_source = None;
+            state.borrow_mut().tools.active_tool_job = None;
+            state.borrow_mut().tools.tool_password_source = None;
             window.set_tools_working(false);
             clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
@@ -261,15 +265,15 @@ pub(crate) fn handle_tool_event(
             }
         }
         ToolEvent::Cancelled { .. } => {
-            state.borrow_mut().active_tool_job = None;
-            state.borrow_mut().tool_password_source = None;
+            state.borrow_mut().tools.active_tool_job = None;
+            state.borrow_mut().tools.tool_password_source = None;
             window.set_tools_working(false);
             clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
         }
         ToolEvent::Failed { message, .. } => {
-            state.borrow_mut().active_tool_job = None;
-            state.borrow_mut().tool_password_source = None;
+            state.borrow_mut().tools.active_tool_job = None;
+            state.borrow_mut().tools.tool_password_source = None;
             window.set_tools_working(false);
             clear_tool_password_ui(window);
             window.set_tool_password_prompt_open(false);
@@ -312,9 +316,10 @@ pub(super) fn connect_tools_callbacks(
         if let Some(window) = weak.upgrade() {
             {
                 let mut app = state_open_tool.borrow_mut();
-                if app.active_tool_job.is_none() {
-                    app.tools_source_path = None;
-                    app.tool_source_token = app.tool_source_token.wrapping_add(1).max(1);
+                if app.tools.active_tool_job.is_none() {
+                    app.tools.tools_source_path = None;
+                    app.tools.tool_source_token =
+                        app.tools.tool_source_token.wrapping_add(1).max(1);
                 }
             }
             window.set_current_tool(tool_id);
@@ -379,7 +384,7 @@ pub(super) fn connect_tools_callbacks(
         let picked = dialogs_merge_add.pick_multiple_files();
         if !picked.is_empty() {
             let mut app = state_merge_add.borrow_mut();
-            app.tools_merge_files.extend(picked);
+            app.tools.tools_merge_files.extend(picked);
             if let Some(window) = weak.upgrade() {
                 refresh_merge_files(&window, &mut app);
                 window.set_tools_error(SharedString::new());
@@ -400,8 +405,8 @@ pub(super) fn connect_tools_callbacks(
         if idx > 0 {
             let idx = idx as usize;
             let mut app = state_move_up.borrow_mut();
-            if idx < app.tools_merge_files.len() {
-                app.tools_merge_files.swap(idx, idx - 1);
+            if idx < app.tools.tools_merge_files.len() {
+                app.tools.tools_merge_files.swap(idx, idx - 1);
                 if let Some(window) = weak.upgrade() {
                     refresh_merge_files(&window, &mut app);
                     window.set_selected_merge_index((idx - 1) as i32);
@@ -416,8 +421,8 @@ pub(super) fn connect_tools_callbacks(
         if idx >= 0 {
             let idx = idx as usize;
             let mut app = state_move_down.borrow_mut();
-            if idx + 1 < app.tools_merge_files.len() {
-                app.tools_merge_files.swap(idx, idx + 1);
+            if idx + 1 < app.tools.tools_merge_files.len() {
+                app.tools.tools_merge_files.swap(idx, idx + 1);
                 if let Some(window) = weak.upgrade() {
                     refresh_merge_files(&window, &mut app);
                     window.set_selected_merge_index((idx + 1) as i32);
@@ -432,12 +437,12 @@ pub(super) fn connect_tools_callbacks(
         if idx >= 0 {
             let idx = idx as usize;
             let mut app = state_remove.borrow_mut();
-            if idx < app.tools_merge_files.len() {
-                app.tools_merge_files.remove(idx);
-                let new_selected = if app.tools_merge_files.is_empty() {
+            if idx < app.tools.tools_merge_files.len() {
+                app.tools.tools_merge_files.remove(idx);
+                let new_selected = if app.tools.tools_merge_files.is_empty() {
                     -1
-                } else if idx >= app.tools_merge_files.len() {
-                    (app.tools_merge_files.len() - 1) as i32
+                } else if idx >= app.tools.tools_merge_files.len() {
+                    (app.tools.tools_merge_files.len() - 1) as i32
                 } else {
                     idx as i32
                 };
@@ -453,7 +458,7 @@ pub(super) fn connect_tools_callbacks(
     let state_clear = state.clone();
     window.on_request_merge_clear(move || {
         let mut app = state_clear.borrow_mut();
-        app.tools_merge_files.clear();
+        app.tools.tools_merge_files.clear();
         if let Some(window) = weak.upgrade() {
             refresh_merge_files(&window, &mut app);
             window.set_selected_merge_index(-1);
@@ -464,7 +469,7 @@ pub(super) fn connect_tools_callbacks(
     let state_merge_exec = state.clone();
     let dialogs_merge_exec = dialogs.clone();
     window.on_request_merge_execute(move || {
-        let files = state_merge_exec.borrow().tools_merge_files.clone();
+        let files = state_merge_exec.borrow().tools.tools_merge_files.clone();
         let language = state_merge_exec.borrow().preferences.language.resolve();
         if files.len() < 2 {
             if let Some(window) = weak.upgrade() {
@@ -819,11 +824,14 @@ pub(super) fn connect_tools_callbacks(
         }
         let mut app = state_reorder.borrow_mut();
         let (from, to) = (from as usize, to as usize);
-        if from >= app.tools_merge_files.len() || to >= app.tools_merge_files.len() || from == to {
+        if from >= app.tools.tools_merge_files.len()
+            || to >= app.tools.tools_merge_files.len()
+            || from == to
+        {
             return;
         }
-        let moved = app.tools_merge_files.remove(from);
-        app.tools_merge_files.insert(to, moved);
+        let moved = app.tools.tools_merge_files.remove(from);
+        app.tools.tools_merge_files.insert(to, moved);
         if let Some(window) = weak.upgrade() {
             refresh_merge_files(&window, &mut app);
             window.set_selected_merge_index(to as i32);
@@ -848,7 +856,7 @@ pub(super) fn connect_tools_callbacks(
             return;
         }
         let mut app = state_drop.borrow_mut();
-        if app.active_tool_job.is_some() {
+        if app.tools.active_tool_job.is_some() {
             window.set_tools_error(SharedString::from(barepdf_i18n::t(
                 window_language(&window),
                 "tools.error.busy",
@@ -857,7 +865,7 @@ pub(super) fn connect_tools_callbacks(
         }
         match ToolKind::from_slint_id(tool_id) {
             ToolKind::Merge => {
-                app.tools_merge_files.extend(paths);
+                app.tools.tools_merge_files.extend(paths);
                 refresh_merge_files(&window, &mut app);
                 window.set_tools_error(SharedString::default());
             }
@@ -1005,19 +1013,20 @@ pub(super) fn connect_tools_callbacks(
         clear_tool_password_ui(&window);
         let result = {
             let app = state_password.borrow();
-            let Some(active) = app.active_tool_job.as_ref() else {
+            let Some(active) = app.tools.active_tool_job.as_ref() else {
                 password.clear();
                 return;
             };
             let Some(source) = app
+                .tools
                 .tool_password_source
                 .clone()
-                .or_else(|| app.tools_source_path.clone())
+                .or_else(|| app.tools.tools_source_path.clone())
             else {
                 password.clear();
                 return;
             };
-            let Some(worker) = app.tool_worker.as_ref() else {
+            let Some(worker) = app.tools.tool_worker.as_ref() else {
                 password.clear();
                 return;
             };

@@ -153,7 +153,7 @@ pub(crate) fn refresh_page_model(app: &mut AppState, window: &AppWindow) {
 pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow) {
     let doc_annotations = app
         .active_document()
-        .and_then(|doc| app.annotations.get(&doc));
+        .and_then(|doc| app.drawing.annotations.get(&doc));
     let has_unsaved = doc_annotations.is_some_and(|a| !a.is_empty());
     window.set_has_unsaved_annotations(has_unsaved);
 
@@ -194,7 +194,7 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
     };
     window.set_page_free_texts(free_texts_model);
 
-    if let Some(stroke) = app.active_stroke.clone() {
+    if let Some(stroke) = app.drawing.active_stroke.clone() {
         let stroke_page = stroke.page.get();
         window.set_current_annotation_page_index(stroke_page as i32);
         let overlay = render_page_annotation_overlay(app, stroke_page, Some(&stroke));
@@ -303,7 +303,7 @@ pub(crate) fn render_page_annotation_overlay(
     active_stroke: Option<&InkStroke>,
 ) -> Image {
     let doc_id = app.active_document();
-    let doc_annotations = doc_id.and_then(|doc| app.annotations.get(&doc));
+    let doc_annotations = doc_id.and_then(|doc| app.drawing.annotations.get(&doc));
     let has_page_annotations = doc_annotations.is_some_and(|a| {
         a.highlights.iter().any(|h| h.page.get() == page)
             || a.strokes.iter().any(|s| s.page.get() == page)
@@ -324,10 +324,10 @@ pub(crate) fn render_page_annotation_overlay(
     let doc_id = doc_id.unwrap_or_else(|| barepdf_core::DocumentId::new(1));
 
     if active_stroke.is_some() {
-        if let Some(cached) = app
-            .committed_overlay_cache
-            .as_ref()
-            .filter(|c| c.document_id == doc_id && c.page == page && c.width == w && c.height == h)
+        if let Some(cached) =
+            app.drawing.committed_overlay_cache.as_ref().filter(|c| {
+                c.document_id == doc_id && c.page == page && c.width == w && c.height == h
+            })
         {
             let mut buffer =
                 SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&cached.pixels, w, h);
@@ -420,7 +420,7 @@ pub(crate) fn render_page_annotation_overlay(
     }
 
     if active_stroke.is_some() {
-        app.committed_overlay_cache = Some(CommittedOverlayCache {
+        app.drawing.committed_overlay_cache = Some(CommittedOverlayCache {
             document_id: doc_id,
             page,
             width: w,

@@ -374,7 +374,11 @@ fn add_free_text_annotation_adds_to_document_annotations() {
         [0, 0, 0, 255],
     );
 
-    let ann = app.annotations.get(&doc_id).expect("annotations exist");
+    let ann = app
+        .drawing
+        .annotations
+        .get(&doc_id)
+        .expect("annotations exist");
     assert_eq!(ann.free_texts.len(), 1);
     let ft = &ann.free_texts[0];
     assert_eq!(ft.text, "Hello Typewriter");
@@ -416,9 +420,9 @@ fn drawing_tool_selection_is_mutually_exclusive() {
         let window = barepdf_ui::AppWindow::new().expect("slint app window");
 
         // Initially pan_mode is true
-        assert!(app.pan_mode);
-        assert!(!app.drawing_eraser);
-        assert!(!app.drawing_typewriter);
+        assert!(app.drawing.pan_mode);
+        assert!(!app.drawing.drawing_eraser);
+        assert!(!app.drawing.drawing_typewriter);
         sync_drawing_tool_ui(&app, &window);
         assert!(window.get_pan_mode_active());
         assert!(!window.get_drawing_eraser_active());
@@ -426,9 +430,9 @@ fn drawing_tool_selection_is_mutually_exclusive() {
 
         // Activate Pen -> Pan/Eraser/Typewriter false
         app.activate_drawing_tool(DrawingTool::Pen);
-        assert!(!app.pan_mode);
-        assert!(!app.drawing_eraser);
-        assert!(!app.drawing_typewriter);
+        assert!(!app.drawing.pan_mode);
+        assert!(!app.drawing.drawing_eraser);
+        assert!(!app.drawing.drawing_typewriter);
         sync_drawing_tool_ui(&app, &window);
         assert!(!window.get_pan_mode_active());
         assert!(!window.get_drawing_eraser_active());
@@ -436,9 +440,9 @@ fn drawing_tool_selection_is_mutually_exclusive() {
 
         // Activate Eraser -> Eraser true, Pan/Typewriter false
         app.activate_drawing_tool(DrawingTool::Eraser);
-        assert!(!app.pan_mode);
-        assert!(app.drawing_eraser);
-        assert!(!app.drawing_typewriter);
+        assert!(!app.drawing.pan_mode);
+        assert!(app.drawing.drawing_eraser);
+        assert!(!app.drawing.drawing_typewriter);
         sync_drawing_tool_ui(&app, &window);
         assert!(!window.get_pan_mode_active());
         assert!(window.get_drawing_eraser_active());
@@ -446,9 +450,9 @@ fn drawing_tool_selection_is_mutually_exclusive() {
 
         // Activate Typewriter -> Typewriter true, Pan/Eraser false
         app.activate_drawing_tool(DrawingTool::Typewriter);
-        assert!(!app.pan_mode);
-        assert!(!app.drawing_eraser);
-        assert!(app.drawing_typewriter);
+        assert!(!app.drawing.pan_mode);
+        assert!(!app.drawing.drawing_eraser);
+        assert!(app.drawing.drawing_typewriter);
         sync_drawing_tool_ui(&app, &window);
         assert!(!window.get_pan_mode_active());
         assert!(!window.get_drawing_eraser_active());
@@ -456,9 +460,9 @@ fn drawing_tool_selection_is_mutually_exclusive() {
 
         // Activate Pan -> Pan true, Eraser/Typewriter false
         app.activate_drawing_tool(DrawingTool::Pan);
-        assert!(app.pan_mode);
-        assert!(!app.drawing_eraser);
-        assert!(!app.drawing_typewriter);
+        assert!(app.drawing.pan_mode);
+        assert!(!app.drawing.drawing_eraser);
+        assert!(!app.drawing.drawing_typewriter);
         sync_drawing_tool_ui(&app, &window);
         assert!(window.get_pan_mode_active());
         assert!(!window.get_drawing_eraser_active());
@@ -554,7 +558,7 @@ fn typewriter_pointer_down_opens_dialog_and_custom_text_note_inserts() {
             app.first_page_dimensions = (600.0, 800.0);
             app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0), (600.0, 800.0)]);
             app.activate_drawing_tool(DrawingTool::Typewriter);
-            app.drawing_color = InkColor::Blue;
+            app.drawing.drawing_color = InkColor::Blue;
         }
 
         let window = barepdf_ui::AppWindow::new().expect("slint app window");
@@ -576,11 +580,11 @@ fn typewriter_pointer_down_opens_dialog_and_custom_text_note_inserts() {
             };
             let page_idx = PageIndex::from_raw(page as u32);
             let pt = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
-            if app.pan_mode {
+            if app.drawing.pan_mode {
                 return;
             }
-            if app.drawing_typewriter {
-                let color_index = match app.drawing_color {
+            if app.drawing.drawing_typewriter {
+                let color_index = match app.drawing.drawing_color {
                     barepdf_core::InkColor::Black => 0,
                     barepdf_core::InkColor::Red => 1,
                     barepdf_core::InkColor::Blue => 2,
@@ -635,13 +639,17 @@ fn typewriter_pointer_down_opens_dialog_and_custom_text_note_inserts() {
         assert!((window.get_text_note_norm_x() - 0.25).abs() < 1e-4);
         assert!((window.get_text_note_norm_y() - 0.40).abs() < 1e-4);
         assert_eq!(window.get_text_note_color_index(), 2);
-        assert!(!state.borrow().annotations.contains_key(&doc_id));
+        assert!(!state.borrow().drawing.annotations.contains_key(&doc_id));
 
         // Submit custom note
         window.invoke_request_add_free_text(1, 0.25, 0.40, "Custom Reviewed Text".into(), 18.0, 2);
 
         let app = state.borrow();
-        let ann = app.annotations.get(&doc_id).expect("annotations exist");
+        let ann = app
+            .drawing
+            .annotations
+            .get(&doc_id)
+            .expect("annotations exist");
         assert_eq!(ann.free_texts.len(), 1);
         let ft = &ann.free_texts[0];
         assert_eq!(ft.page_index, 1);
@@ -761,7 +769,7 @@ fn tab_close_prompts_for_unsaved_annotations_and_confirms_or_cancels() {
             font_size: 14.0,
             color_rgba: [0, 0, 0, 255],
         });
-        state.borrow_mut().annotations.insert(doc_id, ann);
+        state.borrow_mut().drawing.annotations.insert(doc_id, ann);
 
         // Attempt closing tab -> should open unsaved drawings dialog
         window.invoke_request_close_tab(raw_id);
@@ -772,7 +780,7 @@ fn tab_close_prompts_for_unsaved_annotations_and_confirms_or_cancels() {
         window.invoke_cancel_close_tab();
         assert!(!window.get_unsaved_drawings_dialog_open());
         assert_eq!(state.borrow().pending_close_tab_id, None);
-        assert!(state.borrow().annotations.contains_key(&doc_id));
+        assert!(state.borrow().drawing.annotations.contains_key(&doc_id));
 
         // Attempt closing tab again and confirm close
         window.invoke_request_close_tab(raw_id);
@@ -782,7 +790,7 @@ fn tab_close_prompts_for_unsaved_annotations_and_confirms_or_cancels() {
         window.invoke_confirm_close_tab();
         assert!(!window.get_unsaved_drawings_dialog_open());
         assert_eq!(state.borrow().pending_close_tab_id, None);
-        assert!(!state.borrow().annotations.contains_key(&doc_id));
+        assert!(!state.borrow().drawing.annotations.contains_key(&doc_id));
     });
 }
 
@@ -1020,12 +1028,12 @@ fn drawing_palm_rejection_discards_short_accidental_taps() {
 
         {
             let app = state.borrow();
-            let ann = app.annotations.get(&doc_id);
+            let ann = app.drawing.annotations.get(&doc_id);
             assert!(
                 ann.is_none_or(|a| a.strokes.is_empty()),
                 "Accidental palm tap should be discarded"
             );
-            assert!(app.active_stroke.is_none());
+            assert!(app.drawing.active_stroke.is_none());
         }
 
         // Case 2: Intentional stroke with drag movement > 0.003 and multiple points
@@ -1036,13 +1044,17 @@ fn drawing_palm_rejection_discards_short_accidental_taps() {
 
         {
             let app = state.borrow();
-            let ann = app.annotations.get(&doc_id).expect("annotations exist");
+            let ann = app
+                .drawing
+                .annotations
+                .get(&doc_id)
+                .expect("annotations exist");
             assert_eq!(
                 ann.strokes.len(),
                 1,
                 "Intentional stroke should be preserved"
             );
-            assert!(app.active_stroke.is_none());
+            assert!(app.drawing.active_stroke.is_none());
         }
     });
 }

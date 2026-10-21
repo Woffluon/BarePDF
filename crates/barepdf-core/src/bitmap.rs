@@ -65,10 +65,18 @@ impl RawBitmap {
     }
 
     pub fn invert_rgb(&mut self) {
-        for pixel in self.pixels.chunks_exact_mut(4) {
-            pixel[0] = 255 - pixel[0];
-            pixel[1] = 255 - pixel[1];
-            pixel[2] = 255 - pixel[2];
+        const MASK: u64 = u64::from_ne_bytes([0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00]);
+        let mut chunks = self.pixels.chunks_exact_mut(8);
+        for chunk in &mut chunks {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(chunk);
+            let val = u64::from_ne_bytes(bytes);
+            chunk.copy_from_slice(&(val ^ MASK).to_ne_bytes());
+        }
+        for pixel in chunks.into_remainder().chunks_exact_mut(4) {
+            pixel[0] ^= 0xFF;
+            pixel[1] ^= 0xFF;
+            pixel[2] ^= 0xFF;
         }
     }
 }

@@ -82,11 +82,12 @@ impl BitmapCache {
     }
 
     pub fn evict_document(&mut self, document_id: DocumentId) {
-        while let Some(key) = self
+        let keys = self
             .cache
             .iter()
-            .find_map(|(k, _)| (k.document_id == document_id).then_some(*k))
-        {
+            .filter_map(|(k, _)| (k.document_id == document_id).then_some(*k))
+            .collect::<Vec<_>>();
+        for key in keys {
             if let Some(popped) = self.cache.pop(&key) {
                 self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
             }
@@ -169,6 +170,34 @@ mod tests {
         assert!(weak_p1.upgrade().is_none());
         assert!(weak_p2.upgrade().is_none());
         assert!(weak_doc2.upgrade().is_some());
+    }
+
+    #[test]
+    fn evict_document_handles_interleaved_entries_cleanly() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(100));
+        for i in 1..=5 {
+            let mut k1 = key(i);
+            k1.document_id = DocumentId::new(10);
+            cache.insert(k1, bitmap());
+
+            let mut k2 = key(i);
+            k2.document_id = DocumentId::new(20);
+            cache.insert(k2, bitmap());
+        }
+        assert_eq!(cache.current_bytes(), 40);
+
+        cache.evict_document(DocumentId::new(10));
+        assert_eq!(cache.current_bytes(), 20);
+
+        for i in 1..=5 {
+            let mut k1 = key(i);
+            k1.document_id = DocumentId::new(10);
+            assert!(cache.get(&k1).is_none());
+
+            let mut k2 = key(i);
+            k2.document_id = DocumentId::new(20);
+            assert!(cache.get(&k2).is_some());
+        }
     }
 
     #[test]

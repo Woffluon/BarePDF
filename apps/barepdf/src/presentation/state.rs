@@ -470,6 +470,124 @@ pub enum DrawingTool {
     Typewriter,
 }
 
+#[derive(Default)]
+pub(crate) struct SearchSession {
+    pub(crate) search_query: Option<barepdf_core::search::SearchQuery>,
+    pub(crate) search_matches: Vec<barepdf_core::search::SearchMatch>,
+    pub(crate) active_search_match: usize,
+}
+
+impl SearchSession {
+    pub(crate) fn clear(&mut self) {
+        self.search_query = None;
+        self.search_matches.clear();
+        self.active_search_match = 0;
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct PrintSession {
+    pub(crate) cached_printers: Vec<barepdf_platform_windows::InstalledPrinter>,
+    pub(crate) print_preview: PrintPreviewState,
+}
+
+pub(crate) struct ToolsSession {
+    pub(crate) tools_merge_files: Vec<PathBuf>,
+    pub(crate) tools_source_path: Option<PathBuf>,
+    pub(crate) tool_password_source: Option<PathBuf>,
+    pub(crate) tool_source_token: u64,
+    pub(crate) next_tool_job_id: u64,
+    pub(crate) active_tool_job: Option<ActiveToolJob>,
+    pub(crate) tool_worker: Option<ToolWorker>,
+}
+
+impl Default for ToolsSession {
+    fn default() -> Self {
+        Self {
+            tools_merge_files: Vec::new(),
+            tools_source_path: None,
+            tool_password_source: None,
+            tool_source_token: 1,
+            next_tool_job_id: 1,
+            active_tool_job: None,
+            tool_worker: None,
+        }
+    }
+}
+
+pub(crate) struct DrawingSession {
+    pub(crate) annotations: HashMap<DocumentId, barepdf_core::DocumentAnnotations>,
+    pub(crate) active_stroke: Option<barepdf_core::InkStroke>,
+    pub(crate) drawing_color: barepdf_core::InkColor,
+    pub(crate) drawing_width_pts: f32,
+    pub(crate) drawing_eraser: bool,
+    pub(crate) drawing_typewriter: bool,
+    pub(crate) pan_mode: bool,
+    pub(crate) drawing_eraser_size_index: usize,
+    pub(crate) drawing_toolbar_at_bottom: bool,
+    pub(crate) last_eraser_point: Option<(barepdf_core::PageIndex, f32, f32)>,
+    pub(crate) stroke_start_time: Option<std::time::Instant>,
+    pub(crate) stroke_start_point: Option<(f32, f32)>,
+    pub(crate) annotation_history: HashMap<DocumentId, barepdf_core::AnnotationHistory>,
+    pub(crate) committed_overlay_cache: Option<CommittedOverlayCache>,
+    pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
+    pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
+    pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
+    pub(crate) sign_pen_thickness: f32,
+}
+
+impl Default for DrawingSession {
+    fn default() -> Self {
+        Self {
+            annotations: HashMap::new(),
+            active_stroke: None,
+            drawing_color: barepdf_core::InkColor::Black,
+            drawing_width_pts: 4.0,
+            drawing_eraser: false,
+            drawing_typewriter: false,
+            pan_mode: true,
+            drawing_eraser_size_index: 1,
+            drawing_toolbar_at_bottom: false,
+            last_eraser_point: None,
+            stroke_start_time: None,
+            stroke_start_point: None,
+            annotation_history: HashMap::new(),
+            committed_overlay_cache: None,
+            sign_pad_strokes: Vec::new(),
+            sign_pad_active_stroke: None,
+            sign_uploaded_image: None,
+            sign_pen_thickness: 2.0,
+        }
+    }
+}
+
+impl DrawingSession {
+    pub(crate) fn activate_drawing_tool(&mut self, tool: DrawingTool) {
+        match tool {
+            DrawingTool::Pan => {
+                self.pan_mode = true;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Pen => {
+                self.pan_mode = false;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Eraser => {
+                self.pan_mode = false;
+                self.drawing_eraser = true;
+                self.drawing_typewriter = false;
+            }
+            DrawingTool::Typewriter => {
+                self.pan_mode = false;
+                self.drawing_eraser = false;
+                self.drawing_typewriter = true;
+            }
+        }
+    }
+}
+
 pub(crate) struct AppState {
     pub(crate) application: Application,
     pub(crate) current_page: u32,
@@ -509,40 +627,14 @@ pub(crate) struct AppState {
     pub(crate) thumbnail_images: UiImageCache,
     pub(crate) failed_pages: HashSet<(DocumentId, u32)>,
     pub(crate) update: UpdateController,
-    pub(crate) tools_merge_files: Vec<PathBuf>,
-    pub(crate) tools_source_path: Option<PathBuf>,
-    pub(crate) tool_password_source: Option<PathBuf>,
-    pub(crate) tool_source_token: u64,
-    pub(crate) next_tool_job_id: u64,
-    pub(crate) active_tool_job: Option<ActiveToolJob>,
-    pub(crate) tool_worker: Option<ToolWorker>,
-    pub(crate) cached_printers: Vec<barepdf_platform_windows::InstalledPrinter>,
-    pub(crate) print_preview: PrintPreviewState,
+    pub(crate) search: SearchSession,
+    pub(crate) print: PrintSession,
+    pub(crate) tools: ToolsSession,
+    pub(crate) drawing: DrawingSession,
+    pub(crate) pending_close_tab_id: Option<barepdf_core::DocumentId>,
     background_io_sender: std::sync::mpsc::Sender<BackgroundUiEvent>,
     background_io_receiver: std::sync::mpsc::Receiver<BackgroundUiEvent>,
     background_io_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    pub(crate) search_query: Option<barepdf_core::search::SearchQuery>,
-    pub(crate) search_matches: Vec<barepdf_core::search::SearchMatch>,
-    pub(crate) active_search_match: usize,
-    pub(crate) annotations: HashMap<DocumentId, barepdf_core::DocumentAnnotations>,
-    pub(crate) active_stroke: Option<barepdf_core::InkStroke>,
-    pub(crate) drawing_color: barepdf_core::InkColor,
-    pub(crate) drawing_width_pts: f32,
-    pub(crate) drawing_eraser: bool,
-    pub(crate) drawing_typewriter: bool,
-    pub(crate) pan_mode: bool,
-    pub(crate) pending_close_tab_id: Option<barepdf_core::DocumentId>,
-    pub(crate) drawing_eraser_size_index: usize,
-    pub(crate) drawing_toolbar_at_bottom: bool,
-    pub(crate) last_eraser_point: Option<(barepdf_core::PageIndex, f32, f32)>,
-    pub(crate) stroke_start_time: Option<std::time::Instant>,
-    pub(crate) stroke_start_point: Option<(f32, f32)>,
-    pub(crate) annotation_history: HashMap<DocumentId, barepdf_core::AnnotationHistory>,
-    pub(crate) committed_overlay_cache: Option<CommittedOverlayCache>,
-    pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
-    pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
-    pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
-    pub(crate) sign_pen_thickness: f32,
     pub(crate) kinetic_scroll: KineticScrollState,
     pub(crate) file_watcher: Option<barepdf_platform_windows::WindowsDocumentFileWatcher>,
     file_change_sender: std::sync::mpsc::Sender<PathBuf>,
@@ -599,40 +691,14 @@ impl AppState {
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             failed_pages: HashSet::new(),
             update: UpdateController::default(),
-            tools_merge_files: Vec::new(),
-            tools_source_path: None,
-            tool_password_source: None,
-            tool_source_token: 1,
-            next_tool_job_id: 1,
-            active_tool_job: None,
-            tool_worker: None,
-            cached_printers: Vec::new(),
-            print_preview: PrintPreviewState::default(),
+            search: SearchSession::default(),
+            print: PrintSession::default(),
+            tools: ToolsSession::default(),
+            drawing: DrawingSession::default(),
+            pending_close_tab_id: None,
             background_io_sender,
             background_io_receiver,
             background_io_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            search_query: None,
-            search_matches: Vec::new(),
-            active_search_match: 0,
-            annotations: HashMap::new(),
-            active_stroke: None,
-            drawing_color: barepdf_core::InkColor::Black,
-            drawing_width_pts: 4.0,
-            drawing_eraser: false,
-            drawing_typewriter: false,
-            pan_mode: true,
-            pending_close_tab_id: None,
-            drawing_eraser_size_index: 1,
-            drawing_toolbar_at_bottom: false,
-            last_eraser_point: None,
-            stroke_start_time: None,
-            stroke_start_point: None,
-            annotation_history: HashMap::new(),
-            committed_overlay_cache: None,
-            sign_pad_strokes: Vec::new(),
-            sign_pad_active_stroke: None,
-            sign_uploaded_image: None,
-            sign_pen_thickness: 2.0,
             kinetic_scroll: KineticScrollState::default(),
             file_watcher: None,
             file_change_sender,
@@ -642,29 +708,48 @@ impl AppState {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn search(&self) -> &SearchSession {
+        &self.search
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn search_mut(&mut self) -> &mut SearchSession {
+        &mut self.search
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn print(&self) -> &PrintSession {
+        &self.print
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn print_mut(&mut self) -> &mut PrintSession {
+        &mut self.print
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tools(&self) -> &ToolsSession {
+        &self.tools
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tools_mut(&mut self) -> &mut ToolsSession {
+        &mut self.tools
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn drawing(&self) -> &DrawingSession {
+        &self.drawing
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn drawing_mut(&mut self) -> &mut DrawingSession {
+        &mut self.drawing
+    }
+
     pub(crate) fn activate_drawing_tool(&mut self, tool: DrawingTool) {
-        match tool {
-            DrawingTool::Pan => {
-                self.pan_mode = true;
-                self.drawing_eraser = false;
-                self.drawing_typewriter = false;
-            }
-            DrawingTool::Pen => {
-                self.pan_mode = false;
-                self.drawing_eraser = false;
-                self.drawing_typewriter = false;
-            }
-            DrawingTool::Eraser => {
-                self.pan_mode = false;
-                self.drawing_eraser = true;
-                self.drawing_typewriter = false;
-            }
-            DrawingTool::Typewriter => {
-                self.pan_mode = false;
-                self.drawing_eraser = false;
-                self.drawing_typewriter = true;
-            }
-        }
+        self.drawing.activate_drawing_tool(tool);
     }
 
     pub(crate) fn try_recv_file_change(&self) -> Option<PathBuf> {
@@ -746,7 +831,7 @@ impl AppState {
     pub(crate) fn pump_requires_active(&self, now: Instant) -> bool {
         self.kinetic_scroll.active
             || self.update.is_busy()
-            || self.active_tool_job.is_some()
+            || self.tools.active_tool_job.is_some()
             || self
                 .background_io_in_flight
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -993,12 +1078,12 @@ mod tests {
         let now = Instant::now();
         assert!(!app.pump_requires_active(now));
 
-        app.active_tool_job = Some(ActiveToolJob {
+        app.tools.active_tool_job = Some(ActiveToolJob {
             key: ToolJobKey::new(1, 1, 1),
             cancellation: CancellationToken::new(),
         });
         assert!(app.pump_requires_active(now));
-        app.active_tool_job = None;
+        app.tools.active_tool_job = None;
         assert!(!app.pump_requires_active(now));
     }
 
@@ -1441,13 +1526,35 @@ mod tests {
     fn wave2_task4_state_fields_and_constants_defaults() {
         assert_eq!(ERASER_RADII, [0.015, 0.028, 0.048, 0.075]);
         let app = AppState::new(UserPreferences::default());
-        assert!(app.pan_mode);
-        assert_eq!(app.drawing_eraser_size_index, 1);
-        assert!(!app.drawing_toolbar_at_bottom);
-        assert_eq!(app.sign_pen_thickness, 2.0);
-        assert_eq!(app.last_eraser_point, None);
-        assert!(app.annotation_history.is_empty());
-        assert_eq!(app.committed_overlay_cache, None);
+        assert!(app.drawing.pan_mode);
+        assert_eq!(app.drawing.drawing_eraser_size_index, 1);
+        assert!(!app.drawing.drawing_toolbar_at_bottom);
+        assert_eq!(app.drawing.sign_pen_thickness, 2.0);
+        assert_eq!(app.drawing.last_eraser_point, None);
+        assert!(app.drawing.annotation_history.is_empty());
+        assert_eq!(app.drawing.committed_overlay_cache, None);
+    }
+
+    #[test]
+    fn modular_sessions_defaults_and_accessors() {
+        let mut app = AppState::new(UserPreferences::default());
+        assert!(app.search().search_matches.is_empty());
+        assert!(app.search_mut().search_query.is_none());
+        assert_eq!(app.search().active_search_match, 0);
+
+        assert!(app.print().cached_printers.is_empty());
+        assert!(!app.print().print_preview.open);
+
+        assert!(app.tools().tools_merge_files.is_empty());
+        assert_eq!(app.tools().next_tool_job_id, 1);
+        assert_eq!(app.tools().tool_source_token, 1);
+        assert!(app.tools().active_tool_job.is_none());
+
+        assert!(app.drawing().pan_mode);
+        assert_eq!(app.drawing().drawing_width_pts, 4.0);
+        app.activate_drawing_tool(DrawingTool::Eraser);
+        assert!(app.drawing().drawing_eraser);
+        assert!(!app.drawing().pan_mode);
     }
 
     #[test]
