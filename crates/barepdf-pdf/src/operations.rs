@@ -1027,8 +1027,8 @@ mod tests {
     fn test_to_pdfium_page_index_bounds() {
         assert_eq!(to_pdfium_page_index(PageIndex::zero()).unwrap(), 0);
         assert_eq!(to_pdfium_page_index(PageIndex::from_raw(100)).unwrap(), 100);
-        // PageIndex::from_raw clamps to MAX_DOCUMENT_PAGES - 1, while raw conversion rejects >= MAX_DOCUMENT_PAGES
-        let clamped_index = PageIndex::from_raw(u32::MAX);
+        // PageIndex::clamped_from_raw clamps to MAX_DOCUMENT_PAGES - 1, while raw conversion rejects >= MAX_DOCUMENT_PAGES
+        let clamped_index = PageIndex::clamped_from_raw(u32::MAX);
         assert_eq!(clamped_index.get(), MAX_DOCUMENT_PAGES - 1);
         assert!(to_pdfium_page_index(clamped_index).is_ok());
         assert!(to_pdfium_raw_page_index(MAX_DOCUMENT_PAGES).is_err());

@@ -66,6 +66,16 @@ impl fmt::Display for PageCount {
     }
 }
 
+/// Error returned when a page index exceeds `MAX_DOCUMENT_PAGES - 1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "Page index {index} exceeds maximum supported document pages ({max})",
+    max = MAX_DOCUMENT_PAGES - 1
+)]
+pub struct PageIndexError {
+    pub index: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageIndex(u32);
 
@@ -93,18 +103,48 @@ impl PageIndex {
         Self(0)
     }
 
+    /// Converts a raw 0-based index into a `PageIndex`, returning an error if it exceeds
+    /// `MAX_DOCUMENT_PAGES - 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PageIndexError`] if `index >= MAX_DOCUMENT_PAGES`.
+    pub const fn try_from_raw(index: u32) -> Result<Self, PageIndexError> {
+        if let Some(page) = Self::checked_new(index) {
+            Ok(page)
+        } else {
+            Err(PageIndexError { index })
+        }
+    }
+
     /// Creates a `PageIndex` directly from a 0-based index, clamping out-of-bounds values to the
     /// maximum supported page index (`MAX_DOCUMENT_PAGES - 1`).
     ///
-    /// Prefer [`PageIndex::new`] or [`PageIndex::checked_new`] when validating untrusted input.
+    /// Use this only when explicit clamping to the document boundary is intentional.
+    /// Prefer [`PageIndex::try_from_raw`] or [`PageIndex::new`] for untrusted inputs.
     #[must_use]
-    pub const fn from_raw(index: u32) -> Self {
+    pub const fn clamped_from_raw(index: u32) -> Self {
         let max_idx = MAX_DOCUMENT_PAGES - 1;
         if index <= max_idx {
             Self(index)
         } else {
             Self(max_idx)
         }
+    }
+
+    /// Creates a `PageIndex` directly from a known-valid 0-based index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= MAX_DOCUMENT_PAGES`. For fallible validation, use [`PageIndex::try_from_raw`].
+    /// For explicit clamping to the document page limit, use [`PageIndex::clamped_from_raw`].
+    #[must_use]
+    pub const fn from_raw(index: u32) -> Self {
+        assert!(
+            index < MAX_DOCUMENT_PAGES,
+            "Page index exceeds maximum supported document pages"
+        );
+        Self(index)
     }
 
     #[must_use]
@@ -144,6 +184,14 @@ impl fmt::Display for PageIndex {
             Some(display_index) => write!(f, "{display_index}"),
             None => write!(f, "{}", self.0),
         }
+    }
+}
+
+impl TryFrom<u32> for PageIndex {
+    type Error = PageIndexError;
+
+    fn try_from(index: u32) -> Result<Self, Self::Error> {
+        Self::try_from_raw(index)
     }
 }
 
@@ -215,6 +263,13 @@ impl<'de> Deserialize<'de> for ZoomFactor {
     }
 }
 
+/// Error returned when an unsupported angle is converted to [`Rotation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("Invalid rotation angle {degrees}°; supported angles are 0, 90, 180, 270")]
+pub struct RotationError {
+    pub degrees: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Rotation {
     #[default]
@@ -225,6 +280,18 @@ pub enum Rotation {
 }
 
 impl Rotation {
+    /// Attempts to convert an angle in degrees (0, 90, 180, 270) to [`Rotation`].
+    #[must_use]
+    pub const fn from_degrees(degrees: u32) -> Option<Self> {
+        match degrees {
+            0 => Some(Self::Degrees0),
+            90 => Some(Self::Degrees90),
+            180 => Some(Self::Degrees180),
+            270 => Some(Self::Degrees270),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub const fn degrees(self) -> u32 {
         match self {
@@ -253,6 +320,14 @@ impl Rotation {
             Self::Degrees180 => Self::Degrees90,
             Self::Degrees270 => Self::Degrees180,
         }
+    }
+}
+
+impl TryFrom<u32> for Rotation {
+    type Error = RotationError;
+
+    fn try_from(degrees: u32) -> Result<Self, Self::Error> {
+        Self::from_degrees(degrees).ok_or(RotationError { degrees })
     }
 }
 
@@ -990,7 +1065,7 @@ mod tests {
         assert!(PageIndex::checked_new(MAX_DOCUMENT_PAGES).is_none());
         assert!(PageIndex::checked_new(u32::MAX).is_none());
 
-        let clamped = PageIndex::from_raw(MAX_DOCUMENT_PAGES + 50);
+        let clamped = PageIndex::clamped_from_raw(MAX_DOCUMENT_PAGES + 50);
         assert_eq!(clamped.get(), MAX_DOCUMENT_PAGES - 1);
         assert!(clamped.is_within_limit());
         assert!(clamped.next(MAX_DOCUMENT_PAGES + 100).is_none());
@@ -1001,6 +1076,65 @@ mod tests {
             PageIndex::new(MAX_DOCUMENT_PAGES - 1, large_count).map(PageIndex::get),
             Some(MAX_DOCUMENT_PAGES - 1)
         );
+    }
+
+    #[test]
+    fn page_index_try_from_raw_and_try_from_return_error_on_out_of_bounds() {
+        assert_eq!(PageIndex::try_from(0u32), Ok(PageIndex::zero()));
+        assert_eq!(
+            PageIndex::try_from(MAX_DOCUMENT_PAGES - 1),
+            Ok(PageIndex::clamped_from_raw(MAX_DOCUMENT_PAGES - 1))
+        );
+        assert_eq!(
+            PageIndex::try_from(MAX_DOCUMENT_PAGES),
+            Err(PageIndexError {
+                index: MAX_DOCUMENT_PAGES
+            })
+        );
+        assert_eq!(
+            PageIndex::try_from(MAX_DOCUMENT_PAGES + 50),
+            Err(PageIndexError {
+                index: MAX_DOCUMENT_PAGES + 50
+            })
+        );
+        assert_eq!(
+            PageIndex::try_from_raw(MAX_DOCUMENT_PAGES + 50),
+            Err(PageIndexError {
+                index: MAX_DOCUMENT_PAGES + 50
+            })
+        );
+        assert_eq!(
+            PageIndex::try_from(u32::MAX),
+            Err(PageIndexError { index: u32::MAX })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Page index exceeds maximum supported document pages")]
+    fn page_index_from_raw_panics_on_out_of_bounds() {
+        let _ = PageIndex::from_raw(MAX_DOCUMENT_PAGES + 50);
+    }
+
+    #[test]
+    fn rotation_try_from_and_from_degrees() {
+        assert_eq!(Rotation::try_from(0u32), Ok(Rotation::Degrees0));
+        assert_eq!(Rotation::try_from(90u32), Ok(Rotation::Degrees90));
+        assert_eq!(Rotation::try_from(180u32), Ok(Rotation::Degrees180));
+        assert_eq!(Rotation::try_from(270u32), Ok(Rotation::Degrees270));
+        assert_eq!(
+            Rotation::try_from(45u32),
+            Err(RotationError { degrees: 45 })
+        );
+        assert_eq!(
+            Rotation::try_from(360u32),
+            Err(RotationError { degrees: 360 })
+        );
+
+        assert_eq!(Rotation::from_degrees(0), Some(Rotation::Degrees0));
+        assert_eq!(Rotation::from_degrees(90), Some(Rotation::Degrees90));
+        assert_eq!(Rotation::from_degrees(180), Some(Rotation::Degrees180));
+        assert_eq!(Rotation::from_degrees(270), Some(Rotation::Degrees270));
+        assert_eq!(Rotation::from_degrees(45), None);
     }
 
     #[test]
