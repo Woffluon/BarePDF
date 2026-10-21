@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 use barepdf_core::{EncodedImageFormat, ImageEncodeError, ImageEncoder, PageCount, RawBitmap};
-use barepdf_platform::printing::{
+pub use barepdf_platform::printing::{
     InstalledPrinter, PrintDuplex, PrintError, PrintJobId, PrintOrientation, PrintPage, PrintRange,
     PrintSelection, PrinterDialog, PrinterSink,
 };
