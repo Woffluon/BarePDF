@@ -484,7 +484,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "barepdf"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "barepdf-core",
  "barepdf-i18n",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-core"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "barepdf-i18n",
  "serde",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-i18n"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "serde",
  "windows-sys 0.59.0",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-pdf"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "barepdf-core",
  "pdfium-render",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "barepdf-core",
  "thiserror 2.0.19",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform-linux"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "arboard",
  "barepdf-platform",
@@ -564,12 +564,11 @@ dependencies = [
 
 [[package]]
 name = "barepdf-platform-windows"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "arboard",
  "barepdf-core",
  "barepdf-platform",
- "barepdf-platform-linux",
  "raw-window-handle",
  "rfd",
  "tempfile",
@@ -580,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-render"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "barepdf-core",
  "barepdf-pdf",
@@ -592,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-thumbnail"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "pdfium-render",
  "windows 0.58.0",
@@ -602,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "barepdf-ui"
-version = "1.22.0"
+version = "1.22.1"
 dependencies = [
  "slint",
 ]
@@ -4169,9 +4168,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4810,7 +4809,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -5618,18 +5617,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

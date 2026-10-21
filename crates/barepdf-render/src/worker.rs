@@ -589,7 +589,7 @@ mod tests {
             primary_screen_dpi: 96.0,
         };
         let worker_low = create_adaptive_worker(&low_ram);
-        assert_eq!(worker_low.budget().get(), 256 * 1024 * 1024);
+        assert_eq!(worker_low.budget().get(), 128 * 1024 * 1024);
 
         let mid_ram = SystemHardwareProfile {
             total_ram_mb: 8192,

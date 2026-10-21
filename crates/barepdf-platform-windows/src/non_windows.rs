@@ -1,20 +1,156 @@
+use arboard::Clipboard;
 use barepdf_core::{EncodedImageFormat, ImageEncodeError, ImageEncoder, PageCount, RawBitmap};
 use barepdf_platform::printing::{
-    PrintDuplex, PrintError, PrintJobId, PrintPage, PrintRange, PrintSelection, PrinterDialog,
-    PrinterSink,
+    InstalledPrinter, PrintDuplex, PrintError, PrintJobId, PrintOrientation, PrintPage, PrintRange,
+    PrintSelection, PrinterDialog, PrinterSink,
 };
 use barepdf_platform::watcher::DocumentFileWatcher as DocumentFileWatcherTrait;
+pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeEvent, FileChangeWatcher};
 use barepdf_platform::PlatformError;
 use raw_window_handle::WindowHandle;
+use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::Receiver;
+use std::sync::Mutex;
 
-pub use barepdf_platform::printing::{InstalledPrinter, PrintOrientation};
-pub use barepdf_platform::watcher::{DocumentFileWatcher, FileChangeEvent, FileChangeWatcher};
-pub use barepdf_platform_linux::{
-    ask_yes_no, open_url, show_fatal_error, LinuxClipboard as WindowsClipboard,
-    LinuxFileDialogs as WindowsFileDialogs,
-};
+pub fn show_fatal_error(title: &str, message: &str) {
+    MessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(MessageLevel::Error)
+        .set_buttons(MessageButtons::Ok)
+        .show();
+}
+
+#[must_use]
+pub fn ask_yes_no(title: &str, message: &str) -> bool {
+    MessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(MessageLevel::Info)
+        .set_buttons(MessageButtons::YesNo)
+        .show()
+        == MessageDialogResult::Yes
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WindowsFileDialogs;
+
+impl WindowsFileDialogs {
+    #[must_use]
+    pub fn pick_file(&self) -> Option<PathBuf> {
+        FileDialog::new()
+            .add_filter("PDF Document", &["pdf"])
+            .pick_file()
+    }
+
+    #[must_use]
+    pub fn pick_multiple_files(&self) -> Vec<PathBuf> {
+        FileDialog::new()
+            .add_filter("PDF Document", &["pdf"])
+            .pick_files()
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn save_file(&self, default_name: &str) -> Option<PathBuf> {
+        FileDialog::new()
+            .add_filter("PDF Document", &["pdf"])
+            .set_file_name(default_name)
+            .save_file()
+    }
+
+    #[must_use]
+    pub fn pick_directory(&self) -> Option<PathBuf> {
+        FileDialog::new().pick_folder()
+    }
+
+    #[must_use]
+    pub fn pick_image_file(&self) -> Option<PathBuf> {
+        FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+    }
+}
+
+pub struct WindowsClipboard {
+    inner: Mutex<Option<Clipboard>>,
+}
+
+impl WindowsClipboard {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(Clipboard::new().ok()),
+        }
+    }
+
+    pub fn set_text(&self, text: &str) -> Result<(), PlatformError> {
+        let mut guard = self.inner.lock().map_err(|_| PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        if guard.is_none() {
+            *guard = Clipboard::new().ok();
+        }
+        let cb = guard.as_mut().ok_or(PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        cb.set_text(text).map_err(|source| PlatformError::External {
+            operation: "Could not write clipboard text",
+            source: Box::new(source),
+        })
+    }
+
+    pub fn get_text(&self) -> Result<String, PlatformError> {
+        let mut guard = self.inner.lock().map_err(|_| PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        if guard.is_none() {
+            *guard = Clipboard::new().ok();
+        }
+        let cb = guard.as_mut().ok_or(PlatformError::Unavailable {
+            operation: "Clipboard",
+        })?;
+        cb.get_text().map_err(|source| PlatformError::External {
+            operation: "Could not read clipboard text",
+            source: Box::new(source),
+        })
+    }
+}
+
+impl Default for WindowsClipboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn open_url(url: &str) -> Result<(), PlatformError> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|source| PlatformError::Io {
+            operation: "xdg-open",
+            source,
+        })
+}
+
+pub fn trigger_virtual_keyboard() {
+    let _ = Command::new("onboard")
+        .spawn()
+        .or_else(|_| Command::new("maliit-keyboard").spawn())
+        .or_else(|_| {
+            Command::new("dbus-send")
+                .args([
+                    "--type=method_call",
+                    "--dest=org.onboard.Onboard",
+                    "/org/onboard/Onboard/Keyboard",
+                    "org.onboard.Onboard.Keyboard.ToggleVisible",
+                ])
+                .spawn()
+        });
+}
 
 #[must_use]
 pub fn enumerate_installed_printers() -> Vec<InstalledPrinter> {
@@ -164,18 +300,10 @@ pub fn is_installed_build() -> bool {
         .unwrap_or(false)
 }
 
-pub fn launch_installer(path: &Path) -> Result<(), PlatformError> {
-    #[cfg(target_os = "linux")]
-    {
-        barepdf_platform_linux::launch_package_installer(path)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = path;
-        Err(PlatformError::Unavailable {
-            operation: "launch_installer",
-        })
-    }
+pub fn launch_installer(_path: &Path) -> Result<(), PlatformError> {
+    Err(PlatformError::Unavailable {
+        operation: "launch_installer",
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub(crate) const RAW_BITMAP_BUDGET: usize = 4 * 1024 * 1024;
+pub(crate) const RAW_BITMAP_BUDGET: usize = 128 * 1024 * 1024;
 pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
 pub(crate) const PAGE_IMAGE_BUDGET: usize = 64 * 1024 * 1024;
 pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;

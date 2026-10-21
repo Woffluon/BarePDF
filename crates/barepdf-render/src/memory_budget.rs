@@ -7,7 +7,11 @@ pub struct SystemHardwareProfile {
 
 #[must_use]
 pub fn calculate_adaptive_memory_budget(profile: &SystemHardwareProfile) -> MemoryBudget {
-    let final_mb = if profile.total_ram_mb <= 4096 {
+    let final_mb = if profile.total_ram_mb <= 1024 {
+        64
+    } else if profile.total_ram_mb <= 2048 {
+        128
+    } else if profile.total_ram_mb <= 4096 {
         256
     } else if profile.total_ram_mb <= 8192 {
         384
@@ -33,6 +37,18 @@ mod tests {
 
     #[test]
     fn test_adaptive_memory_budget() {
+        let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
+            total_ram_mb: 1024,
+            primary_screen_dpi: 96.0,
+        });
+        assert_eq!(budget.get(), 64 * 1024 * 1024);
+
+        let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
+            total_ram_mb: 2048,
+            primary_screen_dpi: 96.0,
+        });
+        assert_eq!(budget.get(), 128 * 1024 * 1024);
+
         let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
             total_ram_mb: 4096,
             primary_screen_dpi: 96.0,
