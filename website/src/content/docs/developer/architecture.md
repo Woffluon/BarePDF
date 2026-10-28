@@ -39,6 +39,10 @@ BarePDF is structured into decoupled crates to isolate platform API bindings, re
 - **Responsibility**: Presentation layer powered by Slint.
 - **Components**: Toolbar view, page canvas view, sidebar thumbnails & document outline, modal dialogs, and keyboard shortcut dispatchers.
 
-### 7. `apps/barepdf`
+### 7. `barepdf-thumbnail`
+- **Responsibility**: Standalone Windows Explorer shell extension.
+- **Implementation**: COM in-process server DLL (`barepdf_thumbnail.dll`) implementing `IThumbnailProvider` and `IInitializeWithStream`, rendered with its own sibling `pdfium.dll`.
+
+### 8. `apps/barepdf`
 - **Responsibility**: Application entry point (`main.rs`).
 - **Tasks**: Initializes logging (`tracing`), loads `config.json`, wires platform services, and launches the Slint event loop.

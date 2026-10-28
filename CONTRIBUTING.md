@@ -24,6 +24,22 @@ To compile BarePDF locally on Windows, you will need:
   ```
 - **Node.js 22 and pnpm 10 (optional):** Required only when editing the Astro website inside `website/`.
 
+On Linux (Pardus 23/25, Debian, Ubuntu), you will need instead:
+
+- **Rust toolchain:** Stable Rust installed via [rustup.rs](https://rustup.rs/).
+  ```bash
+  rustup update stable
+  ```
+- **System Libraries:** Required font, input, and graphics development packages:
+  ```bash
+  sudo apt update
+  sudo apt install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev
+  ```
+- **Packaging Tools (optional):** Required only for local `.deb` and `AppImage` generation.
+  ```bash
+  cargo install cargo-deb --locked
+  ```
+
 ### PDFium Runtime Library
 
 BarePDF uses Google PDFium for PDF rendering. Before running or building the application, fetch the pinned, SHA-256 verified runtime DLL:
@@ -32,7 +48,7 @@ BarePDF uses Google PDFium for PDF rendering. Before running or building the app
 powershell -File packaging/windows/scripts/fetch-pdfium.ps1
 ```
 
-This helper places `pdfium.dll` into the packaging directory and verifies its cryptographic hash.
+This helper downloads the pinned PDFium runtime, verifies its cryptographic SHA-256 hash, and places `pdfium.dll` at `target\<profile>\pdfium.dll` (default profile: `target\release\pdfium.dll`; pass `-Destination` for other profiles, e.g. `target\debug\pdfium.dll`).
 
 ### Building and Running Locally
 
@@ -65,6 +81,7 @@ BarePDF is organized as a multi-crate Rust workspace paired with an Astro static
 | [`crates/barepdf-ui`](./crates/barepdf-ui) | Slint UI definitions (`.slint`), toolbar, document viewport, sidebar thumbnails/outline, and modal dialogs. |
 | [`crates/barepdf-platform`](./crates/barepdf-platform) | OS-agnostic platform service contracts. |
 | [`crates/barepdf-platform-windows`](./crates/barepdf-platform-windows) | Win32 integration (native dialogs, clipboard, drag-and-drop, Default Apps registration, PE version inspection). |
+| [`crates/barepdf-platform-linux`](./crates/barepdf-platform-linux) | Native Linux desktop integration (file dialogs via `rfd`, clipboard via `arboard`, and URL/shell dispatch via `xdg-open`). |
 | [`crates/barepdf-i18n`](./crates/barepdf-i18n) | Localization tables and language resolution (English, Turkish, System). |
 | [`crates/barepdf-thumbnail`](./crates/barepdf-thumbnail) | Windows Explorer Shell `IThumbnailProvider` COM DLL (`BarePDF.Thumbnail.dll`). |
 | [`packaging/windows`](./packaging/windows) | Inno Setup definition (`BarePDF.iss`) and PowerShell scripts for fetching PDFium, staging, building, signing, and validating releases. |
@@ -82,7 +99,7 @@ BarePDF is organized as a multi-crate Rust workspace paired with an Astro static
 
 BarePDF enforces strict compile-time safety across its production codebase:
 
-- **No Panics in Production:** `apps/barepdf` and workspace crates enforce `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]` alongside `#![forbid(unsafe_code)]` (except where Win32/COM FFI is explicitly isolated).
+- **No Panics in Production:** `apps/barepdf/src/lib.rs` enforces `#![forbid(unsafe_code)]` and `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]`. CI additionally runs `cargo clippy --workspace --lib --bins` with `-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable` (see `.github/workflows/ci.yml`). IME and window-chrome FFI in the platform crates is the explicitly isolated exception to the source-level lint contract; do not extend `unsafe` without isolating and testing it.
 - **Graceful Error Handling:** Never use `.unwrap()`, `.expect()`, `panic!()`, `todo!()`, or `unimplemented!()` in non-test code. Propagate errors with `Result<T, E>` and `thiserror`, or degrade gracefully while recording a redacted warning via `diagnostics::warn_redacted`.
 - **COM FFI Boundary Protection:** In `crates/barepdf-thumbnail`, every COM entry point is wrapped in `std::panic::catch_unwind` so that unexpected failures translate into safe `HRESULT` error codes without unwinding across the C ABI boundary.
 - **Redacted Diagnostics:** Never log raw file paths, URLs with query tokens, or user document contents. Always route diagnostic warnings through `diagnostics::warn_redacted`.

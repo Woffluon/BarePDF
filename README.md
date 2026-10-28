@@ -28,7 +28,7 @@
 
 ---
 
-BarePDF is an open-source PDF reader for Windows 10 and 11 built with Rust, Slint, and Google PDFium. It handles documents locally on your CPU, enforces a verified zero-telemetry policy, and uses demand-driven rendering with byte-budgeted LRU caches so memory usage remains bounded regardless of document length.
+BarePDF is an open-source PDF reader for Windows 10/11 and Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) built with Rust, Slint, and Google PDFium. It handles documents locally on your CPU, enforces a verified zero-telemetry policy, and uses demand-driven rendering with byte-budgeted LRU caches so memory usage remains bounded regardless of document length.
 
 ## Contents
 
@@ -51,7 +51,7 @@ BarePDF is an open-source PDF reader for Windows 10 and 11 built with Rust, Slin
 | Principle | Technical Reality |
 | --- | --- |
 | **Fast by design** | Priority-queued render pipeline. Only visible viewport pages receive CPU rasterization; obsolete scroll jobs cancel immediately via generation tokens. |
-| **Bounded memory** | Byte-budgeted LRU bitmap caches (32 MB raw, 16 MB UI, 4 MB thumbnails) prevent memory from growing unchecked on 500+ page documents. |
+| **Bounded memory** | Byte-budgeted LRU bitmap caches (128 MB raw bitmaps, 128 MB UI image cache with zoom-adaptive 32/64/128 MB tiers, 64 MB per-page image budget, 4 MB thumbnails) plus RAM-adaptive total render budgets of 64/128/256/384/1024 MB keep memory from growing unchecked on 500+ page documents. |
 | **Zero telemetry** | 100% offline. Zero background analytics, zero tracking IDs, zero account requirements, zero network calls during reading. |
 | **Native Windows integration** | Native Win32 printing, high-DPI handling, Shell thumbnail extension for File Explorer, and standard Default Apps registration. |
 | **Full keyboard control** | Quick command palette HUD (`Ctrl+K`), custom viewing modes, and dedicated single-key shortcuts. |
@@ -181,8 +181,8 @@ BarePDF provides seven core feature suites built directly into the desktop appli
 | **Navigation** | First page | `Home` | |
 | **Navigation** | Last page | `End` | |
 | **Navigation** | Toggle bookmark | `Ctrl+D` | Sidebar bookmarks |
-| **Zoom & View** | Zoom in | `+` or `=` | `Ctrl++` |
-| **Zoom & View** | Zoom out | `-` | `Ctrl+-` |
+| **Zoom & View** | Zoom in | `+` or `=` | |
+| **Zoom & View** | Zoom out | `-` | |
 | **Zoom & View** | Actual size (100%) | `Ctrl+0` | Toolbar fit menu |
 | **Zoom & View** | Rotate clockwise | `Ctrl+R` | Toolbar rotate |
 | **Zoom & View** | Rotate counter-clockwise | `Ctrl+Shift+R` | |
@@ -207,6 +207,7 @@ flowchart TD
     APP --> RENDER["crates/barepdf-render<br/>Priority scheduler, LRU caches & cancellation"]
     APP --> PLATFORM["crates/barepdf-platform<br/>OS service interfaces"]
     PLATFORM --> WIN["crates/barepdf-platform-windows<br/>Win32 clipboard, dialogs & printing"]
+    PLATFORM --> LIN["crates/barepdf-platform-linux<br/>Linux dialogs, clipboard & shell dispatch"]
     APP --> I18N["crates/barepdf-i18n<br/>Complete English & Turkish localizations"]
     THUMB["crates/barepdf-thumbnail<br/>Windows Explorer thumbnail provider DLL"] --> PDFIUM["sibling pdfium.dll"]
     PDF --> PDFIUM
@@ -220,6 +221,7 @@ flowchart TD
 | [`crates/barepdf-render`](./crates/barepdf-render) | Priority render queues, generation cancellation, adaptive memory budgeting, and bitmap caches |
 | [`crates/barepdf-ui`](./crates/barepdf-ui) | Slint user interface, Command Palette HUD, tool panels, and canvas rendering |
 | [`crates/barepdf-platform-windows`](./crates/barepdf-platform-windows) | Native Win32 printing, clipboard, drag-and-drop, and registry integration |
+| [`crates/barepdf-platform-linux`](./crates/barepdf-platform-linux) | Native Linux desktop integration: file dialogs via `rfd`, clipboard via `arboard`, and URL/shell dispatch via `xdg-open` |
 | [`crates/barepdf-thumbnail`](./crates/barepdf-thumbnail) | COM-registered Windows Explorer shell extension for native PDF thumbnails |
 | [`crates/barepdf-i18n`](./crates/barepdf-i18n) | Bi-directional internationalization tables for English and Turkish |
 | [`packaging/windows`](./packaging/windows) | Inno Setup packaging configurations and WinGet manifest generators |
@@ -229,10 +231,10 @@ flowchart TD
 
 Detailed performance findings are documented in [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
 
-- **Startup Latency:** Process initialization to active window in 65 ms to 95 ms (warm) and 140 ms to 190 ms (cold).
-- **Settled Memory:** 28 MB to 35 MB idle working set; 55 MB to 72 MB for a 500-page document.
+- **Startup Latency:** Document open to first page bitmap ready in ≈ 300 ms to 330 ms (warm; a single cold run was measured at ≈ 303 ms). Measured as `first_bitmap_ms` recorded via `BAREPDF_PROFILE_FILE` (spanning PDFium engine init and window creation, but excluding process boot and image loading). Reference machine: Windows 11 Pro, AMD Ryzen 5 5500, release build, pinned PDFium (chromium/7988).
+- **Settled Memory:** ≈ 125 MB private bytes and ≈ 114 MB working set while idle; ≈ 122 MB private bytes and ≈ 109 MB working set with a document open.
 - **LRU Eviction:** Memory usage remains bounded by byte budgets rather than total page count.
-- **Profiling Script:** Run `powershell -File scripts/benchmark-memory-and-startup.ps1 -PdfPath <file> -Runs 5`.
+- **Profiling Script:** Run `powershell -File scripts/benchmark-memory-and-startup.ps1 -PdfPath <file> -Runs 5`. Timing and memory values are only meaningful when the pinned `pdfium.dll` sits next to the release executable — stage it first with `powershell -File packaging/windows/scripts/fetch-pdfium.ps1`. Without it the app blocks on a fatal "PDF engine could not be loaded" dialog and no profile signal is produced.
 
 ## System Requirements
 
@@ -258,11 +260,23 @@ BarePDF adheres to an uncompromising privacy and security baseline:
 
 ### Prerequisites
 
-- Windows 10 or 11 on x64.
+On Windows (x64, Windows 10/11):
+
 - [Rust](https://www.rust-lang.org/tools/install) 1.92 or newer with Cargo.
 - Visual Studio 2022 Build Tools (with Windows SDK and C++ build tools).
 - [Node.js](https://nodejs.org/) 22.12 or newer and pnpm 10 (for building the website).
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php) (only for building Windows installer packages).
+
+On Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+):
+
+- Stable Rust 1.92 or newer ([rustup.rs](https://rustup.rs/)).
+- Required font, input, and graphics development packages:
+  ```bash
+  sudo apt update
+  sudo apt install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev
+  ```
+- [Node.js](https://nodejs.org/) 22.12 or newer and pnpm 10 (for building the website).
+- `cargo install cargo-deb --locked` (only for building the `.deb` package).
 
 ### Build and Run Desktop Application
 

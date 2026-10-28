@@ -25,4 +25,4 @@ When a user scrolls rapidly:
 
 ## Memory Budgeting
 
-The raw RGBA cache uses a fixed 32MB byte budget. The application separately budgets Slint page images (16MB) and thumbnails (4MB), preventing duplicated raw/UI copies from growing with page count.
+The engine-side raw RGBA cache uses a fixed 128 MB byte budget (`RAW_BITMAP_BUDGET`). The application separately budgets Slint UI images at 128 MB (`UI_IMAGE_CACHE_BUDGET`, zoom-adaptive in 32/64/128 MB tiers), clamps each decoded page image to a 64 MB cap (`PAGE_IMAGE_BUDGET`), and reserves 4 MB for sidebar thumbnails, preventing duplicated raw/UI copies from growing with page count. The render engine additionally derives an overall byte budget from the system's RAM (64/128/256/384/1024 MB tiers, `crates/barepdf-render/src/memory_budget.rs`).

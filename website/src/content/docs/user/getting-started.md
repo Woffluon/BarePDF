@@ -7,7 +7,7 @@ order: 1
 
 # Getting Started with BarePDF
 
-BarePDF is an open-source, ultra-lightweight, fast PDF reader built specifically for Windows 10 and 11. It delivers the speed and efficiency of classic minimalist readers while providing a modern desktop user interface powered by Rust and Slint.
+BarePDF is an open-source, ultra-lightweight, fast PDF reader built for Windows 10/11 and Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+). It delivers the speed and efficiency of classic minimalist readers while providing a modern desktop user interface powered by Rust and Slint.
 
 ## Key Features
 
@@ -19,7 +19,7 @@ BarePDF is an open-source, ultra-lightweight, fast PDF reader built specifically
 
 ## System Requirements
 
-- **Operating System**: Windows 10 or Windows 11 (64-bit).
+- **Operating System**: Windows 10/11 or Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+), 64-bit.
 - **Architecture**: x86_64 (AMD64 / Intel 64-bit).
 - **RAM**: 512 MB minimum (1 GB recommended).
 - **Storage**: ~50 MB available disk space.

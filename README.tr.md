@@ -28,7 +28,7 @@
 
 ---
 
-BarePDF; Windows 10 ve 11 için Rust, Slint ve Google PDFium ile geliştirilen açık kaynaklı bir PDF okuyucudur. Belge işlemlerini yerel işlemcinizde tutar, doğrulanmış sıfır telemetri ilkesiyle çalışır ve belge uzunluğundan bağımsız olarak bellek kullanımını sınırlandıran talep odaklı işleme ve byte bütçeli LRU önbellekleri kullanır.
+BarePDF; Windows 10/11 ve Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) için Rust, Slint ve Google PDFium ile geliştirilen açık kaynaklı bir PDF okuyucudur. Belge işlemlerini yerel işlemcinizde tutar, doğrulanmış sıfır telemetri ilkesiyle çalışır ve belge uzunluğundan bağımsız olarak bellek kullanımını sınırlandıran talep odaklı işleme ve byte bütçeli LRU önbellekleri kullanır.
 
 <a id="icerik"></a>
 ## İçindekiler
@@ -53,7 +53,7 @@ BarePDF; Windows 10 ve 11 için Rust, Slint ve Google PDFium ile geliştirilen a
 | İlke | Teknik Karşılığı |
 | --- | --- |
 | **Tasarımla hızlı** | Öncelikli kuyruk mimarisi. Yalnızca görünür pencere alanı içindeki sayfalar rasterleştirilir; eski kaydırma işleri nesil belirteçleriyle anında iptal edilir. |
-| **Sınırlandırılmış bellek** | Byte bütçeli LRU bitmap önbellekleri (32 MB ham, 16 MB arayüz, 4 MB küçük resim) 500+ sayfalık belgelerde bile bellek taşmasını önler. |
+| **Sınırlandırılmış bellek** | Byte bütçeli LRU bitmap önbellekleri (128 MB ham bitmap, yakınlaştırmaya uyarlanan 32/64/128 MB kademeleriyle 128 MB arayüz görüntü önbelleği, 64 MB sayfa görüntüsü bütçesi, 4 MB küçük resim) ve RAM'e uyarlanan 64/128/256/384/1024 MB toplam işlem bütçeleri, 500+ sayfalık belgelerde bile belleğin taşmasını önler. |
 | **Sıfır telemetri** | %100 çevrimdışı. Sıfır analitik, sıfır takip kimliği, hesap zorunluluğu yok, okuma sırasında sıfır ağ araması. |
 | **Yerel Windows entegrasyonu** | Yerel Win32 yazdırma, yüksek DPI desteği, Dosya Gezgini için küçük resim kabuk uzantısı ve standart Varsayılan Uygulamalar kaydı. |
 | **Tam klavye kontrolü** | Hızlı Komut Paleti HUD (`Ctrl+K`), özel okuma modları ve tek tuşla erişilebilen kontroller. |
@@ -186,8 +186,8 @@ BarePDF masaüstü uygulamasında doğrudan yerleşik yedi temel özellik paketi
 | **Gezinme** | İlk sayfa | `Home` | |
 | **Gezinme** | Son sayfa | `End` | |
 | **Gezinme** | Yer işaretini değiştir | `Ctrl+D` | Kenar çubuğu yer işaretleri |
-| **Görünüm** | Yakınlaştır | `+` veya `=` | `Ctrl++` |
-| **Görünüm** | Uzaklaştır | `-` | `Ctrl+-` |
+| **Görünüm** | Yakınlaştır | `+` veya `=` | |
+| **Görünüm** | Uzaklaştır | `-` | |
 | **Görünüm** | Gerçek boyut (%100) | `Ctrl+0` | Araç çubuğu sığdırma menüsü |
 | **Görünüm** | Saat yönünde döndür | `Ctrl+R` | Araç çubuğu döndür |
 | **Görünüm** | Saatin tersine döndür | `Ctrl+Shift+R` | |
@@ -213,6 +213,7 @@ flowchart TD
     APP --> RENDER["crates/barepdf-render<br/>Öncelik zamanlayıcı, LRU önbellekleri ve iptal"]
     APP --> PLATFORM["crates/barepdf-platform<br/>İşletim sistemi servis arayüzleri"]
     PLATFORM --> WIN["crates/barepdf-platform-windows<br/>Win32 pano, iletişim kutuları ve yazdırma"]
+    PLATFORM --> LIN["crates/barepdf-platform-linux<br/>Linux iletişim kutuları, pano ve kabuk iletimi"]
     APP --> I18N["crates/barepdf-i18n<br/>İngilizce ve Türkçe eksiksiz yerelleştirmeler"]
     THUMB["crates/barepdf-thumbnail<br/>Windows Gezgini küçük resim sağlayıcı DLL"] --> PDFIUM["yan pdfium.dll"]
     PDF --> PDFIUM
@@ -226,6 +227,7 @@ flowchart TD
 | [`crates/barepdf-render`](./crates/barepdf-render) | Öncelikli render kuyrukları, nesil iptali, uyarlamalı bellek bütçesi ve bitmap önbellekleri |
 | [`crates/barepdf-ui`](./crates/barepdf-ui) | Slint arayüz bileşenleri, Komut Paleti HUD, araç panelleri ve tuval gösterimi |
 | [`crates/barepdf-platform-windows`](./crates/barepdf-platform-windows) | Yerel Win32 yazdırma, pano, sürükle-bırak ve kayıt defteri entegrasyonu |
+| [`crates/barepdf-platform-linux`](./crates/barepdf-platform-linux) | Yerel Linux masaüstü entegrasyonu: `rfd` ile dosya iletişim kutuları, `arboard` ile pano ve `xdg-open` ile URL/kabuk iletimi |
 | [`crates/barepdf-thumbnail`](./crates/barepdf-thumbnail) | PDF küçük resimleri için COM kayıtlı 64 bit Windows Gezgini kabuk uzantısı |
 | [`crates/barepdf-i18n`](./crates/barepdf-i18n) | İngilizce ve Türkçe için iki yönlü yerelleştirme tabloları |
 | [`packaging/windows`](./packaging/windows) | Inno Setup paketleme yapılandırmaları ve WinGet bildirim oluşturucuları |
@@ -236,10 +238,10 @@ flowchart TD
 
 Ayrıntılı performans bulguları [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md) dosyasında belgelenmiştir.
 
-- **Başlatma Gecikmesi:** Süreç başlangıcından aktif pencereye kadar 65 ms ile 95 ms (sıcak) ve 140 ms ile 190 ms (soğuk).
-- **Yerleşik Bellek Kullanımı:** 28 MB ile 35 MB boşta çalışma kümesi; 500 sayfalık belgede 55 MB ile 72 MB.
+- **Başlatma Gecikmesi:** Belge açılışından ilk sayfa bitmap'inin hazır olmasına kadar ≈ 300 ms ile 330 ms (sıcak; tek seferlik bir soğuk koşumda ≈ 303 ms ölçüldü). `BAREPDF_PROFILE_FILE` üzerinden kaydedilen `first_bitmap_ms` sinyaliyle ölçülür (PDFium motor başlatmasını ve pencere yaratımını kapsar; süreç önyüklemesini ve imaj yüklemesini kapsamaz). Referans makine: Windows 11 Pro, AMD Ryzen 5 5500, release derlemesi, pinlenmiş PDFium (chromium/7988).
+- **Yerleşik Bellek Kullanımı:** Boştayken ≈ 125 MB özel bellek ve ≈ 114 MB çalışma kümesi; belge açıkken ≈ 122 MB özel bellek ve ≈ 109 MB çalışma kümesi.
 - **LRU Tahliyesi:** Bellek kullanımı sayfa sayısıyla değil, byte bütçeleriyle sabit tutulur.
-- **Ölçüm Script'i:** `powershell -File scripts/benchmark-memory-and-startup.ps1 -PdfPath <dosya> -Runs 5`.
+- **Ölçüm Script'i:** `powershell -File scripts/benchmark-memory-and-startup.ps1 -PdfPath <dosya> -Runs 5`. Zaman ve bellek değerleri yalnızca pinlenmiş `pdfium.dll`, release çalıştırılabilirinin yanındayken anlamlıdır — önce `powershell -File packaging/windows/scripts/fetch-pdfium.ps1` ile tamamlayın. Eksik DLL durumunda uygulama `"PDF engine could not be loaded"` ölümcül iletişim kutusunda bloke olur ve profil sinyali üretilmez.
 
 <a id="sistem-gereksinimleri"></a>
 ## Sistem Gereksinimleri
@@ -268,11 +270,23 @@ BarePDF tavizsiz bir gizlilik ve güvenlik standardı izler:
 
 ### Ön Koşullar
 
-- x64 mimarisinde Windows 10 veya 11.
+Windows'ta (x64, Windows 10/11):
+
 - [Rust](https://www.rust-lang.org/tools/install) 1.92 veya üzeri ve Cargo.
 - Windows SDK ve C++ derleme araçlarıyla Visual Studio 2022 Build Tools.
 - Site derlemesi için [Node.js](https://nodejs.org/) 22.12 veya üzeri ve pnpm 10.
 - Yalnızca Windows kurulum paketi hazırlarken [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+
+Linux'ta (Pardus 23/25, Debian 12+, Ubuntu 22.04+):
+
+- Sabit Rust 1.92 veya üzeri ([rustup.rs](https://rustup.rs/)).
+- Gerekli font, giriş ve grafik geliştirme paketleri:
+  ```bash
+  sudo apt update
+  sudo apt install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev
+  ```
+- Site derlemesi için [Node.js](https://nodejs.org/) 22.12 veya üzeri ve pnpm 10.
+- `cargo install cargo-deb --locked` (yalnızca `.deb` paketi hazırlarken).
 
 ### Masaüstü Uygulamasını Derleme ve Çalıştırma
 

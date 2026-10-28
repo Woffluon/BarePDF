@@ -30,9 +30,11 @@ BarePDF/
 │   ├── barepdf-render/         # Render scheduler, LRU cache, PDFium actor
 │   ├── barepdf-platform/       # Abstract platform traits (dialogs, print, clipboard)
 │   ├── barepdf-platform-windows/ # Win32 native implementations (rfd, arboard)
+│   ├── barepdf-platform-linux/ # Linux native implementations (rfd, arboard, xdg-open)
+│   ├── barepdf-thumbnail/      # Windows Explorer thumbnail provider COM DLL
 │   ├── barepdf-i18n/           # Multi-language string tables (en, tr)
 │   └── barepdf-ui/             # Slint desktop views & keyboard shortcuts
 ├── docs/                       # Project documentation & release checklists
-├── packaging/                  # Inno Setup scripts & PowerShell release pipeline
+├── packaging/                  # Inno Setup, .deb/AppImage packaging scripts & release pipeline
 └── scripts/                    # Helper build & profiling scripts
 ```

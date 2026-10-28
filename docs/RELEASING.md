@@ -17,7 +17,7 @@ This document provides a manual test verification checklist for BarePDF releases
   cargo test --workspace --all-features --locked
   cargo build --release -p barepdf -p barepdf-thumbnail --locked
   ```
-  > **Build & COM FFI Panic Policy**: `barepdf-thumbnail` implements Windows Shell COM interfaces (`DllGetClassObject`, `DllCanUnloadNow`, `IClassFactory`, `IInitializeWithStream`, `IThumbnailProvider`) that wrap every FFI entry point in `std::panic::catch_unwind` to convert Rust panics into COM error `HRESULT`s (`E_UNEXPECTED` / `S_FALSE`) without crossing the C ABI boundary. Notice that `[profile.release]` configures `panic = "abort"` (under which `catch_unwind` is a no-op and any panic aborts the host process, typically Explorer's isolated `dllhost.exe` surrogate), whereas `[profile.release-unwind]` inherits from `release` with `panic = "unwind"` for unwind-capable builds. Both `barepdf.exe` and `barepdf_thumbnail.dll` embed Windows PE `VERSIONINFO` resources derived from `[workspace.package].version` via `winres` (`build.rs` tracks `CARGO_PKG_VERSION`).
+  > **Build & COM FFI Panic Policy**: `barepdf-thumbnail` implements Windows Shell COM interfaces (`DllGetClassObject`, `DllCanUnloadNow`, `IClassFactory`, `IInitializeWithStream`, `IThumbnailProvider`) that wrap every FFI entry point in `std::panic::catch_unwind` to convert Rust panics into COM error `HRESULT`s (`E_UNEXPECTED` / `S_FALSE`) without crossing the C ABI boundary. Notice that `[profile.release]` configures `panic = "abort"` (under which `catch_unwind` is a no-op and any panic aborts the host process, typically Explorer's isolated `dllhost.exe` surrogate), whereas `[profile.release-unwind]` inherits from `release` with `panic = "unwind"` for unwind-capable builds. The shipped thumbnail DLL is built with `--profile release-unwind` (see `packaging/windows/scripts/stage-release.ps1`) so `catch_unwind` stays effective in the released `barepdf_thumbnail.dll`. Both `barepdf.exe` and `barepdf_thumbnail.dll` embed Windows PE `VERSIONINFO` resources derived from `[workspace.package].version` via `winres` (`build.rs` tracks `CARGO_PKG_VERSION`).
 - [ ] Execute release packaging pipeline:
   ```powershell
   powershell -File packaging/windows/scripts/stage-release.ps1
@@ -57,6 +57,23 @@ This document provides a manual test verification checklist for BarePDF releases
 2. Extract to desktop or USB drive (`C:\Users\Public\BarePDF-Portable`).
 3. Run `BarePDF.exe` directly without installation.
 4. Verify application runs fully offline without writing installer registry keys.
+
+---
+
+## Linux Package Verification
+
+### Debian / Pardus Package (.deb)
+1. Download the latest `barepdf_<version>_amd64.deb` from the [download page](https://woffluon.github.io/BarePDF/download/) onto a clean Pardus 23/25 or Debian system.
+2. Verify the checksum against `BarePDF-v<version>-SHA256SUMS.txt`.
+3. Install through **Pardus Paket Kurucu** (double-click) or the terminal (`sudo apt install ./barepdf_<version>_amd64.deb`); the package manager handles all elevation, so no install step ever requests root privileges directly.
+4. Launch from the desktop menu (desktop entry `barepdf.desktop`) and verify the `application/pdf` MIME association opens PDFs with BarePDF.
+5. Verify nothing is written outside standard package-manager paths (`/usr/bin/barepdf`, `/usr/share/`).
+
+### Portable Linux AppImage
+1. Download `BarePDF-<version>-x86_64.AppImage` and run `chmod +x BarePDF-<version>-x86_64.AppImage`.
+2. Launch it directly; verify it runs without installation and does not self-replace or request `sudo`/`pkexec`.
+
+Portable and Linux builds only notify about new releases and link to the release page; they never install silently or self-update.
 
 ---
 

@@ -52,7 +52,7 @@ BarePDF links the following open-source Rust crates from [crates.io](https://cra
 | `crossbeam-channel` | MIT OR Apache-2.0 | Copyright (c) The Crossbeam Project Developers (`https://github.com/crossbeam-rs/crossbeam`) |
 | `ed25519-dalek` | BSD-3-Clause | Copyright (c) 2017-2023 Isis Agora Lovecruft, Henry de Valence (`https://github.com/dalek-cryptography/curve25519-dalek`) |
 | `lru` | MIT | Copyright (c) Jerome Froelich (`https://github.com/jeromefroe/lru-rs`) |
-| `pdfium-render` | MIT OR Apache-2.0 | Copyright (c) Alastairov (`https://github.com/ajrcarey/pdfium-render`) |
+| `pdfium-render` | MIT OR Apache-2.0 | Copyright (c) Alastair Carey (`https://github.com/ajrcarey/pdfium-render`) |
 | `raw-window-handle` | MIT OR Apache-2.0 OR Zlib | Copyright (c) The Rust Windowing contributors (`https://github.com/rust-windowing/raw-window-handle`) |
 | `rfd` | MIT | Copyright (c) PolyMeilex (`https://github.com/PolyMeilex/rfd`) |
 | `semver` | MIT OR Apache-2.0 | Copyright (c) David Tolnay (`https://github.com/dtolnay/semver`) |
@@ -63,8 +63,11 @@ BarePDF links the following open-source Rust crates from [crates.io](https://cra
 | `thiserror` | MIT OR Apache-2.0 | Copyright (c) David Tolnay (`https://github.com/dtolnay/thiserror`) |
 | `tracing` / `tracing-subscriber` | MIT | Copyright (c) Tokio Contributors (`https://github.com/tokio-rs/tracing`) |
 | `ureq` | MIT OR Apache-2.0 | Copyright (c) Martin Algesten and contributors (`https://github.com/algesten/ureq`) |
+| `uuid` | MIT OR Apache-2.0 | Copyright (c) Ashley Mannix and contributors (`https://github.com/uuid-rs/uuid`) |
+| `winit` | Apache-2.0 OR MIT | Copyright (c) The Rust Windowing contributors (`https://github.com/rust-windowing/winit`) |
 | `windows` / `windows-core` / `windows-sys` | MIT OR Apache-2.0 | Copyright (c) Microsoft Corporation (`https://github.com/microsoft/windows-rs`) |
-| `winres` | MIT | Copyright (c) Maxenceermann (`https://github.com/mxre/winres`) |
+| `i-slint-backend-winit` | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0 | Copyright (c) SixtyFPS GmbH (`https://github.com/slint-ui/slint`) |
+| `winres` | MIT | Copyright (c) Max Resch (`https://github.com/mxre/winres`) |
 | `zeroize` | Apache-2.0 OR MIT | Copyright (c) The Rust Project Developers / Tony Arcieri (`https://github.com/RustCrypto/utils`) |
 
 Transitive Rust dependencies (including `rustls`, `webpki-roots`, `winit`, `femtovg`, `ab_glyph`, `accesskit`, `curve25519-dalek`, and `ring`/`aws-lc-rs` where applicable) are licensed under permissive open-source licenses (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, or `MPL-2.0`) as recorded in `Cargo.lock`.

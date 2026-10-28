@@ -1,0 +1,31 @@
+﻿{
+    "timestamp":  "2026-10-28T06:12:30.4769077Z",
+    "environment":  {
+                        "os":  "Microsoft Windows 11 Pro",
+                        "processor":  "AMD Ryzen 5 5500                               ",
+                        "processorCount":  12,
+                        "executable":  "D:\\BarePDF\\target\\release\\barepdf.exe",
+                        "fixture":  "D:\\BarePDF\\assets\\barepdf-welcome.pdf"
+                    },
+    "metrics":  {
+                    "coldStartupMs":  302.8,
+                    "hotStartup":  {
+                                       "p50":  299.02,
+                                       "p95":  304.67,
+                                       "avg":  299.11,
+                                       "min":  293.22,
+                                       "max":  305.2,
+                                       "samples":  5
+                                   },
+                    "idle":  {
+                                 "privateBytesMB":  124.98,
+                                 "workingSetMB":  113.74,
+                                 "cpuPercent":  0
+                             },
+                    "documentLoaded":  {
+                                           "privateBytesMB":  121.98,
+                                           "workingSetMB":  109.06,
+                                           "idleCpuPercent":  0
+                                       }
+                }
+}

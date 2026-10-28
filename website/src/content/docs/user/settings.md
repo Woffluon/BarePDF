@@ -20,10 +20,10 @@ BarePDF stores user preferences in a plain JSON configuration file located at:
   - `English`: Forces English UI strings.
   - `Turkish`: Forces Türkçe UI strings.
 - **Theme Mode**:
-  - `System` (Default): Follows Windows Dark/Light mode preference.
+  - `System` (Default): Follows your operating system's dark/light mode preference.
   - `Light`: Forces bright theme background and controls.
   - `Dark`: Forces dark slint theme.
-- **Viewing Mode**: Default startup mode (`SinglePage` or `ContinuousVertical`).
+- **Viewing Mode**: Default startup mode (`SinglePage`, `ContinuousVertical`, `TwoPageSpread`, or `BookMode`).
 - **Reading Direction**: `LeftToRight` or `RightToLeft`.
 - **Zoom Mode**: Default zoom strategy (`FitWidth`, `FitPage`, `ActualSize`, or `Custom`).
 - **Recent Files**: Remembers up to 10 recently opened documents.
