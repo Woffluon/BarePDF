@@ -157,6 +157,22 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
     let has_unsaved = doc_annotations.is_some_and(|a| !a.is_empty());
     window.set_has_unsaved_annotations(has_unsaved);
 
+    let touched: std::collections::BTreeSet<u32> = doc_annotations
+        .map(|ann| {
+            let mut pages = std::collections::BTreeSet::new();
+            for stroke in &ann.strokes {
+                pages.insert(stroke.page.get());
+            }
+            for quad in &ann.highlights {
+                pages.insert(quad.page.get());
+            }
+            for stamp in &ann.signatures {
+                pages.insert(stamp.page.get());
+            }
+            pages
+        })
+        .unwrap_or_default();
+
     let free_texts_model = if let Some(ann) = doc_annotations {
         let items: Vec<FreeTextItem> = ann
             .free_texts
@@ -287,14 +303,62 @@ pub(crate) fn refresh_annotation_overlays(app: &mut AppState, window: &AppWindow
     }
 
     if app.viewing_mode == ViewingMode::ContinuousVertical && has_unsaved {
-        let mut overlays = Vec::with_capacity(app.page_count() as usize);
-        for page_idx in 0..app.page_count() {
-            overlays.push(render_page_annotation_overlay(app, page_idx, None));
+        let visible: std::collections::BTreeSet<u32> =
+            visible_page_indices(app, window).into_iter().collect();
+        let page_count = app.page_count();
+        let mut overlays = Vec::with_capacity(page_count as usize);
+        for page_idx in 0..page_count {
+            if page_idx == first_page {
+                // The current page's overlay is already rendered above and set
+                // through `current_page_annotation_overlay`; the slint list
+                // consumers skip this index as well
+                // (`page.page-index != current-annotation-page-index`).
+                overlays.push(Image::default());
+            } else if touched.contains(&page_idx) && visible.contains(&page_idx) {
+                overlays.push(committed_overlay_cached(app, page_idx));
+            } else {
+                overlays.push(Image::default());
+            }
         }
         window.set_page_annotation_overlays(ModelRc::new(VecModel::from(overlays)));
     } else if !has_unsaved {
         window.set_page_annotation_overlays(ModelRc::new(VecModel::default()));
     }
+}
+
+/// Returns the committed (no active stroke) overlay for `page`, serving an
+/// unchanged page from the per-page overlay cache and re-rendering + storing
+/// it otherwise. Used by the continuous-mode overlay list refresh.
+fn committed_overlay_cached(app: &mut AppState, page: u32) -> Image {
+    let (width, height) = overlay_dimensions_for_page(app, page);
+    if width == 0 || height == 0 {
+        return render_page_annotation_overlay(app, page, None);
+    }
+    if let Some(doc_id) = app.active_document() {
+        if let Some(cached) = app
+            .drawing
+            .page_overlay_cache
+            .get(doc_id, page, width, height)
+        {
+            return cached;
+        }
+        let image = render_page_annotation_overlay(app, page, None);
+        app.drawing
+            .page_overlay_cache
+            .insert(doc_id, page, width, height, image.clone());
+        image
+    } else {
+        render_page_annotation_overlay(app, page, None)
+    }
+}
+
+fn overlay_dimensions_for_page(app: &AppState, page: u32) -> (u32, u32) {
+    let (pw, ph) = app
+        .page_dimensions
+        .get(page as usize)
+        .copied()
+        .unwrap_or(app.first_page_dimensions);
+    compute_overlay_dimensions(pw, ph)
 }
 
 pub(crate) fn render_page_annotation_overlay(
@@ -314,13 +378,7 @@ pub(crate) fn render_page_annotation_overlay(
         return Image::default();
     }
 
-    let (pw, ph) = app
-        .page_dimensions
-        .get(page as usize)
-        .copied()
-        .unwrap_or(app.first_page_dimensions);
-    let (w, h) = compute_overlay_dimensions(pw, ph);
-
+    let (w, h) = overlay_dimensions_for_page(app, page);
     let doc_id = doc_id.unwrap_or_else(|| barepdf_core::DocumentId::new(1));
 
     if active_stroke.is_some() {
@@ -756,6 +814,109 @@ fn thumbnail_page_label(language: ResolvedLanguage, index: u32) -> SharedString 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::{DocumentState, ReadyDocument};
+    use crate::presentation::test_support::run_on_ui_thread;
+    use slint::Model;
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    fn sketch_500_page_continuous_app() -> AppState {
+        let mut app = AppState::new(barepdf_core::UserPreferences::default());
+        let doc_id = barepdf_core::DocumentId::new(42);
+        app.application
+            .tabs
+            .open(PathBuf::from("doc.pdf"), "doc.pdf".to_string());
+        if let Some(tab) = app.application.tabs.active_mut() {
+            tab.document = Some(DocumentState::Ready(ReadyDocument {
+                id: doc_id,
+                path: PathBuf::from("doc.pdf"),
+                page_count: barepdf_core::PageCount::new(500).expect("500 <= MAX_DOCUMENT_PAGES"),
+                started_at: Instant::now(),
+            }));
+        }
+        app.viewport_width = 1200;
+        app.viewport_height = 900;
+        app.first_page_dimensions = (600.0, 800.0);
+        app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0); 500]);
+        app.viewing_mode = ViewingMode::ContinuousVertical;
+        let pages = app.drawing.annotations.entry(doc_id).or_default();
+        for page_index in [0u32, 1u32] {
+            pages.strokes.push(barepdf_core::InkStroke {
+                page: barepdf_core::PageIndex::from_raw(page_index),
+                points: vec![(0.1, 0.1), (0.6, 0.6)],
+                color: barepdf_core::InkColor::Black,
+                width_pts: 2.0,
+            });
+        }
+        pages.strokes.push(barepdf_core::InkStroke {
+            page: barepdf_core::PageIndex::from_raw(499),
+            points: vec![(0.2, 0.2), (0.7, 0.7)],
+            color: barepdf_core::InkColor::Black,
+            width_pts: 2.0,
+        });
+        app
+    }
+
+    #[test]
+    fn unchanged_visible_touched_overlays_are_served_from_page_cache() {
+        run_on_ui_thread(move || {
+            let mut app = sketch_500_page_continuous_app();
+            let window = barepdf_ui::AppWindow::new().expect("slint app window");
+
+            refresh_page_model(&mut app, &window);
+            let warmup_misses = app.drawing.page_overlay_cache.misses;
+            assert!(
+                warmup_misses > 0,
+                "warm-up pass must have rendered overlays"
+            );
+
+            refresh_annotation_overlays(&mut app, &window);
+
+            assert!(
+                app.drawing.page_overlay_cache.hits > 0,
+                "unchanged visible touched page must be served from the page cache"
+            );
+            let overlays = window.get_page_annotation_overlays();
+            assert_eq!(overlays.row_count(), 500);
+            assert!(
+                overlays.row_data(1).unwrap_or_default().size().width > 0,
+                "cached overlay must keep the rendered image"
+            );
+        });
+    }
+
+    #[test]
+    fn continuous_overlay_model_only_renders_visible_touched_pages() {
+        run_on_ui_thread(move || {
+            let mut app = sketch_500_page_continuous_app();
+            let window = barepdf_ui::AppWindow::new().expect("slint app window");
+
+            refresh_page_model(&mut app, &window);
+
+            let overlays = window.get_page_annotation_overlays();
+            assert_eq!(overlays.row_count(), 500);
+            assert_eq!(
+                overlays.row_data(0).unwrap_or_default().size().width,
+                0,
+                "current page overlay comes from the current-page property, not the list"
+            );
+            assert!(
+                overlays.row_data(1).unwrap_or_default().size().width > 0,
+                "visible touched page keeps a rendered overlay"
+            );
+            assert_eq!(
+                overlays.row_data(250).unwrap_or_default().size().width,
+                0,
+                "untouched page must stay empty"
+            );
+            assert_eq!(
+                overlays.row_data(499).unwrap_or_default().size().width,
+                0,
+                "offscreen touched page must not be rendered"
+            );
+            assert!(window.get_has_unsaved_annotations());
+        });
+    }
 
     #[test]
     fn compute_thumbnail_dimensions_scales_within_bounding_box() {

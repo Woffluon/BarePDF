@@ -462,6 +462,89 @@ pub(crate) struct CommittedOverlayCache {
     pub(crate) pixels: Vec<u8>,
 }
 
+/// Per-page cache of rendered committed annotation overlays (no active stroke).
+/// Keyed by `(document, page)` with the expected overlay dimensions; an Image
+/// handle clone is cheap, so hits avoid re-rendering unchanged pages during
+/// pointer-move refreshes. Entries are invalidated by annotation mutations
+/// (see `presentation/callbacks/drawing.rs`) and bounded by `MAX_ENTRIES`.
+pub(crate) struct PageOverlayCache {
+    entries: HashMap<(DocumentId, u32), (u32, u32, Image)>,
+    pub(crate) hits: u64,
+    pub(crate) misses: u64,
+}
+
+impl Default for PageOverlayCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PageOverlayCache {
+    pub(crate) const MAX_ENTRIES: usize = 8;
+
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    pub(crate) fn get(
+        &mut self,
+        document: DocumentId,
+        page: u32,
+        width: u32,
+        height: u32,
+    ) -> Option<Image> {
+        match self.entries.get(&(document, page)) {
+            Some((cached_width, cached_height, image))
+                if *cached_width == width && *cached_height == height =>
+            {
+                self.hits = self.hits.saturating_add(1);
+                Some(image.clone())
+            }
+            _ => {
+                self.misses = self.misses.saturating_add(1);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        document: DocumentId,
+        page: u32,
+        width: u32,
+        height: u32,
+        image: Image,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        if !self.entries.contains_key(&(document, page)) && self.entries.len() >= Self::MAX_ENTRIES
+        {
+            self.entries.clear();
+        }
+        self.entries
+            .insert((document, page), (width, height, image));
+    }
+
+    pub(crate) fn remove_page(&mut self, document: DocumentId, page: u32) {
+        self.entries.remove(&(document, page));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entries_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn clear_document(&mut self, document: DocumentId) {
+        self.entries
+            .retain(|(entry_document, _), _| *entry_document != document);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawingTool {
     Pan,
@@ -530,6 +613,7 @@ pub(crate) struct DrawingSession {
     pub(crate) stroke_start_point: Option<(f32, f32)>,
     pub(crate) annotation_history: HashMap<DocumentId, barepdf_core::AnnotationHistory>,
     pub(crate) committed_overlay_cache: Option<CommittedOverlayCache>,
+    pub(crate) page_overlay_cache: PageOverlayCache,
     pub(crate) sign_pad_strokes: Vec<Vec<(f32, f32)>>,
     pub(crate) sign_pad_active_stroke: Option<Vec<(f32, f32)>>,
     pub(crate) sign_uploaded_image: Option<(u32, u32, Vec<u8>)>,
@@ -553,6 +637,7 @@ impl Default for DrawingSession {
             stroke_start_point: None,
             annotation_history: HashMap::new(),
             committed_overlay_cache: None,
+            page_overlay_cache: PageOverlayCache::new(),
             sign_pad_strokes: Vec::new(),
             sign_pad_active_stroke: None,
             sign_uploaded_image: None,
@@ -1127,6 +1212,85 @@ mod tests {
         assert!(cache.contains_key(first, 0));
         assert!(!cache.contains_key(second, 0));
         assert!(cache.get(second, 0).is_none());
+    }
+
+    #[test]
+    fn page_overlay_cache_serves_matching_dimensions_and_tracks_hits_and_misses() {
+        let doc = DocumentId::new(1);
+        let mut cache = PageOverlayCache::default();
+
+        assert!(cache.get(doc, 0, 100, 50).is_none(), "empty cache misses");
+        assert_eq!(cache.misses, 1);
+        assert_eq!(cache.hits, 0);
+
+        cache.insert(doc, 0, 100, 50, Image::default());
+        assert!(
+            cache.get(doc, 0, 100, 50).is_some(),
+            "matching dims must hit"
+        );
+        assert_eq!(cache.hits, 1);
+
+        assert!(
+            cache.get(doc, 0, 101, 50).is_none(),
+            "dimension mismatch must miss (stale entry)"
+        );
+        assert_eq!(cache.misses, 2);
+        assert_eq!(cache.hits, 1);
+
+        assert!(
+            cache.get(DocumentId::new(2), 0, 100, 50).is_none(),
+            "other document must miss"
+        );
+        assert_eq!(cache.misses, 3);
+    }
+
+    #[test]
+    fn page_overlay_cache_invalidates_page_and_document_selectively() {
+        let doc = DocumentId::new(1);
+        let other = DocumentId::new(2);
+        let mut cache = PageOverlayCache::default();
+        cache.insert(doc, 0, 100, 50, Image::default());
+        cache.insert(doc, 1, 100, 50, Image::default());
+        cache.insert(other, 0, 100, 50, Image::default());
+
+        cache.remove_page(doc, 0);
+        assert!(cache.get(doc, 0, 100, 50).is_none());
+        assert!(
+            cache.get(doc, 1, 100, 50).is_some(),
+            "sibling page must survive"
+        );
+        assert!(
+            cache.get(other, 0, 100, 50).is_some(),
+            "other document must survive"
+        );
+
+        cache.clear_document(doc);
+        assert!(cache.get(doc, 1, 100, 50).is_none());
+        assert!(
+            cache.get(other, 0, 100, 50).is_some(),
+            "other document must survive document clear"
+        );
+    }
+
+    #[test]
+    fn page_overlay_cache_caps_entries_and_rejects_empty_images() {
+        let doc = DocumentId::new(1);
+        let mut cache = PageOverlayCache::default();
+
+        cache.insert(doc, 0, 0, 0, Image::default());
+        assert!(cache.get(doc, 0, 0, 0).is_none(), "empty dims not cached");
+
+        for page in 0..12u32 {
+            cache.insert(doc, page, 10, 10, Image::default());
+        }
+        assert!(
+            cache.entries_len() <= PageOverlayCache::MAX_ENTRIES,
+            "cache must stay bounded"
+        );
+        assert!(
+            cache.get(doc, 11, 10, 10).is_some(),
+            "most recent page must remain cached"
+        );
     }
 
     #[test]

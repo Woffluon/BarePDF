@@ -1058,3 +1058,386 @@ fn drawing_palm_rejection_discards_short_accidental_taps() {
         }
     });
 }
+
+#[test]
+fn eraser_modification_invalidates_only_the_erased_page_overlay_cache() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        use crate::application::{DocumentState, ReadyDocument};
+        use crate::presentation::callbacks::drawing::connect_annotation_and_signature_callbacks;
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::{PdfError, UserPreferences, ViewingMode};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
+        use std::time::Instant;
+
+        struct MockPdfDoc;
+        impl PdfDocument for MockPdfDoc {
+            fn page_count(&self) -> Result<barepdf_core::PageCount, PdfError> {
+                Ok(barepdf_core::PageCount::new(500).expect("page count"))
+            }
+            fn page_dimensions(
+                &self,
+                _page_index: barepdf_core::PageIndex,
+            ) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: barepdf_core::PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: barepdf_core::Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))
+            }
+            fn extract_text(
+                &self,
+                _page_index: barepdf_core::PageIndex,
+            ) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: barepdf_core::PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: barepdf_core::PageIndex,
+            ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+                Ok(barepdf_core::PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+        }
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let doc_id = DocumentId::new(7);
+        {
+            let mut app = state.borrow_mut();
+            app.application
+                .tabs
+                .open(PathBuf::from("doc.pdf"), "doc.pdf".to_string());
+            if let Some(tab) = app.application.tabs.active_mut() {
+                tab.document = Some(DocumentState::Ready(ReadyDocument {
+                    id: doc_id,
+                    path: PathBuf::from("doc.pdf"),
+                    page_count: barepdf_core::PageCount::new(500).expect("page count"),
+                    started_at: Instant::now(),
+                }));
+            }
+            app.viewport_width = 1200;
+            app.viewport_height = 900;
+            app.first_page_dimensions = (600.0, 800.0);
+            app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0); 500]);
+            app.viewing_mode = ViewingMode::ContinuousVertical;
+            app.zoom_mode = barepdf_core::ZoomMode::Custom(barepdf_core::ZoomFactor::default());
+            app.current_page = 0;
+            app.activate_drawing_tool(DrawingTool::Eraser);
+            let annotations = app.drawing.annotations.entry(doc_id).or_default();
+            for page_index in [0u32, 1u32, 2u32] {
+                annotations.strokes.push(InkStroke {
+                    page: PageIndex::from_raw(page_index),
+                    points: vec![(0.3, 0.3), (0.7, 0.7)],
+                    color: InkColor::Black,
+                    width_pts: 2.0,
+                });
+            }
+        }
+
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        let scheduler = std::rc::Rc::new(barepdf_render::RenderScheduler::spawn(
+            MockBackend,
+            barepdf_core::MemoryBudget::new(1024 * 1024),
+        ));
+        let dialogs = std::sync::Arc::new(barepdf_platform_windows::WindowsFileDialogs);
+        connect_annotation_and_signature_callbacks(&window, &state, &scheduler, dialogs);
+        crate::presentation::models::refresh_page_model(&mut state.borrow_mut(), &window);
+
+        let (warmup_misses, page_1_before) = {
+            let app = state.borrow();
+            let profile = |app: &crate::presentation::state::AppState| {
+                app.drawing
+                    .annotations
+                    .get(&doc_id)
+                    .map(|ann| {
+                        (
+                            ann.strokes.iter().filter(|s| s.page.get() == 1).count(),
+                            ann.strokes
+                                .iter()
+                                .filter(|s| s.page.get() == 1)
+                                .map(|stroke| stroke.points.len())
+                                .sum::<usize>(),
+                        )
+                    })
+                    .unwrap_or((0, 0))
+            };
+            (app.drawing.page_overlay_cache.misses, profile(&app))
+        };
+        assert!(warmup_misses > 0, "warm-up must have rendered overlays");
+
+        // Erase across the page-1 stroke: exactly the page-1 overlay changes.
+        window.invoke_drawing_pointer_move(1, 0.65, 0.65);
+        window.invoke_drawing_pointer_move(1, 0.35, 0.35);
+        window.invoke_drawing_pointer_up(1, 0.35, 0.35);
+
+        let (hits, misses, page_1_after) = {
+            let app = state.borrow();
+            let profile = |app: &crate::presentation::state::AppState| {
+                app.drawing
+                    .annotations
+                    .get(&doc_id)
+                    .map(|ann| {
+                        (
+                            ann.strokes.iter().filter(|s| s.page.get() == 1).count(),
+                            ann.strokes
+                                .iter()
+                                .filter(|s| s.page.get() == 1)
+                                .map(|stroke| stroke.points.len())
+                                .sum::<usize>(),
+                        )
+                    })
+                    .unwrap_or((0, 0))
+            };
+            (
+                app.drawing.page_overlay_cache.hits,
+                app.drawing.page_overlay_cache.misses,
+                profile(&app),
+            )
+        };
+        assert_ne!(
+            page_1_after, page_1_before,
+            "erase must have modified the page-1 strokes (split, clip, or delete)"
+        );
+        assert!(
+            hits >= 1,
+            "unchanged visible touched page (2) must be served from cache"
+        );
+        assert!(
+            misses > warmup_misses,
+            "erased page must be re-rendered after invalidation, not served stale"
+        );
+    });
+}
+
+#[test]
+fn profile_pointer_move_frame_us_observes_sketched_500_page_continuous_document() {
+    crate::presentation::test_support::run_on_ui_thread(|| {
+        let Some(profile_path) = std::env::var_os("BAREPDF_PROFILE_FILE") else {
+            return;
+        };
+
+        use crate::application::{DocumentState, ReadyDocument};
+        use crate::presentation::callbacks::drawing::connect_annotation_and_signature_callbacks;
+        use crate::presentation::state::{AppState, DrawingTool};
+        use barepdf_core::{PdfError, UserPreferences, ViewingMode};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, RawBitmap, TextSpan};
+        use std::time::Instant;
+
+        struct MeasurePdfDoc;
+        impl PdfDocument for MeasurePdfDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::new(500).expect("measurement page count"))
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|error| PdfError::InvalidPdfReason(error.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<PageTextGeometry, PdfError> {
+                Ok(PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MeasureBackend;
+        impl PdfBackend for MeasureBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MeasurePdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MeasurePdfDoc))
+            }
+        }
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AppState::new(
+            UserPreferences::default(),
+        )));
+        let doc_id = DocumentId::new(99);
+        {
+            let mut app = state.borrow_mut();
+            app.application
+                .tabs
+                .open(PathBuf::from("sketch.pdf"), "sketch.pdf".to_string());
+            if let Some(tab) = app.application.tabs.active_mut() {
+                tab.document = Some(DocumentState::Ready(ReadyDocument {
+                    id: doc_id,
+                    path: PathBuf::from("sketch.pdf"),
+                    page_count: PageCount::new(500).expect("measurement page count"),
+                    started_at: Instant::now(),
+                }));
+            }
+            app.viewport_width = 1200;
+            app.viewport_height = 900;
+            app.first_page_dimensions = (600.0, 800.0);
+            app.page_dimensions = std::sync::Arc::new(vec![(600.0, 800.0); 500]);
+            app.viewing_mode = ViewingMode::ContinuousVertical;
+            app.current_page = 0;
+            app.activate_drawing_tool(DrawingTool::Pen);
+            let annotations = app.drawing.annotations.entry(doc_id).or_default();
+            for page_index in [0u32, 1, 2, 3, 499u32] {
+                annotations.strokes.push(InkStroke {
+                    page: PageIndex::from_raw(page_index),
+                    points: vec![(0.3, 0.3), (0.7, 0.7)],
+                    color: InkColor::Black,
+                    width_pts: 2.0,
+                });
+            }
+        }
+
+        let window = barepdf_ui::AppWindow::new().expect("slint app window");
+        let scheduler = std::rc::Rc::new(barepdf_render::RenderScheduler::spawn(
+            MeasureBackend,
+            barepdf_core::MemoryBudget::new(1024 * 1024),
+        ));
+        let dialogs = std::sync::Arc::new(barepdf_platform_windows::WindowsFileDialogs);
+        connect_annotation_and_signature_callbacks(&window, &state, &scheduler, dialogs);
+        crate::presentation::models::refresh_page_model(&mut state.borrow_mut(), &window);
+
+        let before = std::fs::read_to_string(&profile_path).unwrap_or_default();
+        let baseline_count = before
+            .lines()
+            .filter(|line| line.contains("pointer_move_frame_us"))
+            .count();
+
+        const PEN_MOVES: usize = 60;
+        const ERASE_MOVES: usize = 60;
+        window.invoke_drawing_pointer_down(0, 0.200, 0.200);
+        let pen_started = Instant::now();
+        for step in 0..PEN_MOVES {
+            let x = 0.2 + 0.0009 * step as f32;
+            let y = 0.3 + 0.0007 * step as f32;
+            window.invoke_drawing_pointer_move(0, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        }
+        let pen_wall_us = pen_started.elapsed().as_micros();
+        window.invoke_drawing_pointer_up(0, 0.400, 0.500);
+        let pen_recorded = loop {
+            let content = std::fs::read_to_string(&profile_path).unwrap_or_default();
+            let count = content
+                .lines()
+                .filter(|line| line.contains("pointer_move_frame_us"))
+                .count();
+            if count >= baseline_count + 20 {
+                break count;
+            }
+            if Instant::now() > pen_started + std::time::Duration::from_secs(5) {
+                break count;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        {
+            let mut app = state.borrow_mut();
+            app.activate_drawing_tool(DrawingTool::Eraser);
+        }
+        window.invoke_drawing_pointer_down(0, 0.650, 0.650);
+        let erase_started = Instant::now();
+        for step in 0..ERASE_MOVES {
+            let x = 0.65 - 0.0081 * step as f32;
+            window.invoke_drawing_pointer_move(0, x.clamp(0.0, 1.0), x);
+        }
+        let erase_wall_us = erase_started.elapsed().as_micros();
+        window.invoke_drawing_pointer_up(0, 0.160, 0.160);
+
+        let after = std::fs::read_to_string(&profile_path).unwrap_or_default();
+        let recorded_now = after
+            .lines()
+            .filter(|line| line.contains("pointer_move_frame_us"))
+            .count();
+        // The profile writer thread appends asynchronously; poll briefly for the
+        // expected synchronous-return crossings to land before judging.
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let mut recorded = recorded_now;
+        while recorded < baseline_count + PEN_MOVES && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let content = std::fs::read_to_string(&profile_path).unwrap_or_default();
+            recorded = content
+                .lines()
+                .filter(|line| line.contains("pointer_move_frame_us"))
+                .count();
+        }
+        assert!(
+            recorded >= baseline_count + PEN_MOVES,
+            "expected at least {PEN_MOVES} pointer_move_frame_us profile lines, got {recorded}; samples={:?}",
+            std::fs::read_to_string(&profile_path)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.contains("pointer_move_frame_us"))
+                .skip(baseline_count)
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "D0-MEASURE baseline_lines={baseline_count} pen_records={pen_recorded} recorded_lines={recorded} pen_wall_us={pen_wall_us} erase_wall_us={erase_wall_us}"
+        );
+    });
+}

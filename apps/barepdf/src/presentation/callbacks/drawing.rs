@@ -108,6 +108,38 @@ fn update_drawing_undo_redo_ui(app: &AppState, window: &AppWindow) {
     window.set_drawing_can_redo(false);
 }
 
+/// Records one pointer-move frame cost as a JSONL line, aligned with the
+/// `BAREPDF_PROFILE_FILE` protocol in `ui.rs` (`{"first_bitmap_ms":...}` is
+/// written there; appends here). Enabled only when the env var is set, so the
+/// default run has zero behavior or I/O cost. A single background writer thread
+/// owns the file; the UI thread only formats and sends.
+fn record_pointer_move_frame_us(frame_us: u128) {
+    static PROFILE_WRITER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<String>>> =
+        std::sync::OnceLock::new();
+    let Some(sender) = PROFILE_WRITER.get_or_init(|| {
+        let path = std::env::var_os("BAREPDF_PROFILE_FILE").map(PathBuf::from)?;
+        let (sender, receiver) = std::sync::mpsc::channel::<String>();
+        let spawned = std::thread::Builder::new()
+            .name("barepdf-profile-io".into())
+            .spawn(move || {
+                use std::io::Write as _;
+                while let Ok(payload) = receiver.recv() {
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                    {
+                        let _ = file.write_all(payload.as_bytes());
+                    }
+                }
+            });
+        spawned.is_ok().then_some(sender)
+    }) else {
+        return;
+    };
+    let _ = sender.send(format!("{{\"pointer_move_frame_us\":{frame_us}}}\n"));
+}
+
 pub(crate) fn connect_annotation_and_signature_callbacks(
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -219,6 +251,7 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
             app.selection = None;
             window.set_has_selection(false);
             app.drawing.committed_overlay_cache = None;
+            app.drawing.page_overlay_cache.clear_document(doc_id);
             update_drawing_undo_redo_ui(&app, &window);
             refresh_page_model(&mut app, &window);
         }
@@ -415,6 +448,9 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
             }
             if modified {
                 app.drawing.committed_overlay_cache = None;
+                app.drawing
+                    .page_overlay_cache
+                    .remove_page(doc_id, page_idx.get());
                 update_drawing_undo_redo_ui(&app, &window);
                 refresh_annotation_overlays(&mut app, &window);
             }
@@ -469,8 +505,13 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
                 );
                 if modified {
                     app.drawing.committed_overlay_cache = None;
+                    app.drawing
+                        .page_overlay_cache
+                        .remove_page(doc_id, page_idx.get());
                     update_drawing_undo_redo_ui(&app, &window);
+                    let frame_started = std::time::Instant::now();
                     refresh_annotation_overlays(&mut app, &window);
+                    record_pointer_move_frame_us(frame_started.elapsed().as_micros());
                 }
             }
         } else {
@@ -487,7 +528,9 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
                         }
                     }
                     stroke.points.push(pt);
+                    let frame_started = std::time::Instant::now();
                     refresh_annotation_overlays(&mut app, &window);
+                    record_pointer_move_frame_us(frame_started.elapsed().as_micros());
                 }
             }
         }
@@ -548,12 +591,16 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
                 stroke.points.push(pt_up);
             }
             stroke.points = barepdf_core::smooth_ink_points(&stroke.points);
+            let stroke_page = stroke.page;
             let ann = app.drawing.annotations.entry(doc_id).or_default();
             let before = ann.clone();
             ann.strokes.push(stroke);
             let history = app.drawing.annotation_history.entry(doc_id).or_default();
             history.push_snapshot(before);
             app.drawing.committed_overlay_cache = None;
+            app.drawing
+                .page_overlay_cache
+                .remove_page(doc_id, stroke_page.get());
             update_drawing_undo_redo_ui(&app, &window);
             refresh_annotation_overlays(&mut app, &window);
         }
@@ -579,6 +626,7 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
             if let Some(prev) = history.undo(current_ann) {
                 app.drawing.annotations.insert(doc_id, prev);
                 app.drawing.committed_overlay_cache = None;
+                app.drawing.page_overlay_cache.clear_document(doc_id);
                 update_drawing_undo_redo_ui(&app, &window);
                 refresh_annotation_overlays(&mut app, &window);
             }
@@ -605,6 +653,7 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
             if let Some(next) = history.redo(current_ann) {
                 app.drawing.annotations.insert(doc_id, next);
                 app.drawing.committed_overlay_cache = None;
+                app.drawing.page_overlay_cache.clear_document(doc_id);
                 update_drawing_undo_redo_ui(&app, &window);
                 refresh_annotation_overlays(&mut app, &window);
             }
@@ -633,6 +682,9 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
                 let history = app.drawing.annotation_history.entry(doc_id).or_default();
                 history.push_snapshot(before);
                 app.drawing.committed_overlay_cache = None;
+                app.drawing
+                    .page_overlay_cache
+                    .remove_page(doc_id, current_page);
                 update_drawing_undo_redo_ui(&app, &window);
                 refresh_annotation_overlays(&mut app, &window);
             }
@@ -652,6 +704,9 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
         }
         app.drawing.active_stroke = None;
         app.drawing.committed_overlay_cache = None;
+        if let Some(doc_id) = app.active_document() {
+            app.drawing.page_overlay_cache.clear_document(doc_id);
+        }
         window.set_drawing_mode_active(false);
         update_drawing_undo_redo_ui(&app, &window);
         refresh_annotation_overlays(&mut app, &window);
@@ -913,6 +968,7 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
         let history = app.drawing.annotation_history.entry(doc_id).or_default();
         history.push_snapshot(before);
         app.drawing.committed_overlay_cache = None;
+        app.drawing.page_overlay_cache.remove_page(doc_id, page);
         window.set_signature_placement_active(false);
         update_drawing_undo_redo_ui(&app, &window);
         refresh_annotation_overlays(&mut app, &window);
