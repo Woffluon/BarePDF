@@ -23,9 +23,9 @@ use crate::infrastructure::{
 };
 
 use barepdf_core::{
-    ContinuousLayout, DocumentId, DocumentSession, MemoryBudget, PageIndex, PdfError, RequestId,
-    SecretPassword, ThemeMode, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
-    MAX_DOCUMENT_PAGES, MAX_OPEN_TABS, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+    ContinuousLayout, DocumentId, DocumentSession, PageIndex, PdfError, RequestId, SecretPassword,
+    ThemeMode, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode, MAX_DOCUMENT_PAGES,
+    MAX_OPEN_TABS, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
 };
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
@@ -35,6 +35,7 @@ use barepdf_platform_windows::{
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderError, RenderEvent, RenderJob, RenderKind, RenderScheduler,
+    SystemHardwareProfile,
 };
 use barepdf_ui::{AppWindow, OutlineItem, RecentFileItem, SelectionBox, ThemeTokens};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -51,6 +52,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+#[allow(dead_code)]
 pub(crate) const RAW_BITMAP_BUDGET: usize = 128 * 1024 * 1024;
 pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
 pub(crate) const PAGE_IMAGE_BUDGET: usize = 64 * 1024 * 1024;
@@ -99,9 +101,10 @@ pub(crate) fn run() -> Result<(), AppError> {
     }
     preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
 
-    let scheduler = Rc::new(RenderScheduler::spawn(
+    let hardware_profile = SystemHardwareProfile::detect();
+    let scheduler = Rc::new(RenderScheduler::spawn_adaptive(
         pdf_engine,
-        MemoryBudget::new(RAW_BITMAP_BUDGET),
+        &hardware_profile,
     ));
     let dialogs = Arc::new(WindowsFileDialogs);
     let clipboard = Arc::new(WindowsClipboard::new());
@@ -740,7 +743,7 @@ pub(crate) fn handle_render_event(
             }
             refresh_tab_model(&app, window);
         }
-        RenderEvent::TextExtracted { .. } => {}
+        RenderEvent::TextExtracted { .. } | RenderEvent::SearchResults { .. } => {}
     }
 }
 

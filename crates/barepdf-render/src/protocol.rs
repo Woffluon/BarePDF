@@ -4,6 +4,36 @@ use barepdf_pdf::{OutlineNode, RawBitmap, TextSpan};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub type SearchMatchRecord = barepdf_core::search::SearchMatch;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl PageRange {
+    #[must_use]
+    pub const fn new(start: u32, end: u32) -> Self {
+        Self { start, end }
+    }
+}
+
+impl From<std::ops::Range<u32>> for PageRange {
+    fn from(range: std::ops::Range<u32>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+impl From<PageRange> for std::ops::Range<u32> {
+    fn from(range: PageRange) -> Self {
+        range.start..range.end
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priority {
     Visible = 0,
@@ -80,6 +110,11 @@ pub enum RenderCommand {
         start: u32,
         count: u32,
     },
+    SearchDocument {
+        document_id: DocumentId,
+        query: String,
+        range: Option<PageRange>,
+    },
     CloseDocument(DocumentId),
     Shutdown,
 }
@@ -120,6 +155,11 @@ pub enum RenderEvent {
         document_id: DocumentId,
         start: u32,
         dimensions: Vec<(f32, f32)>,
+    },
+    SearchResults {
+        document_id: DocumentId,
+        query: String,
+        matches: Vec<SearchMatchRecord>,
     },
     Error {
         request_id: Option<RequestId>,

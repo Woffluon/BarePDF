@@ -233,6 +233,8 @@ pub enum PrintError {
     Platform { operation: &'static str, code: u32 },
     #[error("invalid printer sink state")]
     InvalidState,
+    #[error("printing is unavailable on this system")]
+    Unavailable,
 }
 
 pub trait PrinterSink: Send {

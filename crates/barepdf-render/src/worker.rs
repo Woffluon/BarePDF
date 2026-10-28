@@ -2,7 +2,9 @@ use crate::cache::{BitmapCache, CacheKey};
 use crate::error::RenderError;
 use crate::memory_budget::{calculate_adaptive_memory_budget, SystemHardwareProfile};
 use crate::observability::RenderObservability;
-use crate::protocol::{RenderCommand, RenderEvent, RenderJob, RenderKind, RenderRequestKey};
+use crate::protocol::{
+    PageRange, RenderCommand, RenderEvent, RenderJob, RenderKind, RenderRequestKey,
+};
 use crate::queue::receive_command;
 use barepdf_core::{DocumentId, MemoryBudget, PageIndex, PdfError, RequestId, MAX_OPEN_TABS};
 use barepdf_pdf::{PdfBackend, PdfDocument, RawBitmap};
@@ -11,6 +13,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Maximum number of search matches collected across a document to bound memory usage.
+pub const MAX_SEARCH_RESULTS: usize = 10_000;
 
 fn emit_lossy_event(
     shutdown_receiver: &Receiver<()>,
@@ -178,6 +183,11 @@ impl<B: PdfBackend> RenderWorker<B> {
                 start,
                 count,
             } => self.fetch_page_dimensions(document_id, start, count),
+            RenderCommand::SearchDocument {
+                document_id,
+                query,
+                range,
+            } => self.search_document(document_id, query, range),
             RenderCommand::CloseDocument(document_id) => self.close_document(document_id),
             RenderCommand::Shutdown => false,
         }
@@ -253,6 +263,27 @@ impl<B: PdfBackend> RenderWorker<B> {
             invert_colors,
         };
         if let Some(bitmap) = self.cache.get(&cache_key) {
+            self.observability.cache_hit();
+            return self.emit_rendered(job, bitmap);
+        }
+        if let Some(bitmap) = self.cache.get_larger_compatible(
+            job.document_id,
+            job.page_index.get(),
+            job.rotation,
+            invert_colors,
+            job.target_width,
+            job.target_height,
+        ) {
+            tracing::debug!(
+                target: "barepdf_render::worker",
+                document_id = job.document_id.get(),
+                page = job.page_index.get(),
+                cached_w = bitmap.width(),
+                cached_h = bitmap.height(),
+                target_w = job.target_width,
+                target_h = job.target_height,
+                "reusing larger compatible cached bitmap for downscale-serve"
+            );
             self.observability.cache_hit();
             return self.emit_rendered(job, bitmap);
         }
@@ -443,6 +474,108 @@ impl<B: PdfBackend> RenderWorker<B> {
         }
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(
+            document_id = document_id.get(),
+            query = %query
+        )
+    )]
+    fn search_document(
+        &mut self,
+        document_id: DocumentId,
+        query: String,
+        range: Option<PageRange>,
+    ) -> bool {
+        let Some(document) = self.active_docs.get(&document_id) else {
+            self.observability.stale_work("document_replaced");
+            return true;
+        };
+
+        let Some(search_query) =
+            barepdf_core::search::SearchQuery::new(query.clone(), false, false)
+        else {
+            return emit_critical(
+                &self.shutdown_receiver,
+                &self.critical_event_sender,
+                RenderEvent::SearchResults {
+                    document_id,
+                    query,
+                    matches: Vec::new(),
+                },
+            );
+        };
+
+        let page_count = match document.page_count() {
+            Ok(count) => count.get(),
+            Err(error) => return self.emit_error(None, document_id, None, error),
+        };
+
+        let (start, end) = match range {
+            Some(range) => (range.start.min(page_count), range.end.min(page_count)),
+            None => (0, page_count),
+        };
+
+        let initial_generation = self.current_generation.load(Ordering::Acquire);
+        let mut matches = Vec::new();
+        let mut global_match_index = 0;
+
+        for page_raw in start..end {
+            if self.shutdown_requested() {
+                return false;
+            }
+            if self.current_generation.load(Ordering::Acquire) != initial_generation {
+                self.observability.stale_work("generation");
+                return true;
+            }
+            let Some(document) = self.active_docs.get(&document_id) else {
+                self.observability.stale_work("document_replaced");
+                return true;
+            };
+
+            let page_index = PageIndex::from_raw(page_raw);
+            if let Ok(geometry) = document.get_page_text_geometry(page_index) {
+                let ranges = search_query.find_in_geometry(&geometry);
+                for char_range in ranges {
+                    let mut glyph_boxes = Vec::new();
+                    let start_char = usize::try_from(char_range.start).unwrap_or(usize::MAX);
+                    let end_char = usize::try_from(char_range.end).unwrap_or(usize::MAX);
+
+                    if start_char <= geometry.glyphs.len() && end_char <= geometry.glyphs.len() {
+                        glyph_boxes.extend_from_slice(&geometry.glyphs[start_char..end_char]);
+                    }
+
+                    matches.push(barepdf_core::search::SearchMatch {
+                        page_index,
+                        match_index_in_doc: global_match_index,
+                        char_range,
+                        glyph_boxes,
+                    });
+                    global_match_index += 1;
+
+                    if matches.len() >= MAX_SEARCH_RESULTS {
+                        break;
+                    }
+                }
+            }
+
+            if matches.len() >= MAX_SEARCH_RESULTS {
+                break;
+            }
+        }
+
+        emit_critical(
+            &self.shutdown_receiver,
+            &self.critical_event_sender,
+            RenderEvent::SearchResults {
+                document_id,
+                query,
+                matches,
+            },
+        )
+    }
+
     fn close_document(&mut self, document_id: DocumentId) -> bool {
         self.active_docs.pop(&document_id);
         self.cache.evict_document(document_id);
@@ -548,6 +681,13 @@ mod tests {
         }
 
         fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+            Ok(Vec::new())
+        }
+
+        fn annotations(
+            &self,
+            _page: PageIndex,
+        ) -> Result<Vec<barepdf_pdf::AnnotationRecord>, PdfError> {
             Ok(Vec::new())
         }
     }
@@ -877,5 +1017,66 @@ mod tests {
         let doc_17 = DocumentId::new((MAX_OPEN_TABS + 1) as u64);
         assert!(worker.open_document(doc_17, Path::new("dummy.pdf"), None));
         assert_eq!(worker.active_docs.len(), MAX_OPEN_TABS);
+    }
+
+    #[test]
+    fn worker_reuses_larger_compatible_cached_bitmap_for_downscale_serve() {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, event_rx) = unbounded();
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(1024 * 1024),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        );
+        let doc_id = DocumentId::new(1);
+        assert!(worker.open_document(doc_id, Path::new("dummy.pdf"), None));
+
+        // 1. Initial render at high resolution (10x10)
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(1),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::from_raw(0),
+            target_width: 10,
+            target_height: 10,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+        let first_event = event_rx.try_recv().expect("first render event received");
+        match first_event {
+            RenderEvent::PageRendered { bitmap, .. } => {
+                assert_eq!(bitmap.width(), 10);
+                assert_eq!(bitmap.height(), 10);
+            }
+            other => panic!("expected PageRendered, got {other:?}"),
+        }
+
+        // 2. Request at lower resolution (5x5): should reuse cached 10x10 bitmap
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(2),
+            generation: 1,
+            document_id: doc_id,
+            page_index: PageIndex::from_raw(0),
+            target_width: 5,
+            target_height: 5,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+        let second_event = event_rx.try_recv().expect("second render event received");
+        match second_event {
+            RenderEvent::PageRendered { bitmap, .. } => {
+                // Downscale-serve returns the larger compatible bitmap (10x10) instead of re-rendering at 5x5
+                assert_eq!(bitmap.width(), 10);
+                assert_eq!(bitmap.height(), 10);
+            }
+            other => panic!("expected PageRendered, got {other:?}"),
+        }
     }
 }

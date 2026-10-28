@@ -676,6 +676,91 @@ pub struct PageCropRect {
     pub top: f32,
 }
 
+/// A read-only representation of an annotation loaded from a PDF document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AnnotationRecord {
+    Highlight {
+        page: PageIndex,
+        quads: Vec<HighlightQuad>,
+        contents: Option<String>,
+    },
+    Underline {
+        page: PageIndex,
+        quads: Vec<HighlightQuad>,
+        contents: Option<String>,
+    },
+    FreeText {
+        page: PageIndex,
+        rect: PageCropRect,
+        text: String,
+    },
+    Stamp {
+        page: PageIndex,
+        rect: PageCropRect,
+    },
+    Unknown {
+        page: PageIndex,
+        raw_type: String,
+    },
+}
+
+impl AnnotationRecord {
+    #[must_use]
+    pub const fn page(&self) -> PageIndex {
+        match self {
+            Self::Highlight { page, .. }
+            | Self::Underline { page, .. }
+            | Self::FreeText { page, .. }
+            | Self::Stamp { page, .. }
+            | Self::Unknown { page, .. } => *page,
+        }
+    }
+}
+
+/// The type of an interactive form field in a PDF document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FormFieldType {
+    Text,
+    Checkbox,
+    RadioButton,
+    ComboBox,
+    ListBox,
+    Signature,
+    Unknown(String),
+}
+
+/// A representation of a form field loaded from or modified in a PDF document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormFieldRecord {
+    pub name: String,
+    pub field_type: FormFieldType,
+    pub page_index: PageIndex,
+    pub bounds: PageCropRect,
+    pub value: Option<String>,
+    pub is_read_only: bool,
+}
+
+impl FormFieldRecord {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        field_type: FormFieldType,
+        page_index: PageIndex,
+        bounds: PageCropRect,
+        value: Option<String>,
+        is_read_only: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            field_type,
+            page_index,
+            bounds,
+            value,
+            is_read_only,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentAnnotations {
     pub strokes: Vec<InkStroke>,
@@ -738,6 +823,34 @@ impl AnnotationHistory {
     #[must_use]
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
+    }
+
+    pub fn push_action(&mut self, _action: AnnotationAction, before: DocumentAnnotations) {
+        self.push_snapshot(before);
+    }
+}
+
+/// A delta action representing a discrete modification to document annotations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AnnotationAction {
+    AddStroke(InkStroke),
+    AddHighlight(HighlightQuad),
+    AddSignature(SignatureStamp),
+    AddFreeText(FreeTextAnnotation),
+    RemoveFreeText(uuid::Uuid),
+    SetSnapshot(DocumentAnnotations),
+}
+
+impl AnnotationAction {
+    pub fn apply(&self, annotations: &mut DocumentAnnotations) {
+        match self {
+            Self::AddStroke(stroke) => annotations.strokes.push(stroke.clone()),
+            Self::AddHighlight(quad) => annotations.highlights.push(quad.clone()),
+            Self::AddSignature(sig) => annotations.signatures.push(sig.clone()),
+            Self::AddFreeText(ft) => annotations.free_texts.push(ft.clone()),
+            Self::RemoveFreeText(id) => annotations.free_texts.retain(|f| f.id != *id),
+            Self::SetSnapshot(snapshot) => *annotations = snapshot.clone(),
+        }
     }
 }
 
@@ -1331,6 +1444,44 @@ mod tests {
     }
 
     #[test]
+    fn annotation_action_apply_and_push_action() {
+        let mut doc = DocumentAnnotations::default();
+        let stroke = InkStroke {
+            page: PageIndex::zero(),
+            points: vec![(0.1, 0.2)],
+            color: InkColor::Black,
+            width_pts: 2.0,
+        };
+        let action = AnnotationAction::AddStroke(stroke.clone());
+        action.apply(&mut doc);
+        assert_eq!(doc.strokes.len(), 1);
+        assert_eq!(doc.strokes[0], stroke);
+
+        let ft_id = uuid::Uuid::new_v4();
+        let ft = FreeTextAnnotation {
+            id: ft_id,
+            page_index: 0,
+            x: 10.0,
+            y: 20.0,
+            text: "test".to_string(),
+            font_size: 12.0,
+            color_rgba: [0, 0, 0, 255],
+        };
+        AnnotationAction::AddFreeText(ft).apply(&mut doc);
+        assert_eq!(doc.free_texts.len(), 1);
+
+        AnnotationAction::RemoveFreeText(ft_id).apply(&mut doc);
+        assert_eq!(doc.free_texts.len(), 0);
+
+        let mut history = AnnotationHistory::new();
+        history.push_action(
+            AnnotationAction::AddStroke(stroke),
+            DocumentAnnotations::default(),
+        );
+        assert!(history.can_undo());
+    }
+
+    #[test]
     fn free_text_annotation_and_crop_rect_properties() {
         let id = uuid::Uuid::new_v4();
         let annotation = FreeTextAnnotation {
@@ -1434,5 +1585,107 @@ mod tests {
         let roundtrip: SignatureStamp =
             serde_json::from_str(&serialized).expect("deserialization succeeds");
         assert_eq!(roundtrip.stroke_width, 5.5);
+    }
+
+    #[test]
+    fn annotation_record_variants_serialization_and_page_accessor() {
+        let page = PageIndex::from_raw(3);
+        let quad = HighlightQuad {
+            page,
+            x_norm: 0.1,
+            y_norm: 0.2,
+            w_norm: 0.3,
+            h_norm: 0.05,
+        };
+        let crop = PageCropRect {
+            page_index: 3,
+            left: 50.0,
+            bottom: 100.0,
+            right: 200.0,
+            top: 150.0,
+        };
+
+        let highlight = AnnotationRecord::Highlight {
+            page,
+            quads: vec![quad.clone()],
+            contents: Some("Highlight note".into()),
+        };
+        assert_eq!(highlight.page(), page);
+
+        let underline = AnnotationRecord::Underline {
+            page,
+            quads: vec![quad],
+            contents: None,
+        };
+        assert_eq!(underline.page(), page);
+
+        let free_text = AnnotationRecord::FreeText {
+            page,
+            rect: crop,
+            text: "Free text comment".into(),
+        };
+        assert_eq!(free_text.page(), page);
+
+        let stamp = AnnotationRecord::Stamp { page, rect: crop };
+        assert_eq!(stamp.page(), page);
+
+        let unknown = AnnotationRecord::Unknown {
+            page,
+            raw_type: "Ink".into(),
+        };
+        assert_eq!(unknown.page(), page);
+
+        let records = vec![highlight, underline, free_text, stamp, unknown];
+        for record in &records {
+            let serialized = serde_json::to_string(record).expect("record serializes");
+            let deserialized: AnnotationRecord =
+                serde_json::from_str(&serialized).expect("record deserializes");
+            assert_eq!(*record, deserialized);
+            assert_eq!(deserialized.page(), page);
+        }
+    }
+
+    #[test]
+    fn form_field_record_variants_serialization_and_constructor() {
+        let page = PageIndex::from_raw(2);
+        let bounds = PageCropRect {
+            page_index: 2,
+            left: 10.0,
+            bottom: 20.0,
+            right: 150.0,
+            top: 45.0,
+        };
+
+        let field_types = vec![
+            FormFieldType::Text,
+            FormFieldType::Checkbox,
+            FormFieldType::RadioButton,
+            FormFieldType::ComboBox,
+            FormFieldType::ListBox,
+            FormFieldType::Signature,
+            FormFieldType::Unknown("CustomWidget".into()),
+        ];
+
+        for ft in field_types {
+            let record = FormFieldRecord::new(
+                "test_field",
+                ft.clone(),
+                page,
+                bounds,
+                Some("val".into()),
+                false,
+            );
+            assert_eq!(record.name, "test_field");
+            assert_eq!(record.field_type, ft);
+            assert_eq!(record.page_index, page);
+            assert_eq!(record.bounds, bounds);
+            assert_eq!(record.value.as_deref(), Some("val"));
+            assert!(!record.is_read_only);
+
+            let serialized = serde_json::to_string(&record).expect("field record serializes");
+            let deserialized: FormFieldRecord =
+                serde_json::from_str(&serialized).expect("field record deserializes");
+            assert_eq!(record, deserialized);
+        }
     }
 }

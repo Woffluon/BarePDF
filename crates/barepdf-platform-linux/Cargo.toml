@@ -9,9 +9,11 @@ repository.workspace = true
 description = "Linux platform implementation for BarePDF"
 
 [dependencies]
+barepdf-core = { path = "../barepdf-core" }
 barepdf-platform = { path = "../barepdf-platform" }
 arboard = { workspace = true }
 rfd = { workspace = true }
+tempfile = { workspace = true }
 tracing.workspace = true
 
 [lints]

@@ -11,5 +11,8 @@ mod worker;
 
 pub use cache::{BitmapCache, CacheKey};
 pub use error::RenderError;
-pub use protocol::{Priority, RenderCommand, RenderEvent, RenderJob, RenderKind};
+pub use memory_budget::SystemHardwareProfile;
+pub use protocol::{
+    PageRange, Priority, RenderCommand, RenderEvent, RenderJob, RenderKind, SearchMatchRecord,
+};
 pub use scheduler::RenderScheduler;

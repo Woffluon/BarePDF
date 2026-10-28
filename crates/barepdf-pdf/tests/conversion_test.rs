@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use barepdf_core::{PageCount, PageIndex, PageTextGeometry, PdfError, Rotation};
+use barepdf_core::{AnnotationRecord, PageCount, PageIndex, PageTextGeometry, PdfError, Rotation};
 use barepdf_pdf::conversion::{
     convert_pdf, CancellationToken, ConversionDpi, ConversionError, ConversionFormat,
     ConversionRequest, ConversionWarning, EncodedImageFormat, ImageEncodeError, ImageEncoder,
@@ -119,6 +119,10 @@ impl PdfDocument for FakeDocument {
             glyphs: Vec::new(),
             links: Vec::new(),
         })
+    }
+
+    fn annotations(&self, _page: PageIndex) -> Result<Vec<AnnotationRecord>, PdfError> {
+        Ok(Vec::new())
     }
 
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {

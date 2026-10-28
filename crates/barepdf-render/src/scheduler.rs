@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-pub use crate::protocol::{Priority, RenderCommand, RenderEvent, RenderJob, RenderKind};
+pub use crate::protocol::{
+    PageRange, Priority, RenderCommand, RenderEvent, RenderJob, RenderKind, SearchMatchRecord,
+};
 
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -319,6 +321,13 @@ mod tests {
         }
 
         fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+            Ok(Vec::new())
+        }
+
+        fn annotations(
+            &self,
+            _page: PageIndex,
+        ) -> Result<Vec<barepdf_pdf::AnnotationRecord>, PdfError> {
             Ok(Vec::new())
         }
     }

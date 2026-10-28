@@ -3,7 +3,8 @@ use crate::backend::{
 };
 use crate::pdfium_lifetime::process_pdfium;
 use barepdf_core::{
-    PageCount, PageIndex, PdfError, Rotation, SecretPassword, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+    AnnotationRecord, FormFieldRecord, FormFieldType, HighlightQuad, PageCount, PageCropRect,
+    PageIndex, PdfError, Rotation, SecretPassword, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
 };
 use pdfium_render::prelude::*;
 use std::ffi::CString;
@@ -83,6 +84,20 @@ impl PdfiumEngine {
 
 pub struct PdfiumDocumentOwned {
     doc: PdfDocument<'static>,
+}
+
+impl PdfiumDocumentOwned {
+    /// Serializes and saves the loaded document into a byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if serialization fails within PDFium.
+    pub fn save_to_bytes(&self) -> Result<Vec<u8>, PdfError> {
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        self.doc.save_to_bytes().map_err(|error| PdfError::Backend {
+            source: Arc::new(error),
+        })
+    }
 }
 
 impl PdfBackend for PdfiumEngine {
@@ -396,6 +411,264 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         }
         Ok(nodes)
     }
+
+    fn annotations(&self, page_index: PageIndex) -> Result<Vec<AnnotationRecord>, PdfError> {
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let pages = self.doc.pages();
+        let page =
+            pages
+                .get(to_pdfium_index(page_index)?)
+                .map_err(|e| PdfError::RenderingFailed {
+                    page_index: page_index.get(),
+                    reason: e.to_string(),
+                })?;
+
+        let page_w = page.width().value;
+        let page_h = page.height().value;
+        let annots = page.annotations();
+        let mut records = Vec::with_capacity(annots.len());
+
+        for annot in annots.iter() {
+            match annot.annotation_type() {
+                PdfPageAnnotationType::Highlight => {
+                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h);
+                    let contents = annot.contents();
+                    records.push(AnnotationRecord::Highlight {
+                        page: page_index,
+                        quads,
+                        contents,
+                    });
+                }
+                PdfPageAnnotationType::Underline => {
+                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h);
+                    let contents = annot.contents();
+                    records.push(AnnotationRecord::Underline {
+                        page: page_index,
+                        quads,
+                        contents,
+                    });
+                }
+                PdfPageAnnotationType::FreeText => {
+                    let rect = extract_crop_rect(&annot, page_index);
+                    let text = annot.contents().unwrap_or_default();
+                    records.push(AnnotationRecord::FreeText {
+                        page: page_index,
+                        rect,
+                        text,
+                    });
+                }
+                PdfPageAnnotationType::Stamp => {
+                    let rect = extract_crop_rect(&annot, page_index);
+                    records.push(AnnotationRecord::Stamp {
+                        page: page_index,
+                        rect,
+                    });
+                }
+                other => {
+                    records.push(AnnotationRecord::Unknown {
+                        page: page_index,
+                        raw_type: format!("{other:?}"),
+                    });
+                }
+            }
+        }
+
+        Ok(records)
+    }
+
+    fn form_fields(&self) -> Result<Vec<FormFieldRecord>, PdfError> {
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let pages = self.doc.pages();
+        let page_count = pages.len();
+        let mut records = Vec::new();
+
+        for page_idx in 0..page_count {
+            let page = match pages.get(page_idx) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(page_idx, error = %e, "Failed to load page while scanning form fields");
+                    continue;
+                }
+            };
+            let core_page_index = PageIndex::from_raw(page_idx as u32);
+            let annotations = page.annotations();
+
+            for annot in annotations.iter() {
+                let is_widget = annot.annotation_type() == PdfPageAnnotationType::Widget
+                    || annot.annotation_type() == PdfPageAnnotationType::XfaWidget;
+                let form_field_opt = annot.as_form_field();
+
+                if !is_widget && form_field_opt.is_none() {
+                    continue;
+                }
+
+                let bounds = extract_crop_rect(&annot, core_page_index);
+
+                if let Some(field) = form_field_opt {
+                    let name = field.name().unwrap_or_default();
+                    let is_read_only = field.is_read_only();
+                    let (field_type, value) = match field.field_type() {
+                        PdfFormFieldType::Text => {
+                            let val = field.as_text_field().and_then(|t| t.value());
+                            (FormFieldType::Text, val)
+                        }
+                        PdfFormFieldType::Checkbox => {
+                            let val = field.as_checkbox_field().map(|cb| {
+                                if cb.is_checked().unwrap_or(false) {
+                                    "true".to_string()
+                                } else {
+                                    "false".to_string()
+                                }
+                            });
+                            (FormFieldType::Checkbox, val)
+                        }
+                        PdfFormFieldType::RadioButton => {
+                            let val = field.as_radio_button_field().map(|rb| {
+                                if rb.is_checked().unwrap_or(false) {
+                                    rb.group_value().unwrap_or_else(|| "true".to_string())
+                                } else {
+                                    "false".to_string()
+                                }
+                            });
+                            (FormFieldType::RadioButton, val)
+                        }
+                        PdfFormFieldType::ComboBox => {
+                            let val = field.as_combo_box_field().and_then(|cb| cb.value());
+                            (FormFieldType::ComboBox, val)
+                        }
+                        PdfFormFieldType::ListBox => {
+                            let val = field.as_list_box_field().and_then(|lb| lb.value());
+                            (FormFieldType::ListBox, val)
+                        }
+                        PdfFormFieldType::Signature => (FormFieldType::Signature, None),
+                        PdfFormFieldType::PushButton => {
+                            (FormFieldType::Unknown("PushButton".to_string()), None)
+                        }
+                        PdfFormFieldType::Unknown => {
+                            (FormFieldType::Unknown("Unknown".to_string()), None)
+                        }
+                    };
+
+                    records.push(FormFieldRecord {
+                        name,
+                        field_type,
+                        page_index: core_page_index,
+                        bounds,
+                        value,
+                        is_read_only,
+                    });
+                } else {
+                    let name = annot.name().unwrap_or_default();
+                    let raw_type = format!("{:?}", annot.annotation_type());
+                    records.push(FormFieldRecord {
+                        name,
+                        field_type: FormFieldType::Unknown(raw_type),
+                        page_index: core_page_index,
+                        bounds,
+                        value: None,
+                        is_read_only: false,
+                    });
+                }
+            }
+        }
+
+        Ok(records)
+    }
+
+    fn set_form_field_value(&mut self, name: &str, value: &str) -> Result<(), PdfError> {
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let pages = self.doc.pages();
+        let page_count = pages.len();
+        let mut matched = false;
+
+        for page_idx in 0..page_count {
+            let page = match pages.get(page_idx) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(page_idx, error = %e, "Failed to load page while updating form field");
+                    continue;
+                }
+            };
+
+            let annotations = page.annotations();
+            let annot_count = annotations.len();
+
+            for annot_idx in 0..annot_count {
+                let mut annot = match annotations.get(annot_idx) {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+
+                let Some(mut field) = annot.as_form_field_mut() else {
+                    continue;
+                };
+
+                if field.name().as_deref() == Some(name) {
+                    matched = true;
+                    if field.is_read_only() {
+                        return Err(PdfError::InvalidPdfReason(format!(
+                            "Form field '{name}' is read-only"
+                        )));
+                    }
+
+                    match &mut field {
+                        PdfFormField::Text(text_field) => {
+                            text_field
+                                .set_value(value)
+                                .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))?;
+                        }
+                        PdfFormField::Checkbox(checkbox_field) => {
+                            let is_checked = value.eq_ignore_ascii_case("true")
+                                || value == "1"
+                                || value.eq_ignore_ascii_case("yes")
+                                || value.eq_ignore_ascii_case("checked");
+                            checkbox_field
+                                .set_checked(is_checked)
+                                .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))?;
+                        }
+                        PdfFormField::RadioButton(radio_field) => {
+                            let is_checked = value.eq_ignore_ascii_case("true")
+                                || value == "1"
+                                || value.eq_ignore_ascii_case("yes")
+                                || radio_field.group_value().as_deref() == Some(value)
+                                || radio_field.appearance_stream().as_deref() == Some(value);
+                            if is_checked {
+                                radio_field
+                                    .set_checked()
+                                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))?;
+                            }
+                        }
+                        other => {
+                            tracing::warn!(
+                                name,
+                                field_type = ?other.field_type(),
+                                "Attempted to set value on unsupported form field type"
+                            );
+                            return Err(PdfError::InvalidPdfReason(format!(
+                                "Setting value for form field '{name}' of type {:?} is not supported",
+                                other.field_type()
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !matched {
+            return Err(PdfError::InvalidPdfReason(format!(
+                "Form field '{name}' not found"
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn save_to_bytes(&self) -> Result<Vec<u8>, PdfError> {
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        self.doc.save_to_bytes().map_err(|error| PdfError::Backend {
+            source: Arc::new(error),
+        })
+    }
 }
 
 fn validate_loaded_page_count(raw_len: PdfPageIndex) -> Result<PageCount, PdfError> {
@@ -602,6 +875,85 @@ fn bookmark_page_index(bookmark: &PdfBookmark<'_>) -> Option<u32> {
         .page_index()
         .ok()
         .and_then(|index| u32::try_from(index).ok())
+}
+
+fn extract_quads_from_annotation(
+    annot: &PdfPageAnnotation<'_>,
+    page: PageIndex,
+    page_w: f32,
+    page_h: f32,
+) -> Vec<HighlightQuad> {
+    let pw = page_w.max(1.0);
+    let ph = page_h.max(1.0);
+    let mut quads = Vec::new();
+
+    let points = annot.attachment_points();
+    for i in 0..points.len() {
+        if let Ok(qp) = points.get(i) {
+            let left = qp.left().value.min(qp.right().value);
+            let right = qp.left().value.max(qp.right().value);
+            let bottom = qp.bottom().value.min(qp.top().value);
+            let top = qp.bottom().value.max(qp.top().value);
+
+            let x_norm = (left / pw).clamp(0.0, 1.0);
+            let y_norm = ((ph - top) / ph).clamp(0.0, 1.0);
+            let w_norm = ((right - left) / pw).clamp(0.0001, 1.0 - x_norm);
+            let h_norm = ((top - bottom) / ph).clamp(0.0001, 1.0 - y_norm);
+
+            quads.push(HighlightQuad {
+                page,
+                x_norm,
+                y_norm,
+                w_norm,
+                h_norm,
+            });
+        }
+    }
+
+    if quads.is_empty() {
+        if let Ok(bounds) = annot.bounds() {
+            let left = bounds.left().value.min(bounds.right().value);
+            let right = bounds.left().value.max(bounds.right().value);
+            let bottom = bounds.bottom().value.min(bounds.top().value);
+            let top = bounds.bottom().value.max(bounds.top().value);
+
+            let x_norm = (left / pw).clamp(0.0, 1.0);
+            let y_norm = ((ph - top) / ph).clamp(0.0, 1.0);
+            let w_norm = ((right - left) / pw).clamp(0.0001, 1.0 - x_norm);
+            let h_norm = ((top - bottom) / ph).clamp(0.0001, 1.0 - y_norm);
+
+            quads.push(HighlightQuad {
+                page,
+                x_norm,
+                y_norm,
+                w_norm,
+                h_norm,
+            });
+        }
+    }
+
+    quads
+}
+
+fn extract_crop_rect(annot: &PdfPageAnnotation<'_>, page: PageIndex) -> PageCropRect {
+    let (left, bottom, right, top) = if let Ok(bounds) = annot.bounds() {
+        (
+            bounds.left().value.min(bounds.right().value),
+            bounds.bottom().value.min(bounds.top().value),
+            bounds.left().value.max(bounds.right().value),
+            bounds.bottom().value.max(bounds.top().value),
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    PageCropRect {
+        page_index: page.get() as usize,
+        left,
+        bottom,
+        right,
+        top,
+    }
 }
 
 #[cfg(test)]

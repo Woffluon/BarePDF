@@ -103,6 +103,27 @@ impl BitmapCache {
     pub const fn current_bytes(&self) -> usize {
         self.current_bytes
     }
+
+    pub(crate) fn get_larger_compatible(
+        &self,
+        doc: DocumentId,
+        page: u32,
+        rotation: Rotation,
+        invert: bool,
+        required_w: u32,
+        required_h: u32,
+    ) -> Option<Arc<RawBitmap>> {
+        self.cache
+            .iter()
+            .find(|(k, bmp)| {
+                k.document_id == doc
+                    && k.page_index.get() == page
+                    && k.rotation == rotation
+                    && k.invert_colors == invert
+                    && (bmp.width() >= required_w || bmp.height() >= required_h)
+            })
+            .map(|(_, bmp)| Arc::clone(bmp))
+    }
 }
 
 #[cfg(test)]
@@ -283,5 +304,58 @@ mod tests {
             cache.get(&inverted_key).map(|b| b.pixels().to_vec()),
             Some(vec![245, 235, 225, 255])
         );
+    }
+
+    #[test]
+    fn test_get_larger_compatible() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(2048));
+        let key_10x10 = CacheKey {
+            document_id: DocumentId::new(1),
+            page_index: PageIndex::from_raw(0),
+            target_width: 10,
+            target_height: 10,
+            rotation: Rotation::Degrees0,
+            invert_colors: false,
+        };
+        let bmp_10x10 = RawBitmap::new(10, 10, vec![42; 400]).expect("valid 10x10 bitmap");
+        cache.insert(key_10x10, bmp_10x10);
+
+        // Required 5x5: compatible larger bitmap exists
+        let hit =
+            cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees0, false, 5, 5);
+        assert!(hit.is_some());
+        let hit_bmp = hit.unwrap();
+        assert_eq!(hit_bmp.width(), 10);
+        assert_eq!(hit_bmp.height(), 10);
+
+        // Required 10x10: exact size is also compatible
+        let hit_exact =
+            cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees0, false, 10, 10);
+        assert!(hit_exact.is_some());
+
+        // Required 15x15: cache bitmap is smaller, return None
+        let miss_too_large =
+            cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees0, false, 15, 15);
+        assert!(miss_too_large.is_none());
+
+        // Different page: return None
+        let miss_page =
+            cache.get_larger_compatible(DocumentId::new(1), 1, Rotation::Degrees0, false, 5, 5);
+        assert!(miss_page.is_none());
+
+        // Different document: return None
+        let miss_doc =
+            cache.get_larger_compatible(DocumentId::new(2), 0, Rotation::Degrees0, false, 5, 5);
+        assert!(miss_doc.is_none());
+
+        // Different rotation: return None
+        let miss_rot =
+            cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees90, false, 5, 5);
+        assert!(miss_rot.is_none());
+
+        // Different invert: return None
+        let miss_invert =
+            cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees0, true, 5, 5);
+        assert!(miss_invert.is_none());
     }
 }
