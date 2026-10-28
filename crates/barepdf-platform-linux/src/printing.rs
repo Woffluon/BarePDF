@@ -579,11 +579,13 @@ impl LinuxPrinterDialog {
             return Ok(None);
         }
 
-        let selected = printers
+        let Some(selected) = printers
             .iter()
             .find(|p| p.is_default)
             .or_else(|| printers.first())
-            .expect("printers list is not empty");
+        else {
+            return Ok(None);
+        };
 
         let orientation = PrintOrientation::from_index(orientation_index);
         let sink = LinuxPrinterSink::direct_with_runner(
