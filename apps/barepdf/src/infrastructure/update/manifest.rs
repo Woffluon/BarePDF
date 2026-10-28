@@ -318,35 +318,8 @@ pub(super) fn parse_manifest(
     }
     validate_release_url(&manifest.release_url, &manifest.version)?;
     #[cfg(target_os = "linux")]
-    let (installer_url, installer_sha256, installer_size) = if let Some(deb) = manifest.deb {
-        validate_deb_url(&deb.url, &manifest.version)?;
-        let hash = deb.sha256.to_ascii_lowercase();
-        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
-        }
-        if deb.size == 0 || deb.size > MAX_INSTALLER_BYTES {
-            return Err(UpdateFailure::Rejected(
-                "Installer size is outside the allowed range",
-            ));
-        }
-        (deb.url, hash, deb.size)
-    } else {
-        let fallback_url = format!(
-            "https://github.com/Woffluon/BarePDF/releases/download/v{version}/barepdf_{version}_amd64.deb",
-            version = manifest.version
-        );
-        validate_deb_url(&fallback_url, &manifest.version)?;
-        let hash = manifest.installer.sha256.to_ascii_lowercase();
-        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
-        }
-        if manifest.installer.size == 0 || manifest.installer.size > MAX_INSTALLER_BYTES {
-            return Err(UpdateFailure::Rejected(
-                "Installer size is outside the allowed range",
-            ));
-        }
-        (fallback_url, hash, manifest.installer.size)
-    };
+    let (installer_url, installer_sha256, installer_size) =
+        linux_installer_from_manifest(&manifest)?;
     #[cfg(not(target_os = "linux"))]
     let (installer_url, installer_sha256, installer_size) = {
         validate_installer_url(&manifest.installer.url, &manifest.version)?;
@@ -371,7 +344,30 @@ pub(super) fn parse_manifest(
     }))
 }
 
-#[cfg(target_os = "linux")]
+/// Selects the Linux installer identity from the manifest's `deb` entry. A manifest without a
+/// `deb` entry is rejected before any download: reusing the Windows `.exe` checksum and size
+/// for a fabricated deb URL would only surface after a ~100 MB wasted download.
+#[cfg(any(target_os = "linux", test))]
+fn linux_installer_from_manifest(
+    manifest: &UpdateManifest,
+) -> Result<(String, String, u64), UpdateFailure> {
+    let Some(deb) = manifest.deb.as_ref() else {
+        return Err(UpdateFailure::Rejected("manifest lacks deb entry"));
+    };
+    validate_deb_url(&deb.url, &manifest.version)?;
+    let hash = deb.sha256.to_ascii_lowercase();
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(UpdateFailure::Rejected("Invalid installer SHA-256"));
+    }
+    if deb.size == 0 || deb.size > MAX_INSTALLER_BYTES {
+        return Err(UpdateFailure::Rejected(
+            "Installer size is outside the allowed range",
+        ));
+    }
+    Ok((deb.url.clone(), hash, deb.size))
+}
+
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn validate_deb_url(url: &str, version: &str) -> Result<(), UpdateFailure> {
     let expected =
         format!("/Woffluon/BarePDF/releases/download/v{version}/barepdf_{version}_amd64.deb");
@@ -465,7 +461,7 @@ mod tests {
 
     fn manifest(version: &str, url_version: &str, hash: &str, size: u64) -> String {
         format!(
-            r#"{{"schemaVersion":1,"version":"{version}","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v{url_version}","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/BarePDF-Setup-x64-v{url_version}.exe","sha256":"{hash}","size":{size}}}}}"#
+            r#"{{"schemaVersion":1,"version":"{version}","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v{url_version}","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/BarePDF-Setup-x64-v{url_version}.exe","sha256":"{hash}","size":{size}}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/barepdf_{url_version}_amd64.deb","sha256":"{hash}","size":{size}}}}}"#
         )
     }
 
@@ -629,11 +625,58 @@ mod tests {
                     "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe",
                     "sha256": "{hash}",
                     "size": 1024
+                }},
+                "deb": {{
+                    "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb",
+                    "sha256": "{hash}",
+                    "size": 2048
                 }}
             }}"#
         );
         let result = parse_manifest(&future_json, "1.1.0");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn linux_manifest_without_deb_entry_is_rejected_before_any_download() {
+        let hash = "a".repeat(64);
+        let manifest: UpdateManifest = serde_json::from_str(&format!(
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}}}}"#
+        ))
+        .expect("test manifest parses");
+        assert!(matches!(
+            linux_installer_from_manifest(&manifest),
+            Err(UpdateFailure::Rejected("manifest lacks deb entry"))
+        ));
+    }
+
+    #[test]
+    fn linux_manifest_with_deb_entry_carries_the_deb_installer_identity() {
+        let hash = "a".repeat(64);
+        let manifest: UpdateManifest = serde_json::from_str(&format!(
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb","sha256":"{hash}","size":2048}}}}"#
+        ))
+        .expect("test manifest parses");
+        assert!(matches!(
+            linux_installer_from_manifest(&manifest),
+            Ok((url, hash, size))
+                if url == "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb"
+                    && hash.len() == 64
+                    && size == 2048
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_parse_rejects_a_manifest_without_deb_entry_end_to_end() {
+        let hash = "a".repeat(64);
+        let json = format!(
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}}}}"#
+        );
+        assert!(matches!(
+            parse_manifest(&json, "1.1.0"),
+            Err(UpdateFailure::Rejected("manifest lacks deb entry"))
+        ));
     }
 
     #[test]

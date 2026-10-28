@@ -733,24 +733,66 @@ pub fn t(lang: ResolvedLanguage, key: &str) -> &'static str {
 pub fn detect_system_language() -> ResolvedLanguage {
     #[cfg(target_os = "windows")]
     {
-        let lang_id = windows_ffi::user_default_ui_language();
-        let primary_lang = lang_id & 0x3FF; // LANGID primary language bits
-        if primary_lang == 0x1F {
-            // LANG_TURKISH
-            return ResolvedLanguage::Turkish;
+        windows_ffi::detect_windows_system_language()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        detect_system_language_with(|name| std::env::var(name).ok())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        ResolvedLanguage::English
+    }
+}
+
+/// POSIX locale detection for Linux: `LC_ALL` wins, then `LC_MESSAGES`, then `LANG`;
+/// the first set variable decides the language. The lookup hook keeps this testable
+/// without mutating process-wide environment state.
+#[cfg(any(target_os = "linux", test))]
+fn detect_system_language_with<F>(lookup: F) -> ResolvedLanguage
+where
+    F: Fn(&str) -> Option<String>,
+{
+    for variable in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Some(name) = lookup(variable) {
+            if let Some(language) = locale_language(&name) {
+                return language;
+            }
         }
     }
     ResolvedLanguage::English
 }
 
+/// Maps a POSIX locale string (`tr_TR.UTF-8`, `en_US`, `C`, `POSIX`) to the UI language.
+/// Everything other than the Turkish primary language resolves to English.
+#[cfg(any(target_os = "linux", test))]
+fn locale_language(locale: &str) -> Option<ResolvedLanguage> {
+    let primary = locale.split(['_', '.', '@']).next()?;
+    if primary.is_empty() {
+        return None;
+    }
+    match primary.to_ascii_lowercase().as_str() {
+        "tr" => Some(ResolvedLanguage::Turkish),
+        _ => Some(ResolvedLanguage::English),
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_ffi {
+    use super::ResolvedLanguage;
     use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 
-    pub(super) fn user_default_ui_language() -> u16 {
+    pub(super) fn detect_windows_system_language() -> ResolvedLanguage {
         // SAFETY: GetUserDefaultUILanguage takes no pointers and returns a LANGID by value. Windows
         // imposes no thread-affinity or lifetime requirement, so no borrowed memory crosses FFI.
-        unsafe { GetUserDefaultUILanguage() }
+        let lang_id = unsafe { GetUserDefaultUILanguage() };
+        let primary_lang = lang_id & 0x3FF; // LANGID primary language bits
+        if primary_lang == 0x1F {
+            // LANG_TURKISH
+            ResolvedLanguage::Turkish
+        } else {
+            ResolvedLanguage::English
+        }
     }
 }
 
@@ -815,6 +857,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn linux_locale_with_turkish_lang_maps_to_turkish() {
+        assert_eq!(
+            detect_system_language_with(|name| (name == "LANG").then(|| "tr_TR.UTF-8".to_owned())),
+            ResolvedLanguage::Turkish
+        );
+    }
+
+    #[test]
+    fn linux_locale_priority_lc_all_overrides_lc_messages_and_lang() {
+        let lookup = |name: &str| -> Option<String> {
+            match name {
+                "LC_ALL" => Some("en_US.UTF-8".to_owned()),
+                "LC_MESSAGES" => Some("tr_TR.UTF-8".to_owned()),
+                "LANG" => Some("tr_TR.UTF-8".to_owned()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            detect_system_language_with(lookup),
+            ResolvedLanguage::English
+        );
+    }
+
+    #[test]
+    fn linux_locale_falls_back_to_lc_messages_and_lang_in_order() {
+        let lookup = |name: &str| -> Option<String> {
+            match name {
+                "LC_MESSAGES" => Some("tr_TR".to_owned()),
+                "LANG" => Some("en_US.UTF-8".to_owned()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            detect_system_language_with(lookup),
+            ResolvedLanguage::Turkish
+        );
+    }
+
+    #[test]
+    fn linux_locale_unset_c_or_posix_defaults_to_english() {
+        assert_eq!(
+            detect_system_language_with(|_| None),
+            ResolvedLanguage::English
+        );
+        assert_eq!(
+            detect_system_language_with(|name| (name == "LANG").then(|| "C".to_owned())),
+            ResolvedLanguage::English
+        );
+        assert_eq!(
+            detect_system_language_with(|name| (name == "LANG").then(|| "POSIX".to_owned())),
+            ResolvedLanguage::English
+        );
     }
 
     #[test]

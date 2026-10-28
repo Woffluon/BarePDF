@@ -2,6 +2,9 @@ mod download;
 mod manifest;
 mod transport;
 
+#[cfg(target_os = "linux")]
+use barepdf_platform_linux::launch_package_installer as launch_installer;
+#[cfg(not(target_os = "linux"))]
 use barepdf_platform_windows::launch_installer;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

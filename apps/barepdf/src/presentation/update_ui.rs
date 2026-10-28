@@ -189,13 +189,6 @@ pub(crate) fn unix_timestamp() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-pub(crate) fn handle_linux_update_action(version: &str) {
-    let release_url = format!("https://github.com/Woffluon/BarePDF/releases/tag/v{version}");
-    barepdf_platform_linux::open_url(&release_url);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
