@@ -5,37 +5,47 @@ use barepdf_core::search::{SearchMatch, SearchQuery};
 use barepdf_core::types::{PageIndex, PageTextGeometry};
 
 #[must_use]
+pub fn execute_search_in_geometries<G: std::borrow::Borrow<PageTextGeometry>>(
+    query: &SearchQuery,
+    geometries: &[G],
+) -> Vec<SearchMatch> {
+    let mut all_matches = Vec::new();
+    let mut global_index = 0;
+
+    for item in geometries {
+        let geom = item.borrow();
+        let page_idx = geom.page_index.get();
+        let ranges = query.find_in_geometry(geom);
+        for range in ranges {
+            let mut glyph_boxes = Vec::new();
+            let start = range.start as usize;
+            let end = range.end as usize;
+
+            if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
+                glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
+            }
+
+            all_matches.push(SearchMatch {
+                page_index: PageIndex::from_raw(page_idx),
+                match_index_in_doc: global_index,
+                char_range: range,
+                glyph_boxes,
+            });
+            global_index += 1;
+        }
+    }
+    all_matches
+}
+
+#[must_use]
 pub fn execute_search(
     query: &SearchQuery,
     geometries: &HashMap<u32, PageTextGeometry>,
     page_count: u32,
 ) -> Vec<SearchMatch> {
-    let mut all_matches = Vec::new();
-    let mut global_index = 0;
-
-    for page_idx in 0..page_count {
-        if let Some(geom) = geometries.get(&page_idx) {
-            let ranges = query.find_in_geometry(geom);
-            for range in ranges {
-                let mut glyph_boxes = Vec::new();
-                let start = range.start as usize;
-                let end = range.end as usize;
-
-                if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
-                    glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
-                }
-
-                all_matches.push(SearchMatch {
-                    page_index: PageIndex::from_raw(page_idx),
-                    match_index_in_doc: global_index,
-                    char_range: range,
-                    glyph_boxes,
-                });
-                global_index += 1;
-            }
-        }
-    }
-    all_matches
+    let geoms: Vec<&PageTextGeometry> =
+        (0..page_count).filter_map(|p| geometries.get(&p)).collect();
+    execute_search_in_geometries(query, &geoms)
 }
 
 #[must_use]

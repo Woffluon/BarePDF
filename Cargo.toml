@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.22.7"
+version = "1.22.8"
 edition = "2021"
 rust-version = "1.92"
 authors = ["BarePDF Contributors"]
@@ -39,6 +39,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ureq = { version = "3.3", default-features = false, features = ["platform-verifier", "rustls", "win-system-proxy"] }
+uuid = "1.24"
 windows = { version = "0.58" }
 windows-core = "0.58"
 windows-sys = { version = "0.59" }

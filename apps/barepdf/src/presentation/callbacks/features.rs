@@ -1,4 +1,3 @@
-use barepdf_core::PageIndex;
 use barepdf_render::{RenderCommand, RenderScheduler};
 use barepdf_ui::AppWindow;
 use slint::{ComponentHandle, SharedString};
@@ -174,30 +173,8 @@ pub(super) fn connect_niche_feature_callbacks(
         };
 
         let matches = if let Some(doc) = app.active_document() {
-            let mut all_matches = Vec::new();
-            let mut global_index = 0;
-            for geom in app.text_geometries.in_page_order(doc) {
-                let page_idx = geom.page_index.get();
-                let ranges = query.find_in_geometry(&geom);
-                for range in ranges {
-                    let mut glyph_boxes = Vec::new();
-                    let start = range.start as usize;
-                    let end = range.end as usize;
-
-                    if start <= geom.glyphs.len() && end <= geom.glyphs.len() {
-                        glyph_boxes.extend_from_slice(&geom.glyphs[start..end]);
-                    }
-
-                    all_matches.push(barepdf_core::search::SearchMatch {
-                        page_index: PageIndex::from_raw(page_idx),
-                        match_index_in_doc: global_index,
-                        char_range: range,
-                        glyph_boxes,
-                    });
-                    global_index += 1;
-                }
-            }
-            all_matches
+            let geoms = app.text_geometries.in_page_order(doc);
+            crate::controllers::search_controller::execute_search_in_geometries(&query, &geoms)
         } else {
             Vec::new()
         };
@@ -323,11 +300,8 @@ pub(super) fn connect_niche_feature_callbacks(
                 &query,
             )
         };
-        match action {
-            super::super::hud_commands::HudAction::RequestPrint => {
-                window.invoke_request_print();
-            }
-            super::super::hud_commands::HudAction::None => {}
+        if action == super::super::hud_commands::HudAction::RequestPrint {
+            window.invoke_request_print();
         }
     });
 
@@ -353,11 +327,8 @@ pub(super) fn connect_niche_feature_callbacks(
             super::super::hud_commands::HudAction::None
         };
         window.set_command_palette_open(false);
-        match action {
-            super::super::hud_commands::HudAction::RequestPrint => {
-                window.invoke_request_print();
-            }
-            super::super::hud_commands::HudAction::None => {}
+        if action == super::super::hud_commands::HudAction::RequestPrint {
+            window.invoke_request_print();
         }
     });
 

@@ -126,3 +126,66 @@ fn get_scroll_target_computes_correct_offset() {
     let target = search_controller::get_scroll_target_for_match(&match_item, &layout);
     assert_eq!(target, Some(160.0)); // 110.0 + 50.0
 }
+
+#[test]
+fn get_scroll_target_returns_none_when_glyph_boxes_empty() {
+    let match_item = SearchMatch {
+        page_index: PageIndex::from_raw(0),
+        match_index_in_doc: 0,
+        char_range: 0..1,
+        glyph_boxes: Vec::new(),
+    };
+
+    let layout = ContinuousLayout {
+        pages: vec![PageLayoutBox {
+            page_index: PageIndex::from_raw(0),
+            y_offset: 0.0,
+            width: 100,
+            height: 100,
+        }],
+        total_height: 100.0,
+        max_width: 100,
+    };
+
+    let target = search_controller::get_scroll_target_for_match(&match_item, &layout);
+    assert_eq!(target, None);
+}
+
+#[test]
+fn get_scroll_target_uses_first_glyph_vertical_offset_accurately() {
+    let match_item = SearchMatch {
+        page_index: PageIndex::from_raw(0),
+        match_index_in_doc: 0,
+        char_range: 0..2,
+        glyph_boxes: vec![
+            GlyphRect {
+                x: 10.0,
+                y: 35.5,
+                width: 8.0,
+                height: 12.0,
+                ch: 'a',
+            },
+            GlyphRect {
+                x: 18.0,
+                y: 35.5,
+                width: 8.0,
+                height: 12.0,
+                ch: 'b',
+            },
+        ],
+    };
+
+    let layout = ContinuousLayout {
+        pages: vec![PageLayoutBox {
+            page_index: PageIndex::from_raw(0),
+            y_offset: 250.0,
+            width: 500,
+            height: 700,
+        }],
+        total_height: 700.0,
+        max_width: 500,
+    };
+
+    let target = search_controller::get_scroll_target_for_match(&match_item, &layout);
+    assert_eq!(target, Some(285.5)); // 250.0 + 35.5
+}

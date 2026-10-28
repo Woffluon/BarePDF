@@ -84,22 +84,18 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    let needle_bytes = needle.as_bytes();
-    let n = needle_bytes.len();
-    if haystack.len() < n {
-        return false;
-    }
     haystack
-        .as_bytes()
-        .windows(n)
-        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
 }
 
+#[must_use]
 pub fn filter_hud_commands(query: &str) -> Vec<HudCommandItem> {
     let q = query.trim();
     if q.is_empty() {
         return ALL_HUD_COMMANDS.to_vec();
     }
+
     ALL_HUD_COMMANDS
         .iter()
         .filter(|cmd| {
@@ -111,18 +107,129 @@ pub fn filter_hud_commands(query: &str) -> Vec<HudCommandItem> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HudAction {
     None,
+    NavigateToPage(u32),
+    ToggleFullscreen,
+    ToggleInvertColors,
+    SetPaperTint(u8),
     RequestPrint,
+    SetZoomMode(barepdf_core::ZoomMode),
+    SetViewingMode(barepdf_core::ViewingMode),
 }
 
+#[must_use]
 pub fn parse_hud_action(query: &str) -> HudAction {
-    let lower = query.trim().to_lowercase();
-    if lower.contains("print") || lower.contains("yazd") {
+    let trimmed = query.trim();
+    if let Ok(page_num) = trimmed.parse::<u32>() {
+        if page_num >= 1 {
+            return HudAction::NavigateToPage(page_num - 1);
+        }
+    }
+
+    let lower = trimmed.to_lowercase();
+    if lower == "zen" || lower.contains("zen") || lower.contains("fullscreen") || lower == "f11" {
+        HudAction::ToggleFullscreen
+    } else if lower == "invert_colors" || lower.contains("invert") || lower.contains("ters") {
+        HudAction::ToggleInvertColors
+    } else if lower == "tint_sepia" || lower.contains("sepia") || lower.contains("sepya") {
+        HudAction::SetPaperTint(1)
+    } else if lower == "tint_night"
+        || lower.contains("night")
+        || lower.contains("gece")
+        || lower.contains("dark")
+    {
+        HudAction::SetPaperTint(2)
+    } else if lower == "tint_amber" || lower.contains("amber") || lower.contains("kehribar") {
+        HudAction::SetPaperTint(3)
+    } else if lower == "tint_normal"
+        || lower.contains("normal")
+        || lower.contains("orijinal")
+        || lower.contains("original")
+    {
+        HudAction::SetPaperTint(0)
+    } else if lower.contains("print") || lower.contains("yazd") {
         HudAction::RequestPrint
+    } else if lower == "fit_width" || lower.contains("fit width") || lower.contains("geni") {
+        HudAction::SetZoomMode(barepdf_core::ZoomMode::FitWidth)
+    } else if lower == "fit_page" || lower.contains("fit page") || lower.contains("sayfa s") {
+        HudAction::SetZoomMode(barepdf_core::ZoomMode::FitPage)
+    } else if lower == "view_book" || lower.contains("book") || lower.contains("kitap") {
+        HudAction::SetViewingMode(barepdf_core::ViewingMode::BookMode)
+    } else if lower == "view_two_page"
+        || lower.contains("two page")
+        || lower.contains("çift")
+        || lower.contains("spread")
+    {
+        HudAction::SetViewingMode(barepdf_core::ViewingMode::TwoPageSpread)
+    } else if lower == "view_single" || lower.contains("single page") || lower.contains("tek sayfa")
+    {
+        HudAction::SetViewingMode(barepdf_core::ViewingMode::SinglePage)
+    } else if lower == "view_continuous"
+        || lower.contains("continuous")
+        || lower.contains("sürekli")
+    {
+        HudAction::SetViewingMode(barepdf_core::ViewingMode::ContinuousVertical)
     } else {
         HudAction::None
+    }
+}
+
+pub fn execute_hud_action(
+    action: HudAction,
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    window: &AppWindow,
+) {
+    match action {
+        HudAction::None => {}
+        HudAction::NavigateToPage(target_index) => {
+            super::ui::navigate_to_page_inner(target_index, app, scheduler, window);
+        }
+        HudAction::ToggleFullscreen => {
+            let new_mode = app.request_toggle_fullscreen();
+            let enabled = new_mode == barepdf_core::WindowMode::FullScreen;
+            window.set_window_mode(if enabled { 1 } else { 0 });
+            window.window().set_fullscreen(enabled);
+            super::window_chrome::sync_window_maximized(window);
+        }
+        HudAction::ToggleInvertColors => {
+            app.preferences.invert_colors = !app.preferences.invert_colors;
+            scheduler.set_invert_colors(app.preferences.invert_colors);
+            window.set_invert_page_colors(app.preferences.invert_colors);
+            invalidate_layout_and_render(app, scheduler, window, true);
+        }
+        HudAction::SetPaperTint(tint) => {
+            app.preferences.paper_tint = tint;
+            window.set_paper_tint(i32::from(tint));
+            invalidate_layout_and_render(app, scheduler, window, false);
+        }
+        HudAction::RequestPrint => {}
+        HudAction::SetZoomMode(mode) => {
+            app.zoom_mode = mode;
+            app.preferences.zoom_mode = mode;
+            window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
+            invalidate_layout_and_render(app, scheduler, window, false);
+        }
+        HudAction::SetViewingMode(mode) => {
+            app.viewing_mode = mode;
+            app.preferences.viewing_mode = mode;
+            app.layout_key = None;
+            window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
+            window.set_view_mode_label(slint::SharedString::from(
+                crate::presentation::ui::view_mode_label(
+                    app.viewing_mode,
+                    app.preferences.language.resolve(),
+                ),
+            ));
+            crate::presentation::ui::navigate_to_page_inner(
+                app.current_page,
+                app,
+                scheduler,
+                window,
+            );
+        }
     }
 }
 
@@ -141,128 +248,23 @@ pub fn handle_hud_query(
     window: &AppWindow,
     query: &str,
 ) -> HudAction {
-    let trimmed = query.trim();
-
-    if let Ok(page_num) = trimmed.parse::<u32>() {
-        if page_num >= 1 {
-            let target_index = page_num - 1;
-            super::ui::navigate_to_page_inner(target_index, app, scheduler, window);
-            window.set_command_palette_open(false);
-            return HudAction::None;
-        }
-    }
-
-    let lower = trimmed.to_lowercase();
+    let action = parse_hud_action(query);
     window.set_command_palette_open(false);
 
-    if lower == "zen" || lower.contains("zen") || lower.contains("fullscreen") || lower == "f11" {
-        let new_mode = app.request_toggle_fullscreen();
-        let enabled = new_mode == barepdf_core::WindowMode::FullScreen;
-        window.set_window_mode(if enabled { 1 } else { 0 });
-        window.window().set_fullscreen(enabled);
-        super::window_chrome::sync_window_maximized(window);
-    } else if lower == "invert_colors" || lower.contains("invert") || lower.contains("ters") {
-        app.preferences.invert_colors = !app.preferences.invert_colors;
-        scheduler.set_invert_colors(app.preferences.invert_colors);
-        window.set_invert_page_colors(app.preferences.invert_colors);
-        invalidate_layout_and_render(app, scheduler, window, true);
-    } else if lower == "tint_sepia" || lower.contains("sepia") || lower.contains("sepya") {
-        app.preferences.paper_tint = 1;
-        window.set_paper_tint(1);
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower == "tint_night"
-        || lower.contains("night")
-        || lower.contains("gece")
-        || lower.contains("dark")
-    {
-        app.preferences.paper_tint = 2;
-        window.set_paper_tint(2);
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower == "tint_amber" || lower.contains("amber") || lower.contains("kehribar") {
-        app.preferences.paper_tint = 3;
-        window.set_paper_tint(3);
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower == "tint_normal"
-        || lower.contains("normal")
-        || lower.contains("orijinal")
-        || lower.contains("original")
-    {
-        app.preferences.paper_tint = 0;
-        window.set_paper_tint(0);
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if let action @ HudAction::RequestPrint = parse_hud_action(&lower) {
-        return action;
-    } else if lower == "fit_width" || lower.contains("fit width") || lower.contains("geni") {
-        app.zoom_mode = barepdf_core::ZoomMode::FitWidth;
-        app.preferences.zoom_mode = barepdf_core::ZoomMode::FitWidth;
-        window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower == "fit_page" || lower.contains("fit page") || lower.contains("sayfa s") {
-        app.zoom_mode = barepdf_core::ZoomMode::FitPage;
-        app.preferences.zoom_mode = barepdf_core::ZoomMode::FitPage;
-        window.set_zoom_mode(zoom_mode_index(app.zoom_mode));
-        invalidate_layout_and_render(app, scheduler, window, false);
-    } else if lower == "view_book" || lower.contains("book") || lower.contains("kitap") {
-        app.viewing_mode = barepdf_core::ViewingMode::BookMode;
-        app.preferences.viewing_mode = barepdf_core::ViewingMode::BookMode;
-        app.layout_key = None;
-        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
-        window.set_view_mode_label(slint::SharedString::from(
-            crate::presentation::ui::view_mode_label(
-                app.viewing_mode,
-                app.preferences.language.resolve(),
-            ),
-        ));
-        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
-    } else if lower == "view_two_page"
-        || lower.contains("two page")
-        || lower.contains("çift")
-        || lower.contains("spread")
-    {
-        app.viewing_mode = barepdf_core::ViewingMode::TwoPageSpread;
-        app.preferences.viewing_mode = barepdf_core::ViewingMode::TwoPageSpread;
-        app.layout_key = None;
-        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
-        window.set_view_mode_label(slint::SharedString::from(
-            crate::presentation::ui::view_mode_label(
-                app.viewing_mode,
-                app.preferences.language.resolve(),
-            ),
-        ));
-        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
-    } else if lower == "view_single" || lower.contains("single page") || lower.contains("tek sayfa")
-    {
-        app.viewing_mode = barepdf_core::ViewingMode::SinglePage;
-        app.preferences.viewing_mode = barepdf_core::ViewingMode::SinglePage;
-        app.layout_key = None;
-        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
-        window.set_view_mode_label(slint::SharedString::from(
-            crate::presentation::ui::view_mode_label(
-                app.viewing_mode,
-                app.preferences.language.resolve(),
-            ),
-        ));
-        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
-    } else if lower == "view_continuous"
-        || lower.contains("continuous")
-        || lower.contains("sürekli")
-    {
-        app.viewing_mode = barepdf_core::ViewingMode::ContinuousVertical;
-        app.preferences.viewing_mode = barepdf_core::ViewingMode::ContinuousVertical;
-        app.layout_key = None;
-        window.set_view_mode(crate::presentation::ui::view_mode_index(app.viewing_mode));
-        window.set_view_mode_label(slint::SharedString::from(
-            crate::presentation::ui::view_mode_label(
-                app.viewing_mode,
-                app.preferences.language.resolve(),
-            ),
-        ));
-        crate::presentation::ui::navigate_to_page_inner(app.current_page, app, scheduler, window);
-    } else if !trimmed.is_empty() {
-        crate::presentation::ui::show_banner(window, format!("Unknown command: {trimmed}"), false);
+    if action == HudAction::None {
+        let trimmed = query.trim();
+        if !trimmed.is_empty() {
+            crate::presentation::ui::show_banner(
+                window,
+                format!("Unknown command: {trimmed}"),
+                false,
+            );
+        }
+    } else {
+        execute_hud_action(action, app, scheduler, window);
     }
 
-    HudAction::None
+    action
 }
 
 #[cfg(test)]
@@ -273,7 +275,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
-    fn parse_hud_action_identifies_print_queries() {
+    fn parse_hud_action_identifies_all_commands() {
         assert_eq!(parse_hud_action("print"), HudAction::RequestPrint);
         assert_eq!(parse_hud_action("PRINT"), HudAction::RequestPrint);
         assert_eq!(parse_hud_action("  print  "), HudAction::RequestPrint);
@@ -282,8 +284,9 @@ mod tests {
             parse_hud_action("Print Document (Ctrl+P)"),
             HudAction::RequestPrint
         );
-        assert_eq!(parse_hud_action("zen"), HudAction::None);
-        assert_eq!(parse_hud_action("invert"), HudAction::None);
+        assert_eq!(parse_hud_action("zen"), HudAction::ToggleFullscreen);
+        assert_eq!(parse_hud_action("invert"), HudAction::ToggleInvertColors);
+        assert_eq!(parse_hud_action("42"), HudAction::NavigateToPage(41));
         assert_eq!(parse_hud_action(""), HudAction::None);
     }
 
@@ -303,7 +306,6 @@ mod tests {
         )));
         let print_called = Rc::new(AtomicBool::new(false));
 
-        // Simulated print callback which acquires a mutable borrow
         let state_print = state.clone();
         let print_called_clone = print_called.clone();
         let on_request_print = move || {
@@ -311,16 +313,14 @@ mod tests {
             print_called_clone.store(true, Ordering::SeqCst);
         };
 
-        // When executing a command, borrow is dropped before triggering the returned action:
         let state_cmd = state.clone();
         let action = {
             let mut _app = state_cmd.borrow_mut();
             parse_hud_action("print")
         };
-        // _app borrow has been dropped!
-        match action {
-            HudAction::RequestPrint => on_request_print(),
-            HudAction::None => {}
+
+        if action == HudAction::RequestPrint {
+            on_request_print();
         }
 
         assert!(print_called.load(Ordering::SeqCst));
@@ -337,11 +337,12 @@ mod tests {
 
             for item in ALL_HUD_COMMANDS {
                 let action = execute_hud_command(&mut app, &scheduler, &window, item.id);
-                if item.id == "print" {
-                    assert_eq!(action, HudAction::RequestPrint);
-                } else {
-                    assert_eq!(action, HudAction::None);
-                }
+                assert_ne!(
+                    action,
+                    HudAction::None,
+                    "command ID '{}' failed to parse a recognized HudAction",
+                    item.id
+                );
                 let banner = window.get_banner_text();
                 assert!(
                     !banner.starts_with("Unknown command"),

@@ -732,7 +732,6 @@ pub(crate) fn refresh_tab_model(app: &AppState, window: &AppWindow) {
     window.set_tab_items(ModelRc::new(VecModel::from(items)));
 }
 
-#[allow(dead_code)]
 pub(crate) fn refresh_bookmark_model(app: &AppState, window: &AppWindow) {
     use barepdf_ui::BookmarkItem;
     let model = VecModel::default();

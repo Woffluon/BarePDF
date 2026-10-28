@@ -16,7 +16,6 @@ use std::time::Duration;
 pub(crate) use manifest::VerifiedUpdate;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-#[allow(dead_code)]
 pub const AUTO_CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 const EVENT_CAPACITY: usize = 16;

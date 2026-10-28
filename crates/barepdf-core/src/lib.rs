@@ -30,6 +30,3 @@ pub use preferences::{AppPreferences, BookmarkEntry, DocumentSession, ThemeMode,
 pub use search::SearchCancellationToken;
 pub use selection::{hit_test_link, SelectionEngine};
 pub use types::*;
-pub use types::{
-    erase_ink_strokes_along_segment, smooth_ink_points, AnnotationHistory, CancellationToken,
-};

@@ -1,4 +1,3 @@
-pub mod commands;
 pub mod hud_commands;
 
 pub(crate) mod callbacks;

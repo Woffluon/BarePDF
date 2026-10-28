@@ -793,46 +793,6 @@ impl AppState {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn search(&self) -> &SearchSession {
-        &self.search
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn search_mut(&mut self) -> &mut SearchSession {
-        &mut self.search
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn print(&self) -> &PrintSession {
-        &self.print
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn print_mut(&mut self) -> &mut PrintSession {
-        &mut self.print
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn tools(&self) -> &ToolsSession {
-        &self.tools
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn tools_mut(&mut self) -> &mut ToolsSession {
-        &mut self.tools
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn drawing(&self) -> &DrawingSession {
-        &self.drawing
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn drawing_mut(&mut self) -> &mut DrawingSession {
-        &mut self.drawing
-    }
-
     pub(crate) fn activate_drawing_tool(&mut self, tool: DrawingTool) {
         self.drawing.activate_drawing_tool(tool);
     }
@@ -1700,25 +1660,25 @@ mod tests {
     }
 
     #[test]
-    fn modular_sessions_defaults_and_accessors() {
+    fn modular_sessions_defaults() {
         let mut app = AppState::new(UserPreferences::default());
-        assert!(app.search().search_matches.is_empty());
-        assert!(app.search_mut().search_query.is_none());
-        assert_eq!(app.search().active_search_match, 0);
+        assert!(app.search.search_matches.is_empty());
+        assert!(app.search.search_query.is_none());
+        assert_eq!(app.search.active_search_match, 0);
 
-        assert!(app.print().cached_printers.is_empty());
-        assert!(!app.print().print_preview.open);
+        assert!(app.print.cached_printers.is_empty());
+        assert!(!app.print.print_preview.open);
 
-        assert!(app.tools().tools_merge_files.is_empty());
-        assert_eq!(app.tools().next_tool_job_id, 1);
-        assert_eq!(app.tools().tool_source_token, 1);
-        assert!(app.tools().active_tool_job.is_none());
+        assert!(app.tools.tools_merge_files.is_empty());
+        assert_eq!(app.tools.next_tool_job_id, 1);
+        assert_eq!(app.tools.tool_source_token, 1);
+        assert!(app.tools.active_tool_job.is_none());
 
-        assert!(app.drawing().pan_mode);
-        assert_eq!(app.drawing().drawing_width_pts, 4.0);
+        assert!(app.drawing.pan_mode);
+        assert_eq!(app.drawing.drawing_width_pts, 4.0);
         app.activate_drawing_tool(DrawingTool::Eraser);
-        assert!(app.drawing().drawing_eraser);
-        assert!(!app.drawing().pan_mode);
+        assert!(app.drawing.drawing_eraser);
+        assert!(!app.drawing.pan_mode);
     }
 
     #[test]
