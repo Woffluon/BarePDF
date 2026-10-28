@@ -67,6 +67,14 @@ if (-not $ExecutablePath) {
 }
 $ExePath = (Resolve-Path -LiteralPath $ExecutablePath).Path
 
+# Guard: a release binary requires a sibling pdfium.dll (no search-path fallback in release builds).
+# Without it the app shows a fatal error dialog and never renders, so startup metrics are invalid.
+$PdfiumSibling = Join-Path (Split-Path -Parent $ExePath) "pdfium.dll"
+if (-not (Test-Path -LiteralPath $PdfiumSibling -PathType Leaf)) {
+    Write-Error "Missing sibling pdfium.dll next to '$ExePath'. Run 'packaging/windows/scripts/fetch-pdfium.ps1' to stage the pinned PDFium runtime; the app would otherwise exit to a fatal error dialog and startup metrics would be invalid."
+    exit 1
+}
+
 # 2. Resolve Sample PDF
 if (-not $PdfPath) {
     $PdfPath = Join-Path $repoRoot "assets\barepdf-welcome.pdf"
@@ -169,7 +177,10 @@ function Measure-SingleStartup {
         $sw.Stop()
 
         if ($null -eq $recordedMs) {
-            $recordedMs = [double]$sw.ElapsedMilliseconds
+            # Never fall back to wall-clock: a missing profile signal means the app never
+            # rendered a first page (bad environment, missing pdfium.dll, startup failure).
+            # Reporting the duration we happened to wait for would fabricate a latency value.
+            throw "Startup profile signal ('first_bitmap_ms') was not written to '$tempProfile' within 15 seconds. The app did not complete first-page render; refusing to report a fabricated startup latency."
         }
 
         return $recordedMs
