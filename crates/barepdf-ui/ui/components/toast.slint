@@ -1,0 +1,263 @@
+import { ThemeTokens } from "../tokens.slint";
+import { TextButton } from "./button.slint";
+
+export component FloatingToastCard inherits Rectangle {
+    in property <bool> is-open: false;
+    in property <string> title: "";
+    in property <string> message: "";
+    in property <int> kind: 0; // 0: Info, 1: Update, 2: Error, 3: Success
+    in property <string> version-diff: ""; // e.g. "v0.2.1 → v0.3.0"
+    in property <string> action-label: "";
+    in property <bool> action-enabled: true;
+    in property <bool> has-action: root.action-label != "";
+    in property <length> target-y: 48px;
+    callback dismiss();
+    callback action();
+
+    width: 340px;
+    y: root.is-open ? root.target-y : (root.target-y - 12px);
+    opacity: root.is-open ? 1.0 : 0.0;
+    visible: self.opacity > 0.01;
+    animate opacity { duration: ThemeTokens.motion-medium; easing: ease-out; }
+    animate y { duration: ThemeTokens.motion-medium; easing: ease-out; }
+
+    background: ThemeTokens.dark ? #2c2c2c : #ffffff;
+    border-radius: ThemeTokens.overlay-radius;
+    border-width: 1px;
+    border-color: ThemeTokens.stroke;
+    drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+    drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+    drop-shadow-color: ThemeTokens.overlay-shadow;
+
+    // Status accent indicator on the left
+    Rectangle {
+        x: 0px;
+        y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 1.5px;
+        background: root.kind == 1 ? ThemeTokens.accent
+            : (root.kind == 2 ? ThemeTokens.danger
+            : (root.kind == 3 ? #107c41
+            : (ThemeTokens.dark ? #60cdff : #0078d4)));
+    }
+
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 8px;
+
+        // Top Row: Icon + Title + Version Tag + Close Button
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+
+            // Icon
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                Image {
+                    width: 18px;
+                    height: 18px;
+                    source: root.kind == 1 ? @image-url("../../../../assets/icons/arrow_rotate_clockwise_20_regular.svg")
+                        : (root.kind == 2 ? @image-url("../../../../assets/icons/dismiss_20_regular.svg")
+                        : (root.kind == 3 ? @image-url("../../../../assets/icons/checkmark_20_regular.svg")
+                        : @image-url("../../../../assets/icons/document_pdf_20_regular.svg")));
+                    colorize: root.kind == 1 ? ThemeTokens.accent
+                        : (root.kind == 2 ? ThemeTokens.danger
+                        : (root.kind == 3 ? #107c41
+                        : (ThemeTokens.dark ? #60cdff : #0078d4)));
+                    image-fit: contain;
+                }
+            }
+
+            // Title
+            Text {
+                text: root.title != "" ? root.title : (
+                    root.kind == 1 ? "Güncelleme Mevcut"
+                    : (root.kind == 2 ? "Hata"
+                    : (root.kind == 3 ? "Başarılı" : "Bilgi"))
+                );
+                color: ThemeTokens.text;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            // Version diff tag if present
+            if root.version-diff != "" : Rectangle {
+                height: 20px;
+                background: ThemeTokens.control-subtle;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: ThemeTokens.stroke;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    Text {
+                        text: root.version-diff;
+                        color: ThemeTokens.text-muted;
+                        font-size: 10.5px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Close Button
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: ThemeTokens.control-radius;
+                background: close-touch.pressed ? ThemeTokens.control-pressed
+                    : (close-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                accessible-role: button;
+                accessible-label: "Kapat";
+                animate background { duration: ThemeTokens.motion-fast; }
+
+                close-touch := TouchArea {
+                    clicked => { root.dismiss(); }
+                }
+
+                Image {
+                    source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                    width: 14px;
+                    height: 14px;
+                    colorize: ThemeTokens.text-muted;
+                    image-fit: contain;
+                }
+            }
+        }
+
+        // Message text
+        if root.message != "" : Text {
+            text: root.message;
+            color: ThemeTokens.text-muted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        // Action row (e.g. "Şimdi Güncelle")
+        if root.has-action : HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            padding-top: 2px;
+
+            TextButton {
+                text: root.action-label != "" ? root.action-label : "Şimdi Güncelle";
+                primary: true;
+                compact: true;
+                enabled: root.action-enabled;
+                clicked => { root.action(); }
+            }
+        }
+    }
+}
+
+export component FloatingPrintCard inherits Rectangle {
+    in property <bool> is-open: false;
+    in property <string> title: "Yazdırılıyor";
+    in property <string> status: "";
+    in property <float> progress: 0.0; // 0.0 to 1.0
+    in property <string> cancel-label: "İptal";
+    in property <length> target-y: 48px;
+    callback cancel();
+
+    width: 340px;
+    y: root.is-open ? root.target-y : (root.target-y - 12px);
+    opacity: root.is-open ? 1.0 : 0.0;
+    visible: self.opacity > 0.01;
+    animate opacity { duration: ThemeTokens.motion-medium; easing: ease-out; }
+    animate y { duration: ThemeTokens.motion-medium; easing: ease-out; }
+
+    background: ThemeTokens.dark ? #2c2c2c : #ffffff;
+    border-radius: ThemeTokens.overlay-radius;
+    border-width: 1px;
+    border-color: ThemeTokens.stroke;
+    drop-shadow-blur: ThemeTokens.overlay-shadow-blur;
+    drop-shadow-offset-y: ThemeTokens.overlay-shadow-offset-y;
+    drop-shadow-color: ThemeTokens.overlay-shadow;
+
+    // Accent indicator
+    Rectangle {
+        x: 0px;
+        y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 1.5px;
+        background: ThemeTokens.accent;
+    }
+
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 8px;
+
+        // Top Row: Print Icon + Title + Cancel Button
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                Image {
+                    source: @image-url("../../../../assets/icons/print_20_regular.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: ThemeTokens.accent;
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                text: root.title != "" ? root.title : "Yazdırılıyor";
+                color: ThemeTokens.text;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            TextButton {
+                text: root.cancel-label != "" ? root.cancel-label : "İptal";
+                compact: true;
+                clicked => { root.cancel(); }
+            }
+        }
+
+        // Status text (e.g. "Sayfa 2/5 hazırlanıyor" or "Yazıcı kuyruğuna iletildi")
+        if root.status != "" : Text {
+            text: root.status;
+            color: ThemeTokens.text-muted;
+            font-size: 12px;
+            overflow: elide;
+        }
+
+        // Progress bar (0 - 100%)
+        Rectangle {
+            height: 4px;
+            border-radius: 2px;
+            background: ThemeTokens.dark ? #3e3e3e : #e8e8e8;
+
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width * Math.max(0.0, Math.min(1.0, root.progress));
+                height: parent.height;
+                border-radius: 2px;
+                background: ThemeTokens.accent;
+                animate width { duration: ThemeTokens.motion-medium; easing: ease-out; }
+            }
+        }
+    }
+}

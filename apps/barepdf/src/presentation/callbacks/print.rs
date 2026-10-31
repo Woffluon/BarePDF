@@ -623,13 +623,20 @@ pub(crate) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
                 "print.status.cancelled",
             )));
         }
-        PrintEvent::Failed { message, .. } => {
+        PrintEvent::Failed { job_id, message } => {
             window.set_print_active(false);
             window.set_print_progress(0.0);
-            drop(message);
-            let message = barepdf_i18n::t(window_language(window), "print.status.failed");
-            window.set_print_status(SharedString::from(message));
-            show_banner(window, message, false);
+            tracing::error!(
+                job_id = %job_id.get(),
+                error = %message,
+                "Print failed in event handler"
+            );
+            let formatted_error = format!(
+                "{}: {message}",
+                barepdf_i18n::t(window_language(window), "print.status.failed")
+            );
+            window.set_print_status(SharedString::from(&formatted_error));
+            show_banner(window, formatted_error, false);
         }
     }
 }

@@ -16,6 +16,12 @@ export component PrintPreviewDialog inherits Rectangle {
     in-out property <int> range-mode: 0; // 0: All / Tümü, 1: Current / Geçerli, 2: Custom / Özel
     in-out property <int> paper-size: 0; // 0: A4, 1: Letter, 2: Legal
     in-out property <int> duplex: 0; // 0: Tek Taraflı, 1: Uzun Kenar, 2: Kısa Kenar
+    in-out property <int> scale-mode: 0; // 0: Sığdır, 1: %100, 2: Özel
+    in-out property <int> n-up: 0; // 0: 1, 1: 2, 2: 4, 3: 6
+    in-out property <int> custom-scale: 100;
+    in-out property <string> custom-scale-str: "100";
+    in-out property <bool> more-settings-open: false;
+    property <bool> printer-dropdown-open: false;
     in property <bool> range-valid: true;
     in property <string> range-error: "";
     in property <string> text-title: "Yazdır";
@@ -32,15 +38,21 @@ export component PrintPreviewDialog inherits Rectangle {
     in property <string> text-orientation-portrait: "Dikey";
     in property <string> text-orientation-landscape: "Yatay";
     in property <string> text-printer: "Yazıcı Seçimi";
+    in property <string> text-select-printer: "Yazıcı seçiniz";
     in property <string> text-copies: "Kopya Sayısı";
     in property <string> text-all-pages: "Tümü";
     in property <string> text-current-page: "Geçerli";
     in property <string> text-custom-range: "Özel";
+    in property <string> text-more-settings: "Daha Fazla Ayar";
     in property <string> text-paper-size: "Kağıt Boyutu";
     in property <string> text-duplex: "Çift Taraflı Yazdırma";
     in property <string> text-duplex-off: "Tek Taraflı";
     in property <string> text-duplex-long: "Uzun Kenar";
     in property <string> text-duplex-short: "Kısa Kenar";
+    in property <string> text-scale: "Ölçekleme";
+    in property <string> text-scale-fit: "Sığdır";
+    in property <string> text-scale-custom: "Özel";
+    in property <string> text-n-up: "Sayfa Başına Sayfa";
     in property <string> text-cancel: "İptal";
     in property <string> text-continue: "Yazdır";
     callback previous();
@@ -65,8 +77,8 @@ export component PrintPreviewDialog inherits Rectangle {
     dialog-focus := FocusScope {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: Math.min(parent.width - 32px, 760px);
-        height: Math.min(parent.height - 32px, 580px);
+        width: Math.min(parent.width - 32px, 880px);
+        height: Math.min(parent.height - 32px, 640px);
         key-pressed(event) => {
             if (event.text == "\u{001b}") { root.cancel(); return accept; }
             return reject;
@@ -141,329 +153,852 @@ export component PrintPreviewDialog inherits Rectangle {
                     }
                 }
 
-                // Body & Footer
-                VerticalLayout {
+                // Chrome-style 2-Column Body
+                HorizontalLayout {
                     vertical-stretch: 1;
                     padding: 16px;
-                    spacing: 12px;
+                    spacing: 16px;
 
-                    // Main two-column content
-                    HorizontalLayout {
-                        spacing: 16px;
-                        vertical-stretch: 1;
+                    // Sol Sütun: Canlı Önizleme Tuvali (Canlı Kağıt Görünümü)
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        min-width: 440px;
+                        background: ThemeTokens.canvas;
+                        border-radius: ThemeTokens.control-radius;
+                        border-width: 1px;
+                        border-color: ThemeTokens.stroke;
 
-                        // Left Column: Live Page Preview
-                        Rectangle {
-                            width: Math.min(340px, parent.width * 0.48);
-                            background: ThemeTokens.canvas;
-                            border-radius: ThemeTokens.control-radius;
-                            border-width: 1px;
-                            border-color: ThemeTokens.stroke;
-
-                            // Paper preview canvas
-                            Rectangle {
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - 48px - self.height) / 2;
-                                width: root.orientation == 2 ? Math.min(parent.width - 32px, 300px) : Math.min(parent.width - 32px, 220px);
-                                height: root.orientation == 2 ? 212px : Math.min(parent.height - 76px, 310px);
-                                border-radius: ThemeTokens.page-radius;
-                                background: white;
-                                border-width: 1px;
-                                border-color: #00000020;
-                                drop-shadow-blur: 8px;
-                                drop-shadow-offset-y: 2px;
-                                drop-shadow-color: ThemeTokens.overlay-shadow;
-
-                                if root.has-image : Image {
-                                    source: root.image;
-                                    width: 100%;
-                                    height: 100%;
-                                    image-fit: contain;
-                                }
-                                if !root.has-image : Text {
-                                    text: root.text-empty != "" ? root.text-empty : "Sayfa önizlemesi";
-                                    color: #626972;
-                                    font-size: 12px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            // Preview navigation bar
-                            HorizontalLayout {
-                                x: 0px;
-                                y: parent.height - 48px;
-                                width: parent.width;
-                                height: 32px;
-                                alignment: center;
-                                spacing: 8px;
-                                TextButton {
-                                    text: root.text-previous != "" ? root.text-previous : "Önceki";
-                                    enabled: root.page > 0;
-                                    clicked => { root.previous(); }
-                                }
-                                Text {
-                                    text: (root.text-page != "" ? root.text-page : "Sayfa") + " " + (root.page + 1) + " / " + root.total-pages;
-                                    color: ThemeTokens.text;
-                                    font-size: 11.5px;
-                                    font-weight: 600;
-                                    vertical-alignment: center;
-                                }
-                                TextButton {
-                                    text: root.text-next != "" ? root.text-next : "Sonraki";
-                                    enabled: root.page + 1 < root.total-pages.to-float();
-                                    clicked => { root.next(); }
-                                }
-                            }
-                        }
-
-                        // Right Column: Print Configuration Options
                         ScrollView {
-                            horizontal-stretch: 1;
+                            width: 100%;
+                            height: 100%;
 
                             VerticalLayout {
-                                spacing: 11px;
-                                padding-right: 8px;
-                                padding-top: 2px;
-                                padding-bottom: 2px;
+                                alignment: center;
+                                spacing: 14px;
+                                padding-top: 16px;
+                                padding-bottom: 16px;
+                                padding-left: 16px;
+                                padding-right: 16px;
 
-                                // 1. Yazıcı Seçimi (Printers Model)
-                                Text {
-                                    text: root.text-printer;
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
-                                VerticalLayout {
-                                    spacing: 4px;
-                                    for printer-name[idx] in root.printers : Rectangle {
-                                        height: 32px;
-                                        border-radius: ThemeTokens.control-radius;
-                                        background: root.selected-printer == idx ? ThemeTokens.selection : (p-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+                                // Sayfa Kartı - Yatay ve Dikey Tam Ortalanmış
+                                HorizontalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: root.orientation == 2 ? 460px : 340px;
+                                        height: root.orientation == 2 ? 325px : 480px;
+                                        border-radius: ThemeTokens.page-radius;
+                                        background: #ffffff;
                                         border-width: 1px;
-                                        border-color: root.selected-printer == idx ? ThemeTokens.accent : ThemeTokens.stroke;
-                                        animate background { duration: ThemeTokens.motion-fast; }
-                                        p-touch := TouchArea { clicked => { root.selected-printer = idx; } }
-                                        HorizontalLayout {
-                                            padding-left: 10px;
-                                            padding-right: 10px;
-                                            spacing: 8px;
-                                            VerticalLayout {
+                                        border-color: #00000028;
+                                        drop-shadow-blur: 10px;
+                                        drop-shadow-offset-y: 3px;
+                                        drop-shadow-color: ThemeTokens.overlay-shadow;
+                                        clip: true;
+
+                                        // 1-up (Standart Tek Sayfa)
+                                        if root.n-up == 0 : Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+                                            if root.has-image : Image {
+                                                source: root.image;
+                                                width: 100%;
+                                                height: 100%;
+                                                image-fit: contain;
+                                            }
+                                            if !root.has-image : VerticalLayout {
                                                 alignment: center;
-                                                Rectangle {
-                                                    width: 12px;
-                                                    height: 12px;
-                                                    border-radius: 6px;
+                                                spacing: 8px;
+                                                Text {
+                                                    text: root.text-empty != "" ? root.text-empty : "Sayfa önizlemesi";
+                                                    color: #626972;
+                                                    font-size: 13px;
+                                                    horizontal-alignment: center;
+                                                }
+                                                Text {
+                                                    text: (root.text-page != "" ? root.text-page : "Sayfa") + " " + (root.page + 1);
+                                                    color: #8f96a0;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        // 2-up (Sayfa Başına 2 Sayfa Önizlemesi)
+                                        if root.n-up == 1 : Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+
+                                            if root.orientation != 2 : VerticalLayout {
+                                                padding: 10px;
+                                                spacing: 8px;
+                                                for slot-idx in 2 : Rectangle {
+                                                    vertical-stretch: 1;
+                                                    border-radius: 2px;
                                                     border-width: 1px;
-                                                    border-color: root.selected-printer == idx ? ThemeTokens.accent : ThemeTokens.stroke;
-                                                    if root.selected-printer == idx : Rectangle {
-                                                        x: 3px;
-                                                        y: 3px;
-                                                        width: 6px;
-                                                        height: 6px;
-                                                        border-radius: 3px;
-                                                        background: ThemeTokens.accent;
+                                                    border-color: #00000020;
+                                                    background: #fafafa;
+                                                    clip: true;
+                                                    if root.has-image : Image {
+                                                        source: root.image;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        image-fit: contain;
+                                                    }
+                                                    Rectangle {
+                                                        x: parent.width - self.width - 6px;
+                                                        y: 6px;
+                                                        height: 16px;
+                                                        background: #00000060;
+                                                        border-radius: 8px;
+                                                        HorizontalLayout {
+                                                            padding-left: 6px;
+                                                            padding-right: 6px;
+                                                            Text {
+                                                                text: (root.page + 1 + slot-idx <= root.total-pages.to-float())
+                                                                    ? "" + (root.page + 1 + slot-idx)
+                                                                    : "-";
+                                                                color: #ffffff;
+                                                                font-size: 9px;
+                                                                font-weight: 600;
+                                                                vertical-alignment: center;
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
-                                            Text {
-                                                text: printer-name;
-                                                color: root.selected-printer == idx ? ThemeTokens.text : ThemeTokens.text-muted;
-                                                font-size: 12px;
-                                                font-weight: root.selected-printer == idx ? 600 : 400;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                                horizontal-stretch: 1;
+
+                                            if root.orientation == 2 : HorizontalLayout {
+                                                padding: 10px;
+                                                spacing: 8px;
+                                                for slot-idx in 2 : Rectangle {
+                                                    horizontal-stretch: 1;
+                                                    border-radius: 2px;
+                                                    border-width: 1px;
+                                                    border-color: #00000020;
+                                                    background: #fafafa;
+                                                    clip: true;
+                                                    if root.has-image : Image {
+                                                        source: root.image;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        image-fit: contain;
+                                                    }
+                                                    Rectangle {
+                                                        x: parent.width - self.width - 6px;
+                                                        y: 6px;
+                                                        height: 16px;
+                                                        background: #00000060;
+                                                        border-radius: 8px;
+                                                        HorizontalLayout {
+                                                            padding-left: 6px;
+                                                            padding-right: 6px;
+                                                            Text {
+                                                                text: (root.page + 1 + slot-idx <= root.total-pages.to-float())
+                                                                    ? "" + (root.page + 1 + slot-idx)
+                                                                    : "-";
+                                                                color: #ffffff;
+                                                                font-size: 9px;
+                                                                font-weight: 600;
+                                                                vertical-alignment: center;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 4-up (Sayfa Başına 4 Sayfa Önizlemesi - 2x2 Grid)
+                                        if root.n-up == 2 : Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+
+                                            VerticalLayout {
+                                                padding: 8px;
+                                                spacing: 6px;
+                                                for row-idx in 2 : HorizontalLayout {
+                                                    spacing: 6px;
+                                                    vertical-stretch: 1;
+                                                    for col-idx in 2 : Rectangle {
+                                                        horizontal-stretch: 1;
+                                                        border-radius: 2px;
+                                                        border-width: 1px;
+                                                        border-color: #00000020;
+                                                        background: #fafafa;
+                                                        clip: true;
+                                                        if root.has-image : Image {
+                                                            source: root.image;
+                                                            width: 100%;
+                                                            height: 100%;
+                                                            image-fit: contain;
+                                                        }
+                                                        Rectangle {
+                                                            x: parent.width - self.width - 4px;
+                                                            y: 4px;
+                                                            height: 15px;
+                                                            background: #00000060;
+                                                            border-radius: 7.5px;
+                                                            HorizontalLayout {
+                                                                padding-left: 5px;
+                                                                padding-right: 5px;
+                                                                Text {
+                                                                    text: (root.page + 1 + row-idx * 2 + col-idx <= root.total-pages.to-float())
+                                                                        ? "" + (root.page + 1 + row-idx * 2 + col-idx)
+                                                                        : "-";
+                                                                    color: #ffffff;
+                                                                    font-size: 8.5px;
+                                                                    font-weight: 600;
+                                                                    vertical-alignment: center;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 6-up (Sayfa Başına 6 Sayfa Önizlemesi - 3x2 veya 2x3 Grid)
+                                        if root.n-up == 3 : Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+
+                                            if root.orientation != 2 : VerticalLayout {
+                                                padding: 8px;
+                                                spacing: 6px;
+                                                for row-idx in 3 : HorizontalLayout {
+                                                    spacing: 6px;
+                                                    vertical-stretch: 1;
+                                                    for col-idx in 2 : Rectangle {
+                                                        horizontal-stretch: 1;
+                                                        border-radius: 2px;
+                                                        border-width: 1px;
+                                                        border-color: #00000020;
+                                                        background: #fafafa;
+                                                        clip: true;
+                                                        if root.has-image : Image {
+                                                            source: root.image;
+                                                            width: 100%;
+                                                            height: 100%;
+                                                            image-fit: contain;
+                                                        }
+                                                        Rectangle {
+                                                            x: parent.width - self.width - 4px;
+                                                            y: 4px;
+                                                            height: 14px;
+                                                            background: #00000060;
+                                                            border-radius: 7px;
+                                                            HorizontalLayout {
+                                                                padding-left: 4px;
+                                                                padding-right: 4px;
+                                                                Text {
+                                                                    text: (root.page + 1 + row-idx * 2 + col-idx <= root.total-pages.to-float())
+                                                                        ? "" + (root.page + 1 + row-idx * 2 + col-idx)
+                                                                        : "-";
+                                                                    color: #ffffff;
+                                                                    font-size: 8px;
+                                                                    font-weight: 600;
+                                                                    vertical-alignment: center;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if root.orientation == 2 : VerticalLayout {
+                                                padding: 8px;
+                                                spacing: 6px;
+                                                for row-idx in 2 : HorizontalLayout {
+                                                    spacing: 6px;
+                                                    vertical-stretch: 1;
+                                                    for col-idx in 3 : Rectangle {
+                                                        horizontal-stretch: 1;
+                                                        border-radius: 2px;
+                                                        border-width: 1px;
+                                                        border-color: #00000020;
+                                                        background: #fafafa;
+                                                        clip: true;
+                                                        if root.has-image : Image {
+                                                            source: root.image;
+                                                            width: 100%;
+                                                            height: 100%;
+                                                            image-fit: contain;
+                                                        }
+                                                        Rectangle {
+                                                            x: parent.width - self.width - 4px;
+                                                            y: 4px;
+                                                            height: 14px;
+                                                            background: #00000060;
+                                                            border-radius: 7px;
+                                                            HorizontalLayout {
+                                                                padding-left: 4px;
+                                                                padding-right: 4px;
+                                                                Text {
+                                                                    text: (root.page + 1 + row-idx * 3 + col-idx <= root.total-pages.to-float())
+                                                                        ? "" + (root.page + 1 + row-idx * 3 + col-idx)
+                                                                        : "-";
+                                                                    color: #ffffff;
+                                                                    font-size: 8px;
+                                                                    font-weight: 600;
+                                                                    vertical-alignment: center;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
 
-                                // 2. Kopya Sayısı (Copies)
-                                Text {
-                                    text: root.text-copies;
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
+                                // Sayfa Gezinme ve Rozet Barı - Yatay Ortalanmış
                                 HorizontalLayout {
-                                    spacing: 6px;
+                                    alignment: center;
+                                    spacing: 12px;
+
                                     TextButton {
-                                        text: "-";
-                                        enabled: root.copies > 1;
-                                        clicked => { root.copies = Math.max(1, root.copies - 1); }
+                                        text: root.text-previous != "" ? root.text-previous : "Önceki";
+                                        enabled: root.page > 0;
+                                        compact: true;
+                                        clicked => { root.previous(); }
                                     }
+
                                     Rectangle {
-                                        width: 52px;
-                                        height: ThemeTokens.control-height;
-                                        border-radius: ThemeTokens.control-radius;
+                                        height: 26px;
                                         background: ThemeTokens.control;
+                                        border-radius: 13px;
                                         border-width: 1px;
                                         border-color: ThemeTokens.stroke;
-                                        Text {
-                                            text: "" + root.copies;
-                                            color: ThemeTokens.text;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            alignment: center;
+                                            Text {
+                                                text: (root.text-page != "" ? root.text-page : "Sayfa") + " " + (root.page + 1) + " / " + root.total-pages;
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                                vertical-alignment: center;
+                                            }
                                         }
                                     }
-                                    TextButton {
-                                        text: "+";
-                                        enabled: root.copies < 99;
-                                        clicked => { root.copies = Math.min(99, root.copies + 1); }
-                                    }
-                                }
 
-                                // 3. Sayfa Aralığı (Tümü / Geçerli / Özel)
-                                Text {
-                                    text: root.text-page-range != "" ? root.text-page-range : "Sayfa Aralığı";
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
-                                HorizontalLayout {
-                                    spacing: 5px;
                                     TextButton {
-                                        text: root.text-all-pages;
-                                        active: root.range-mode == 0;
-                                        clicked => {
-                                            root.range-mode = 0;
-                                            root.range = "1-" + root.total-pages;
-                                            root.range-changed(root.range);
-                                        }
-                                    }
-                                    TextButton {
-                                        text: root.text-current-page;
-                                        active: root.range-mode == 1;
-                                        clicked => {
-                                            root.range-mode = 1;
-                                            root.range = "" + (root.page + 1);
-                                            root.range-changed(root.range);
-                                        }
-                                    }
-                                    TextButton {
-                                        text: root.text-custom-range;
-                                        active: root.range-mode == 2;
-                                        clicked => { root.range-mode = 2; }
-                                    }
-                                }
-                                if root.range-mode == 2 : VerticalLayout {
-                                    spacing: 4px;
-                                    Rectangle {
-                                        border-radius: ThemeTokens.control-radius;
-                                        border-width: !root.range-valid ? 1.5px : 0px;
-                                        border-color: #e03131;
-                                        LineEdit {
-                                            text <=> root.range;
-                                            placeholder-text: root.text-range-placeholder != "" ? root.text-range-placeholder : "1-3, 5, 8-10";
-                                            accessible-label: root.text-range-accessible;
-                                            accepted => { root.range-changed(root.range); }
-                                            changed text => { root.range-changed(self.text); }
-                                        }
-                                    }
-                                    if !root.range-valid && root.range-error != "" : Text {
-                                        text: root.range-error;
-                                        color: #e03131;
-                                        font-size: 11px;
-                                    }
-                                }
-
-                                // 4. Yönlendirme (Otomatik / Dikey / Yatay)
-                                Text {
-                                    text: root.text-orientation != "" ? root.text-orientation : "Yönlendirme";
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton {
-                                        text: root.text-orientation-auto != "" ? root.text-orientation-auto : "Otomatik";
-                                        active: root.orientation == 0;
-                                        clicked => { root.orientation = 0; root.orientation-changed(0); }
-                                    }
-                                    TextButton {
-                                        text: root.text-orientation-portrait != "" ? root.text-orientation-portrait : "Dikey";
-                                        active: root.orientation == 1;
-                                        clicked => { root.orientation = 1; root.orientation-changed(1); }
-                                    }
-                                    TextButton {
-                                        text: root.text-orientation-landscape != "" ? root.text-orientation-landscape : "Yatay";
-                                        active: root.orientation == 2;
-                                        clicked => { root.orientation = 2; root.orientation-changed(2); }
-                                    }
-                                }
-
-                                // 5. Kağıt Boyutu
-                                Text {
-                                    text: root.text-paper-size;
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton {
-                                        text: "A4";
-                                        active: root.paper-size == 0;
-                                        clicked => { root.paper-size = 0; }
-                                    }
-                                    TextButton {
-                                        text: "Letter";
-                                        active: root.paper-size == 1;
-                                        clicked => { root.paper-size = 1; }
-                                    }
-                                    TextButton {
-                                        text: "Legal";
-                                        active: root.paper-size == 2;
-                                        clicked => { root.paper-size = 2; }
-                                    }
-                                }
-
-                                // 6. Çift Taraflı Yazdırma (Duplex)
-                                Text {
-                                    text: root.text-duplex;
-                                    color: ThemeTokens.text;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                }
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    TextButton {
-                                        text: root.text-duplex-off;
-                                        active: root.duplex == 0;
-                                        clicked => { root.duplex = 0; root.duplex-changed(0); }
-                                    }
-                                    TextButton {
-                                        text: root.text-duplex-long;
-                                        active: root.duplex == 1;
-                                        clicked => { root.duplex = 1; root.duplex-changed(1); }
-                                    }
-                                    TextButton {
-                                        text: root.text-duplex-short;
-                                        active: root.duplex == 2;
-                                        clicked => { root.duplex = 2; root.duplex-changed(2); }
+                                        text: root.text-next != "" ? root.text-next : "Sonraki";
+                                        enabled: root.page + 1 < root.total-pages.to-float();
+                                        compact: true;
+                                        clicked => { root.next(); }
                                     }
                                 }
                             }
                         }
                     }
 
-                    // Footer Divider & Action Buttons
-                    Rectangle { height: 1px; background: ThemeTokens.divider; }
+                    // Sağ Sütun: Ayarlar ve DialogFooter (320px)
+                    VerticalLayout {
+                        width: 320px;
+                        spacing: 12px;
 
-                    DialogFooter {
-                        TextButton {
-                            text: root.text-cancel != "" ? root.text-cancel : "İptal";
-                            clicked => { root.cancel(); }
+                        ScrollView {
+                            horizontal-stretch: 1;
+                            vertical-stretch: 1;
+
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 11px;
+                                padding-right: 8px;
+                                padding-left: 2px;
+                                padding-top: 2px;
+                                padding-bottom: 6px;
+
+                                // 1. Hedef Yazıcı (Kompakt Açılır Kutu)
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: root.text-printer != "" ? root.text-printer : "Yazıcı Seçimi";
+                                        color: ThemeTokens.text;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
+
+                                    Rectangle {
+                                        height: ThemeTokens.control-height;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: printer-btn-touch.pressed ? ThemeTokens.control-pressed
+                                            : (printer-btn-touch.has-hover ? ThemeTokens.control-hover : ThemeTokens.control);
+                                        border-width: 1px;
+                                        border-color: root.printer-dropdown-open ? ThemeTokens.accent : ThemeTokens.stroke;
+                                        animate background { duration: ThemeTokens.motion-fast; }
+
+                                        printer-btn-touch := TouchArea {
+                                            clicked => { root.printer-dropdown-open = !root.printer-dropdown-open; }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            alignment: space-between;
+
+                                            Text {
+                                                text: root.selected-printer >= 0 && root.selected-printer < root.printers.length ? root.printers[root.selected-printer] : (root.text-select-printer != "" ? root.text-select-printer : "Yazıcı seçiniz");
+                                                color: ThemeTokens.text;
+                                                font-size: 12px;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Image {
+                                                source: @image-url("../../../../assets/icons/chevron_down_20_regular.svg");
+                                                width: 16px;
+                                                height: 16px;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: ThemeTokens.text-muted;
+                                                image-fit: contain;
+                                            }
+                                        }
+                                    }
+
+                                    if root.printer-dropdown-open : Rectangle {
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: ThemeTokens.layer-elevated;
+                                        border-width: 1px;
+                                        border-color: ThemeTokens.stroke;
+                                        drop-shadow-blur: 4px;
+                                        drop-shadow-color: ThemeTokens.overlay-shadow;
+
+                                        VerticalLayout {
+                                            padding: 4px;
+                                            spacing: 2px;
+                                            for printer-name[idx] in root.printers : Rectangle {
+                                                height: 30px;
+                                                border-radius: ThemeTokens.control-radius;
+                                                background: root.selected-printer == idx ? ThemeTokens.selection : (p-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                                                animate background { duration: ThemeTokens.motion-fast; }
+
+                                                p-touch := TouchArea {
+                                                    clicked => {
+                                                        root.selected-printer = idx;
+                                                        root.printer-dropdown-open = false;
+                                                    }
+                                                }
+
+                                                HorizontalLayout {
+                                                    padding-left: 8px;
+                                                    padding-right: 8px;
+                                                    spacing: 8px;
+
+                                                    if root.selected-printer == idx : Image {
+                                                        source: @image-url("../../../../assets/icons/checkmark_20_regular.svg");
+                                                        width: 14px;
+                                                        height: 14px;
+                                                        colorize: ThemeTokens.accent;
+                                                        y: (parent.height - self.height) / 2;
+                                                    }
+                                                    if root.selected-printer != idx : Rectangle {
+                                                        width: 14px;
+                                                    }
+
+                                                    Text {
+                                                        text: printer-name;
+                                                        color: root.selected-printer == idx ? ThemeTokens.text : ThemeTokens.text-muted;
+                                                        font-size: 12px;
+                                                        font-weight: root.selected-printer == idx ? 600 : 400;
+                                                        vertical-alignment: center;
+                                                        overflow: elide;
+                                                        horizontal-stretch: 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 2. Kopya Sayısı ([-] [ 1 ] [+])
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: root.text-copies != "" ? root.text-copies : "Kopya Sayısı";
+                                        color: ThemeTokens.text;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        TextButton {
+                                            text: "-";
+                                            enabled: root.copies > 1;
+                                            clicked => { root.copies = Math.max(1, root.copies - 1); }
+                                        }
+                                        Rectangle {
+                                            width: 56px;
+                                            height: ThemeTokens.control-height;
+                                            border-radius: ThemeTokens.control-radius;
+                                            background: ThemeTokens.control;
+                                            border-width: 1px;
+                                            border-color: ThemeTokens.stroke;
+                                            Text {
+                                                text: "" + root.copies;
+                                                color: ThemeTokens.text;
+                                                font-size: 12.5px;
+                                                font-weight: 600;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        TextButton {
+                                            text: "+";
+                                            enabled: root.copies < 99;
+                                            clicked => { root.copies = Math.min(99, root.copies + 1); }
+                                        }
+                                    }
+                                }
+
+                                // 3. Sayfa Aralığı ([Tümü] [Geçerli] [Özel])
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: root.text-page-range != "" ? root.text-page-range : "Sayfa Aralığı";
+                                        color: ThemeTokens.text;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        TextButton {
+                                            text: root.text-all-pages != "" ? root.text-all-pages : "Tümü";
+                                            active: root.range-mode == 0;
+                                            horizontal-stretch: 1;
+                                            clicked => {
+                                                root.range-mode = 0;
+                                                root.range = "1-" + root.total-pages;
+                                                root.range-changed(root.range);
+                                            }
+                                        }
+                                        TextButton {
+                                            text: root.text-current-page != "" ? root.text-current-page : "Geçerli";
+                                            active: root.range-mode == 1;
+                                            horizontal-stretch: 1;
+                                            clicked => {
+                                                root.range-mode = 1;
+                                                root.range = "" + (root.page + 1);
+                                                root.range-changed(root.range);
+                                            }
+                                        }
+                                        TextButton {
+                                            text: root.text-custom-range != "" ? root.text-custom-range : "Özel";
+                                            active: root.range-mode == 2;
+                                            horizontal-stretch: 1;
+                                            clicked => { root.range-mode = 2; }
+                                        }
+                                    }
+                                    if root.range-mode == 2 : VerticalLayout {
+                                        spacing: 4px;
+                                        Rectangle {
+                                            border-radius: ThemeTokens.control-radius;
+                                            border-width: !root.range-valid ? 1.5px : 0px;
+                                            border-color: #e03131;
+                                            LineEdit {
+                                                text <=> root.range;
+                                                placeholder-text: root.text-range-placeholder != "" ? root.text-range-placeholder : "1-3, 5, 8-10";
+                                                accessible-label: root.text-range-accessible;
+                                                accepted => { root.range-changed(root.range); }
+                                                changed text => { root.range-changed(self.text); }
+                                            }
+                                        }
+                                        if !root.range-valid && root.range-error != "" : Text {
+                                            text: root.range-error;
+                                            color: #e03131;
+                                            font-size: 11px;
+                                        }
+                                    }
+                                }
+
+                                // 4. "Daha Fazla Ayar" Akordeonu
+                                VerticalLayout {
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        height: 32px;
+                                        border-radius: ThemeTokens.control-radius;
+                                        background: accordion-touch.pressed ? ThemeTokens.control-pressed
+                                            : (accordion-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                                        animate background { duration: ThemeTokens.motion-fast; }
+
+                                        accordion-touch := TouchArea {
+                                            clicked => { root.more-settings-open = !root.more-settings-open; }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            spacing: 6px;
+                                            alignment: start;
+
+                                            Image {
+                                                source: root.more-settings-open
+                                                    ? @image-url("../../../../assets/icons/chevron_down_20_regular.svg")
+                                                    : @image-url("../../../../assets/icons/chevron_right_16_regular.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: ThemeTokens.text-muted;
+                                                image-fit: contain;
+                                            }
+
+                                            Text {
+                                                text: root.text-more-settings != "" ? root.text-more-settings : "Daha Fazla Ayar";
+                                                color: ThemeTokens.text;
+                                                font-size: 12px;
+                                                font-weight: 600;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    if root.more-settings-open : VerticalLayout {
+                                        spacing: 12px;
+                                        padding-left: 6px;
+
+                                        // Kağıt Boyutu: [A4] [Letter] [Legal]
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            Text {
+                                                text: root.text-paper-size != "" ? root.text-paper-size : "Kağıt Boyutu";
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 5px;
+                                                TextButton {
+                                                    text: "A4";
+                                                    active: root.paper-size == 0;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.paper-size = 0; }
+                                                }
+                                                TextButton {
+                                                    text: "Letter";
+                                                    active: root.paper-size == 1;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.paper-size = 1; }
+                                                }
+                                                TextButton {
+                                                    text: "Legal";
+                                                    active: root.paper-size == 2;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.paper-size = 2; }
+                                                }
+                                            }
+                                        }
+
+                                        // Çift Taraflı Baskı (Duplex): [Tek Taraflı] [Uzun Kenar] [Kısa Kenar]
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            Text {
+                                                text: root.text-duplex != "" ? root.text-duplex : "Çift Taraflı Yazdırma";
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 5px;
+                                                TextButton {
+                                                    text: root.text-duplex-off != "" ? root.text-duplex-off : "Tek Taraflı";
+                                                    active: root.duplex == 0;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.duplex = 0; root.duplex-changed(0); }
+                                                }
+                                                TextButton {
+                                                    text: root.text-duplex-long != "" ? root.text-duplex-long : "Uzun Kenar";
+                                                    active: root.duplex == 1;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.duplex = 1; root.duplex-changed(1); }
+                                                }
+                                                TextButton {
+                                                    text: root.text-duplex-short != "" ? root.text-duplex-short : "Kısa Kenar";
+                                                    active: root.duplex == 2;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.duplex = 2; root.duplex-changed(2); }
+                                                }
+                                            }
+                                        }
+
+                                        // Yönlendirme: [Otomatik] [Dikey] [Yatay]
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            Text {
+                                                text: root.text-orientation != "" ? root.text-orientation : "Yönlendirme";
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 5px;
+                                                TextButton {
+                                                    text: root.text-orientation-auto != "" ? root.text-orientation-auto : "Otomatik";
+                                                    active: root.orientation == 0;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.orientation = 0; root.orientation-changed(0); }
+                                                }
+                                                TextButton {
+                                                    text: root.text-orientation-portrait != "" ? root.text-orientation-portrait : "Dikey";
+                                                    active: root.orientation == 1;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.orientation = 1; root.orientation-changed(1); }
+                                                }
+                                                TextButton {
+                                                    text: root.text-orientation-landscape != "" ? root.text-orientation-landscape : "Yatay";
+                                                    active: root.orientation == 2;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.orientation = 2; root.orientation-changed(2); }
+                                                }
+                                            }
+                                        }
+
+                                        // Ölçekleme: [Sığdır] [%100] [Özel]
+                                        VerticalLayout {
+                                            spacing: 6px;
+                                            Text {
+                                                text: root.text-scale != "" ? root.text-scale : "Ölçekleme";
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 5px;
+                                                TextButton {
+                                                    text: root.text-scale-fit != "" ? root.text-scale-fit : "Sığdır";
+                                                    active: root.scale-mode == 0;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.scale-mode = 0; }
+                                                }
+                                                TextButton {
+                                                    text: "%100";
+                                                    active: root.scale-mode == 1;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.scale-mode = 1; }
+                                                }
+                                                TextButton {
+                                                    text: root.text-scale-custom != "" ? root.text-scale-custom : "Özel";
+                                                    active: root.scale-mode == 2;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.scale-mode = 2; }
+                                                }
+                                            }
+                                            if root.scale-mode == 2 : HorizontalLayout {
+                                                spacing: 6px;
+                                                TextButton {
+                                                    text: "-";
+                                                    enabled: root.custom-scale > 10;
+                                                    clicked => {
+                                                        root.custom-scale = Math.max(10, root.custom-scale - 5);
+                                                        root.custom-scale-str = "" + root.custom-scale;
+                                                    }
+                                                }
+                                                Rectangle {
+                                                    horizontal-stretch: 1;
+                                                    height: ThemeTokens.control-height;
+                                                    border-radius: ThemeTokens.control-radius;
+                                                    background: ThemeTokens.control;
+                                                    border-width: 1px;
+                                                    border-color: ThemeTokens.stroke;
+                                                    HorizontalLayout {
+                                                        padding-left: 8px;
+                                                        padding-right: 8px;
+                                                        alignment: center;
+                                                        LineEdit {
+                                                            text <=> root.custom-scale-str;
+                                                            horizontal-alignment: center;
+                                                            horizontal-stretch: 1;
+                                                            accepted => {
+                                                                root.custom-scale = Math.max(10, Math.min(250, self.text.to-float()));
+                                                                root.custom-scale-str = "" + root.custom-scale;
+                                                            }
+                                                            changed text => {
+                                                                root.custom-scale = Math.max(10, Math.min(250, self.text.to-float()));
+                                                            }
+                                                        }
+                                                        Text {
+                                                            text: "%";
+                                                            color: ThemeTokens.text-muted;
+                                                            font-size: 11px;
+                                                            vertical-alignment: center;
+                                                        }
+                                                    }
+                                                }
+                                                TextButton {
+                                                    text: "+";
+                                                    enabled: root.custom-scale < 250;
+                                                    clicked => {
+                                                        root.custom-scale = Math.min(250, root.custom-scale + 5);
+                                                        root.custom-scale-str = "" + root.custom-scale;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Sayfa Başına Sayfa (N-up): [1] [2] [4] [6]
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            Text {
+                                                text: root.text-n-up != "" ? root.text-n-up : "Sayfa Başına Sayfa";
+                                                color: ThemeTokens.text;
+                                                font-size: 11.5px;
+                                                font-weight: 600;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 5px;
+                                                TextButton {
+                                                    text: "1";
+                                                    active: root.n-up == 0;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.n-up = 0; }
+                                                }
+                                                TextButton {
+                                                    text: "2";
+                                                    active: root.n-up == 1;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.n-up = 1; }
+                                                }
+                                                TextButton {
+                                                    text: "4";
+                                                    active: root.n-up == 2;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.n-up = 2; }
+                                                }
+                                                TextButton {
+                                                    text: "6";
+                                                    active: root.n-up == 3;
+                                                    horizontal-stretch: 1;
+                                                    clicked => { root.n-up = 3; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        TextButton {
-                            text: root.text-continue != "" ? root.text-continue : "Yazdır";
-                            primary: true;
-                            enabled: root.range-valid;
-                            clicked => { root.confirm(); }
+
+                        // Footer Bölücü Çizgisi ve Butonlar
+                        Rectangle {
+                            height: 1px;
+                            background: ThemeTokens.divider;
+                        }
+
+                        DialogFooter {
+                            TextButton {
+                                text: root.text-cancel != "" ? root.text-cancel : "İptal";
+                                clicked => { root.cancel(); }
+                            }
+                            TextButton {
+                                text: root.text-continue != "" ? root.text-continue : "Yazdır";
+                                primary: true;
+                                enabled: root.range-valid;
+                                clicked => { root.confirm(); }
+                            }
                         }
                     }
                 }

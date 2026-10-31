@@ -85,7 +85,7 @@ fn test_parse_print_preview_pages() {
             PageIndex::from_raw(4),
         ])
     );
-    // Empty input returns all pages
+    // Empty or whitespace input returns all pages
     assert_eq!(
         parse_print_preview_pages("", page_count(3)),
         Ok(vec![
@@ -94,19 +94,67 @@ fn test_parse_print_preview_pages() {
             PageIndex::from_raw(2),
         ])
     );
+    assert_eq!(
+        parse_print_preview_pages("   ", page_count(2)),
+        Ok(vec![PageIndex::from_raw(0), PageIndex::from_raw(1)])
+    );
+    // Whitespace within ranges and list
+    assert_eq!(
+        parse_print_preview_pages(" 1 - 3 ,  5 ", pages),
+        Ok(vec![
+            PageIndex::from_raw(0),
+            PageIndex::from_raw(1),
+            PageIndex::from_raw(2),
+            PageIndex::from_raw(4),
+        ])
+    );
+    // Upper boundary limits
+    assert_eq!(
+        parse_print_preview_pages("10", pages),
+        Ok(vec![PageIndex::from_raw(9)])
+    );
+    assert_eq!(
+        parse_print_preview_pages("9-10", pages),
+        Ok(vec![PageIndex::from_raw(8), PageIndex::from_raw(9)])
+    );
+    // Single page document
+    let single_page = page_count(1);
+    assert_eq!(
+        parse_print_preview_pages("1", single_page),
+        Ok(vec![PageIndex::from_raw(0)])
+    );
+    assert_eq!(
+        parse_print_preview_pages("2", single_page),
+        Err("out_of_bounds")
+    );
     // Out of bounds
     assert_eq!(parse_print_preview_pages("11", pages), Err("out_of_bounds"));
     assert_eq!(
         parse_print_preview_pages("1-12", pages),
         Err("out_of_bounds")
     );
+    assert_eq!(
+        parse_print_preview_pages("11-15", pages),
+        Err("out_of_bounds")
+    );
     assert_eq!(parse_print_preview_pages("0", pages), Err("out_of_bounds"));
+    assert_eq!(
+        parse_print_preview_pages("0-3", pages),
+        Err("out_of_bounds")
+    );
     // Invalid characters or formatting
     assert_eq!(parse_print_preview_pages("abc", pages), Err("invalid"));
     assert_eq!(parse_print_preview_pages("5-2", pages), Err("invalid"));
     assert_eq!(parse_print_preview_pages("1--3", pages), Err("invalid"));
     assert_eq!(parse_print_preview_pages("1-", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("-1", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("-", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("--", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("1-3-5", pages), Err("invalid"));
     assert_eq!(parse_print_preview_pages(",,", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages(", 1", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("1 ,", pages), Err("invalid"));
+    assert_eq!(parse_print_preview_pages("1, , 2", pages), Err("invalid"));
 }
 
 #[test]

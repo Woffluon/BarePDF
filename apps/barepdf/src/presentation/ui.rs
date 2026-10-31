@@ -1838,6 +1838,49 @@ pub(crate) fn update_ui_strings(window: &AppWindow, language: ResolvedLanguage) 
         "print.preview.orientation.landscape"
     );
     set_text!(set_text_print_preview_continue, "print.preview.continue");
+    set_text!(set_text_print_preview_printer, "print.preview.printer");
+    set_text!(
+        set_text_print_preview_select_printer,
+        "print.preview.select_printer"
+    );
+    set_text!(set_text_print_preview_copies, "print.preview.copies");
+    set_text!(set_text_print_preview_all_pages, "print.preview.all_pages");
+    set_text!(
+        set_text_print_preview_current_page,
+        "print.preview.current_page"
+    );
+    set_text!(
+        set_text_print_preview_custom_range,
+        "print.preview.custom_range"
+    );
+    set_text!(
+        set_text_print_preview_more_settings,
+        "print.preview.more_settings"
+    );
+    set_text!(
+        set_text_print_preview_paper_size,
+        "print.preview.paper_size"
+    );
+    set_text!(set_text_print_preview_duplex, "print.preview.duplex");
+    set_text!(
+        set_text_print_preview_duplex_off,
+        "print.preview.duplex.off"
+    );
+    set_text!(
+        set_text_print_preview_duplex_long,
+        "print.preview.duplex.long"
+    );
+    set_text!(
+        set_text_print_preview_duplex_short,
+        "print.preview.duplex.short"
+    );
+    set_text!(set_text_print_preview_scale, "print.preview.scale");
+    set_text!(set_text_print_preview_scale_fit, "print.preview.scale.fit");
+    set_text!(
+        set_text_print_preview_scale_custom,
+        "print.preview.scale.custom"
+    );
+    set_text!(set_text_print_preview_n_up, "print.preview.n_up");
     set_text!(set_text_prev_page, "page.previous");
     set_text!(set_text_next_page, "page.next");
     set_text!(set_text_password_title, "password.title");

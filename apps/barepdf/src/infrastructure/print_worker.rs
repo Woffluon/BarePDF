@@ -273,27 +273,50 @@ fn worker_loop(
                                                 progress,
                                                 shutdown,
                                             ),
-                                            None => PrintEvent::Failed {
-                                                job_id,
-                                                message: "print backend is unavailable".into(),
-                                            },
+                                            None => {
+                                                let message =
+                                                    "print backend is unavailable".to_string();
+                                                tracing::error!(
+                                                    job_id = %job_id.get(),
+                                                    error = %message,
+                                                    "Print job failed"
+                                                );
+                                                PrintEvent::Failed { job_id, message }
+                                            }
                                         }
                                     }
-                                    Err(message) => PrintEvent::Failed { job_id, message },
+                                    Err(message) => {
+                                        tracing::error!(
+                                            job_id = %job_id.get(),
+                                            error = %message,
+                                            "Print job failed"
+                                        );
+                                        PrintEvent::Failed { job_id, message }
+                                    }
                                 },
-                                None => PrintEvent::Failed {
-                                    job_id,
-                                    message: "print backend is unavailable".into(),
-                                },
+                                None => {
+                                    let message = "print backend is unavailable".to_string();
+                                    tracing::error!(
+                                        job_id = %job_id.get(),
+                                        error = %message,
+                                        "Print job failed"
+                                    );
+                                    PrintEvent::Failed { job_id, message }
+                                }
                             },
                         }
                     }));
                 let event = match outcome {
                     Ok(event) => event,
-                    Err(_) => PrintEvent::Failed {
-                        job_id,
-                        message: "print worker panicked during execution".to_string(),
-                    },
+                    Err(_) => {
+                        let message = "print worker panicked during execution".to_string();
+                        tracing::error!(
+                            job_id = %job_id.get(),
+                            error = %message,
+                            "Print job failed"
+                        );
+                        PrintEvent::Failed { job_id, message }
+                    }
                 };
                 send_terminal_event(terminal, event, shutdown);
             }
@@ -315,9 +338,18 @@ fn run_job(
 ) -> PrintEvent {
     let job_id = request.id;
     match execute_job(backend, &mut request, progress, shutdown) {
-        Ok(()) => PrintEvent::Finished { job_id },
-        Err(JobFailure::Cancelled) => PrintEvent::Cancelled { job_id },
-        Err(JobFailure::Failed(message)) => PrintEvent::Failed { job_id, message },
+        Ok(()) => {
+            tracing::info!(job_id = %job_id.get(), "Print job completed successfully");
+            PrintEvent::Finished { job_id }
+        }
+        Err(JobFailure::Cancelled) => {
+            tracing::info!(job_id = %job_id.get(), "Print job cancelled by user");
+            PrintEvent::Cancelled { job_id }
+        }
+        Err(JobFailure::Failed(message)) => {
+            tracing::error!(job_id = %job_id.get(), error = %message, "Print job failed");
+            PrintEvent::Failed { job_id, message }
+        }
     }
 }
 
@@ -345,6 +377,15 @@ fn execute_job(
     let total = pages_per_copy
         .checked_mul(u32::from(request.copies.get()))
         .ok_or_else(|| JobFailure::Failed("print page count overflow".into()))?;
+
+    tracing::info!(
+        job_id = %request.id.get(),
+        path = %request.path.display(),
+        copies = request.copies.get(),
+        total_pages = total,
+        "Starting print job"
+    );
+
     let mut sink = request
         .sink
         .take()
@@ -365,6 +406,8 @@ fn execute_job(
                 .map_err(|error| pdf_failure(&error))?;
             let (target_width, target_height) =
                 raster_dimensions(width_points, height_points, dpi)?;
+
+            let render_start = std::time::Instant::now();
             let bitmap = document
                 .render_page(page_index, target_width, target_height, Rotation::Degrees0)
                 .map_err(|error| pdf_failure(&error))?;
@@ -372,8 +415,25 @@ fn execute_job(
             rgba_to_bgra(&mut pixels);
             let page =
                 PrintPage::new(width, height, &pixels).map_err(|error| print_failure(&error))?;
+            let render_duration = render_start.elapsed();
+            tracing::info!(
+                job_id = %request.id.get(),
+                page = page_index.get() + 1,
+                duration_ms = render_duration.as_millis(),
+                "Rendered print page"
+            );
+
+            let spool_start = std::time::Instant::now();
             sink.write_page(page)
                 .map_err(|error| print_failure(&error))?;
+            let spool_duration = spool_start.elapsed();
+            tracing::info!(
+                job_id = %request.id.get(),
+                page = page_index.get() + 1,
+                duration_ms = spool_duration.as_millis(),
+                "Spooled page to printer sink"
+            );
+
             drop(pixels);
             completed = completed.saturating_add(1);
             let _ = progress.try_send(PrintEvent::Progress {
