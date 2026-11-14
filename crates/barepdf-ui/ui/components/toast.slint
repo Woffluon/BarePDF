@@ -15,6 +15,7 @@ export component FloatingToastCard inherits Rectangle {
     callback action();
 
     width: 340px;
+    height: toast-layout.preferred-height;
     y: root.is-open ? root.target-y : (root.target-y - 12px);
     opacity: root.is-open ? 1.0 : 0.0;
     visible: self.opacity > 0.01;
@@ -42,7 +43,7 @@ export component FloatingToastCard inherits Rectangle {
             : (ThemeTokens.dark ? #60cdff : #0078d4)));
     }
 
-    VerticalLayout {
+    toast-layout := VerticalLayout {
         padding-left: 14px;
         padding-right: 12px;
         padding-top: 12px;
@@ -161,14 +162,17 @@ export component FloatingToastCard inherits Rectangle {
 
 export component FloatingPrintCard inherits Rectangle {
     in property <bool> is-open: false;
+    in property <bool> is-active: true;
     in property <string> title: "Yazdırılıyor";
     in property <string> status: "";
     in property <float> progress: 0.0; // 0.0 to 1.0
     in property <string> cancel-label: "İptal";
     in property <length> target-y: 48px;
     callback cancel();
+    callback dismiss();
 
     width: 340px;
+    height: print-layout.preferred-height;
     y: root.is-open ? root.target-y : (root.target-y - 12px);
     opacity: root.is-open ? 1.0 : 0.0;
     visible: self.opacity > 0.01;
@@ -193,14 +197,14 @@ export component FloatingPrintCard inherits Rectangle {
         background: ThemeTokens.accent;
     }
 
-    VerticalLayout {
+    print-layout := VerticalLayout {
         padding-left: 14px;
         padding-right: 12px;
         padding-top: 12px;
         padding-bottom: 12px;
         spacing: 8px;
 
-        // Top Row: Print Icon + Title + Cancel Button
+        // Top Row: Print Icon + Title + (Cancel Button or Dismiss Button)
         HorizontalLayout {
             spacing: 8px;
             alignment: center;
@@ -228,10 +232,33 @@ export component FloatingPrintCard inherits Rectangle {
                 horizontal-stretch: 1;
             }
 
-            TextButton {
+            if root.is-active : TextButton {
                 text: root.cancel-label != "" ? root.cancel-label : "İptal";
                 compact: true;
                 clicked => { root.cancel(); }
+            }
+
+            if !root.is-active : Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: ThemeTokens.control-radius;
+                background: close-touch.pressed ? ThemeTokens.control-pressed
+                    : (close-touch.has-hover ? ThemeTokens.control-hover : #00000000);
+                accessible-role: button;
+                accessible-label: "Kapat";
+                animate background { duration: ThemeTokens.motion-fast; }
+
+                close-touch := TouchArea {
+                    clicked => { root.dismiss(); }
+                }
+
+                Image {
+                    source: @image-url("../../../../assets/icons/dismiss_20_regular.svg");
+                    width: 14px;
+                    height: 14px;
+                    colorize: ThemeTokens.text-muted;
+                    image-fit: contain;
+                }
             }
         }
 

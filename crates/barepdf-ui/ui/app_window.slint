@@ -140,6 +140,7 @@ export component AppWindow inherits Window {
     in property <string> toast-version-diff: "";
     callback request-dismiss-toast();
     callback request-toast-action();
+    callback request-dismiss-print-status();
     in property <bool> print-active: false;
     in property <float> print-progress: 0;
     in property <string> print-status: "";
@@ -2826,11 +2827,13 @@ export component AppWindow inherits Window {
         x: root.width - self.width - 16px;
         target-y: 48px;
         is-open: root.print-active || root.print-status != "";
+        is-active: root.print-active;
         title: root.text-print != "" ? root.text-print : "Yazdırılıyor";
         status: root.print-status != "" ? root.print-status : "Yazıcı kuyruğuna iletildi";
         progress: root.print-progress;
         cancel-label: root.text-cancel-print != "" ? root.text-cancel-print : "İptal";
         cancel => { root.request-cancel-print(); }
+        dismiss => { root.request-dismiss-print-status(); }
     }
 
     // Floating Toast Notification Card (Top-Right)

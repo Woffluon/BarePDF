@@ -8,7 +8,7 @@ use barepdf_platform::printing::{
 use barepdf_platform_windows::{enumerate_installed_printers, WindowsPrinterSink};
 use barepdf_render::{Priority, RenderCommand, RenderJob, RenderKind, RenderScheduler};
 use barepdf_ui::AppWindow;
-use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, Timer, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -589,6 +589,24 @@ pub(super) fn connect_print_callbacks(
             }
         }
     });
+
+    let weak = window.as_weak();
+    window.on_request_dismiss_print_status(move || {
+        if let Some(window) = weak.upgrade() {
+            window.set_print_status(SharedString::default());
+        }
+    });
+}
+
+fn schedule_print_status_dismissal(window: &AppWindow) {
+    let weak = window.as_weak();
+    Timer::single_shot(std::time::Duration::from_secs(4), move || {
+        if let Some(window) = weak.upgrade() {
+            if !window.get_print_active() {
+                window.set_print_status(SharedString::default());
+            }
+        }
+    });
 }
 
 pub(crate) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
@@ -614,6 +632,7 @@ pub(crate) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
                 window_language(window),
                 "print.status.complete",
             )));
+            schedule_print_status_dismissal(window);
         }
         PrintEvent::Cancelled { .. } => {
             window.set_print_active(false);
@@ -622,6 +641,7 @@ pub(crate) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
                 window_language(window),
                 "print.status.cancelled",
             )));
+            schedule_print_status_dismissal(window);
         }
         PrintEvent::Failed { job_id, message } => {
             window.set_print_active(false);
@@ -637,6 +657,7 @@ pub(crate) fn handle_print_event(event: PrintEvent, window: &AppWindow) {
             );
             window.set_print_status(SharedString::from(&formatted_error));
             show_banner(window, formatted_error, false);
+            schedule_print_status_dismissal(window);
         }
     }
 }
