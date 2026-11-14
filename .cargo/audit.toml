@@ -51,6 +51,14 @@ ignore = [
     # RUSTSEC-2026-0372 (Informational: unmaintained): `zvariant_derive`
     # - Dependency path: Transitive compile-time proc-macro for `zvariant`.
     # - Impact analysis: Informational maintenance notice only; compile-time derive macro with no runtime footprint.
+    #   BarePDF does not depend on `zvariant_derive` directly.
     # - Re-evaluate when: Upgrading upstream Linux desktop portal / accessibility dependencies.
     "RUSTSEC-2026-0372",
+
+    # RUSTSEC-2026-0441 (Informational: unmaintained): `pin-utils`
+    # - Dependency path: Transitive via `slint` 1.17.1 (`slint-macros` -> `spin_on`).
+    # - Impact analysis: Informational maintenance notice only; compile-time helper with no CVE.
+    #   Used only within Slint proc-macro expansion at build time.
+    # - Re-evaluate when: Upgrading `slint` to a version that removes `spin_on` / `pin-utils`.
+    "RUSTSEC-2026-0441",
 ]
