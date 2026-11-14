@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use barepdf_core::{EncodedImageFormat, ImageEncoder, RawBitmap};
 use barepdf_platform_windows::WindowsImageEncoder;
 use tempfile::tempdir;

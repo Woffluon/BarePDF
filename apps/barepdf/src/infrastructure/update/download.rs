@@ -397,6 +397,7 @@ mod tests {
         let _ = fs::remove_dir_all(directory);
     }
 
+    #[cfg(windows)]
     #[test]
     fn verified_installer_lock_prevents_concurrent_modification_and_rejects_open_writers() {
         let directory = temporary_directory();
