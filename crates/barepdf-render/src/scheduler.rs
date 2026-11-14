@@ -716,7 +716,10 @@ mod tests {
         for _ in 0..4 {
             let sched = Arc::clone(&scheduler);
             handles.push(thread::spawn(move || {
-                for _ in 0..16 {
+                // Keep total queued Visible commands (4 * 7 + 1 final = 29) below the
+                // bounded(32) visible/critical channel capacity so CI worker scheduling
+                // delays cannot cause a spurious TrySendError::Full failure.
+                for _ in 0..7 {
                     let gen = sched.bump_generation();
                     let _ =
                         sched.send_command(RenderCommand::RenderPage(job(gen, RenderKind::Page)));
@@ -726,6 +729,7 @@ mod tests {
         for handle in handles {
             handle.join().expect("concurrent bump/send thread succeeds");
         }
+        while let Ok(Some(_)) = scheduler.try_recv_event() {}
 
         let final_gen = scheduler.bump_generation();
         assert!(

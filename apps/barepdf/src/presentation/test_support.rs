@@ -34,6 +34,14 @@ where
         .expect("UI test worker should report completion")
     {
         Ok(()) => {}
-        Err(payload) => std::panic::resume_unwind(payload),
+        Err(payload) => {
+            if let Some(msg) = payload.downcast_ref::<&str>() {
+                panic!("UI test thread panicked: {msg}");
+            } else if let Some(msg) = payload.downcast_ref::<String>() {
+                panic!("UI test thread panicked: {msg}");
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }

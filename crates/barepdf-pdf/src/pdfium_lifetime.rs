@@ -35,6 +35,15 @@ pub fn resolve_pdfium_library_path_with_policy(
 
     #[cfg(target_os = "linux")]
     {
+        let appimage_lib = exe
+            .parent()
+            .and_then(|d| d.parent())
+            .map(|d| d.join("lib").join(dll_name))
+            .filter(|path| path.exists());
+        if appimage_lib.is_some() {
+            return appimage_lib;
+        }
+
         let system_path = PathBuf::from("/usr/lib/barepdf").join(dll_name);
         if system_path.exists() {
             return Some(system_path);
@@ -146,6 +155,25 @@ mod tests {
         assert_eq!(
             resolve_pdfium_library_path_with_policy(&fake_exe, dll_name, true),
             Some(sibling)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolve_pdfium_library_path_with_policy_resolves_linux_appimage_lib_path() {
+        let temp = tempdir().expect("create temp dir");
+        let bin_dir = temp.path().join("usr/bin");
+        let lib_dir = temp.path().join("usr/lib");
+        fs::create_dir_all(&bin_dir).expect("create usr/bin dir");
+        fs::create_dir_all(&lib_dir).expect("create usr/lib dir");
+        let fake_exe = bin_dir.join("barepdf");
+        fs::write(&fake_exe, b"").expect("write fake exe");
+        let bundled_lib = lib_dir.join("libpdfium.so");
+        fs::write(&bundled_lib, b"test-lib").expect("write bundled lib");
+
+        assert_eq!(
+            resolve_pdfium_library_path_with_policy(&fake_exe, "libpdfium.so", false),
+            Some(bundled_lib)
         );
     }
 
