@@ -815,14 +815,25 @@ fn test_save_with_annotations_atomic_write_preserves_original_on_failure() {
     let source = dir.path().join("source.pdf");
     create_test_pdf(&source, 1);
 
-    let output = dir.path().join("destination.pdf");
+    let output_dir = if cfg!(windows) {
+        dir.path().to_path_buf()
+    } else {
+        let protected = dir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected dir");
+        protected
+    };
+    let output = output_dir.join("destination.pdf");
     let original_content = b"ORIGINAL_IMPORTANT_DOCUMENT_BYTES_NOT_ZERO";
     std::fs::write(&output, original_content).expect("write original destination");
 
-    // Make destination read-only so write/rename fails
-    let mut perms = std::fs::metadata(&output).expect("metadata").permissions();
+    // Make destination read-only on Windows, or its parent directory read-only on POSIX,
+    // so writing/replacing fails cleanly without touching the original file.
+    let protected_path = if cfg!(windows) { &output } else { &output_dir };
+    let mut perms = std::fs::metadata(protected_path)
+        .expect("metadata")
+        .permissions();
     perms.set_readonly(true);
-    std::fs::set_permissions(&output, perms).expect("set readonly");
+    std::fs::set_permissions(protected_path, perms).expect("set readonly");
 
     let annotations = DocumentAnnotations {
         highlights: Vec::new(),
@@ -838,9 +849,11 @@ fn test_save_with_annotations_atomic_write_preserves_original_on_failure() {
     );
 
     // Restore permissions so file inspection and tempdir cleanup succeed
-    let mut restore_perms = std::fs::metadata(&output).expect("metadata").permissions();
+    let mut restore_perms = std::fs::metadata(protected_path)
+        .expect("metadata")
+        .permissions();
     restore_perms.set_readonly(false);
-    let _ = std::fs::set_permissions(&output, restore_perms);
+    let _ = std::fs::set_permissions(protected_path, restore_perms);
 
     // Verify original content is completely intact and never truncated
     let current_content = std::fs::read(&output).expect("read output after failed save");
@@ -850,7 +863,7 @@ fn test_save_with_annotations_atomic_write_preserves_original_on_failure() {
     );
 
     // Verify no temporary files remain in output directory
-    let temp_files: Vec<_> = std::fs::read_dir(dir.path())
+    let temp_files: Vec<_> = std::fs::read_dir(&output_dir)
         .expect("read dir")
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
