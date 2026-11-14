@@ -5,6 +5,8 @@ on:
     branches: [ "**" ]
   pull_request:
     branches: [ "**" ]
+  schedule:
+    - cron: '0 4 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -36,6 +38,9 @@ jobs:
 
       - name: Install website dependencies
         run: pnpm --dir website install --frozen-lockfile
+
+      - name: Audit website dependencies
+        run: pnpm --dir website audit --audit-level=high
 
       - name: Type-check and build website
         env:
@@ -81,7 +86,7 @@ jobs:
         run: cargo clippy --workspace --lib --bins --all-features --locked -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
           tool: cargo-audit@0.22.0
 
@@ -89,8 +94,12 @@ jobs:
         run: cargo audit --deny warnings
 
   rust-tests:
-    name: Rust Unit & Integration Tests
-    runs-on: windows-latest
+    name: Rust Unit & Integration Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
       - name: Checkout repository
@@ -107,15 +116,37 @@ jobs:
       - name: Cargo Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      - name: Fetch verified PDFium runtime
+      - name: Install Linux System Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev xvfb
+
+      - name: Fetch verified PDFium runtime (Windows)
+        if: runner.os == 'Windows'
         shell: powershell
         run: |
           powershell -File packaging/windows/scripts/fetch-pdfium.ps1 -Destination target/debug/pdfium.dll
           New-Item -ItemType Directory -Path target/debug/deps -Force | Out-Null
           Copy-Item target/debug/pdfium.dll -Destination target/debug/deps/pdfium.dll -Force
 
-      - name: Unit & Integration Tests
+      - name: Download Pinned Pdfium Linux Binary
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p target/debug/deps
+          curl -fsSL -o target/debug/pdfium-linux-x64.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          tar -xzf target/debug/pdfium-linux-x64.tgz -C target/debug lib/libpdfium.so
+          mv target/debug/lib/libpdfium.so target/debug/libpdfium.so
+          cp target/debug/libpdfium.so target/debug/deps/libpdfium.so
+          rm -rf target/debug/lib target/debug/pdfium-linux-x64.tgz
+
+      - name: Unit & Integration Tests (Windows)
+        if: runner.os == 'Windows'
         run: cargo test --workspace --all-features --locked
+
+      - name: Unit & Integration Tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --workspace --exclude barepdf-thumbnail --all-features --locked
 
   windows-build-and-package:
     name: Windows Package & Installer Test
@@ -151,6 +182,30 @@ jobs:
       - name: Build Portable Package
         shell: powershell
         run: powershell -File packaging/windows/scripts/build-portable.ps1
+
+      - name: Smoke Test Portable Package
+        shell: powershell
+        run: |
+          $Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $Version = ($Metadata.packages | Where-Object { $_.name -eq "barepdf" } | Select-Object -First 1).version
+          if (-not $Version) { throw "barepdf package version not found" }
+          $ZipPath = "target/release/portable/BarePDF-Portable-x64-v$Version.zip"
+          $TempDir = Join-Path $env:RUNNER_TEMP "barepdf-portable-smoke"
+          if (Test-Path -LiteralPath $TempDir) {
+            Remove-Item -LiteralPath $TempDir -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $ZipPath -DestinationPath $TempDir -Force
+          try {
+            $ExePath = Join-Path $TempDir "BarePDF.exe"
+            $Proc = Start-Process -FilePath $ExePath -ArgumentList "--smoke-test" -WindowStyle Hidden -Wait -PassThru
+            if ($Proc.ExitCode -ne 0) {
+              throw "Portable BarePDF.exe --smoke-test failed with exit code $($Proc.ExitCode)"
+            }
+          } finally {
+            if (Test-Path -LiteralPath $TempDir) {
+              Remove-Item -LiteralPath $TempDir -Recurse -Force
+            }
+          }
 
       - name: Compile Windows Installer
         shell: powershell
@@ -202,7 +257,7 @@ jobs:
           sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libgl1-mesa-dev libgbm-dev libfuse2 file jq
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
           tool: cargo-deb
 
@@ -241,6 +296,26 @@ jobs:
           chmod +x AppDir/AppRun
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "BarePDF-${VERSION}-x86_64.AppImage"
 
+      - name: Smoke Test Debian Package (.deb)
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="barepdf") | .version')
+          DEB_PATH="target/debian/barepdf_${VERSION}_amd64.deb"
+          DEB_TMP=$(mktemp -d)
+          dpkg-deb -x "$DEB_PATH" "$DEB_TMP"
+          test -x "$DEB_TMP/usr/bin/barepdf"
+          test -f "$DEB_TMP/usr/lib/barepdf/libpdfium.so"
+          rm -rf "$DEB_TMP"
+          sudo apt-get install -y "./${DEB_PATH}"
+          test -f /usr/lib/barepdf/libpdfium.so
+          /usr/bin/barepdf --smoke-test
+          sudo dpkg -r barepdf
+          test ! -e /usr/lib/barepdf/libpdfium.so
+
+      - name: Smoke Test AppImage
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="barepdf") | .version')
+          "./BarePDF-${VERSION}-x86_64.AppImage" --appimage-extract-and-run --smoke-test
+
       - name: Upload Linux Build Artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -248,4 +323,3 @@ jobs:
           path: |
             target/debian/*.deb
             *.AppImage
-

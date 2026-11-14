@@ -358,6 +358,13 @@ try {
         }
     }
 
+    Write-Host "Running installed application smoke test..." -ForegroundColor Cyan
+    $InstalledExe = Join-Path $TestInstallDir "BarePDF.exe"
+    $SmokeTestProc = Start-Process -FilePath $InstalledExe -ArgumentList "--smoke-test" -WindowStyle Hidden -Wait -PassThru
+    if ($SmokeTestProc.ExitCode -ne 0) {
+        throw "Installed BarePDF.exe --smoke-test exited with non-zero code: $($SmokeTestProc.ExitCode)"
+    }
+
     $Uninstaller = Join-Path $TestInstallDir "unins000.exe"
     if (-not (Test-Path -LiteralPath $Uninstaller -PathType Leaf)) {
         throw "Uninstaller not found: $Uninstaller"
