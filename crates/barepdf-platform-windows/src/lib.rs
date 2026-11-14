@@ -87,7 +87,7 @@ pub fn reduce_visual_effects() -> bool {
     should_reduce_visual_effects(high_contrast_active, animations_enabled)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn should_reduce_visual_effects(
     high_contrast_active: Option<bool>,
     animations_enabled: Option<bool>,
