@@ -37,8 +37,9 @@ fn resolve_total_ram_mb(env_override: Option<&str>, platform_ram_mb: Option<u64>
         return mb;
     }
 
-    detect_system_ram_mb()
-        .or_else(|| platform_ram_mb.filter(|&mb| mb > 0))
+    platform_ram_mb
+        .filter(|&mb| mb > 0)
+        .or_else(detect_system_ram_mb)
         .unwrap_or(4096)
 }
 

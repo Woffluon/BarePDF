@@ -353,7 +353,9 @@ fn write_dqt(out: &mut Vec<u8>, table_id: u8, zigzag_qt: &[u8; 64]) {
 }
 
 fn write_dht(out: &mut Vec<u8>, class_and_id: u8, bits: &[u8; 16], vals: &[u8]) {
-    let len = u16::try_from(3 + 16 + vals.len()).expect("DHT length fits in u16");
+    let Ok(len) = u16::try_from(3 + 16 + vals.len()) else {
+        return;
+    };
     out.extend_from_slice(&[0xFF, 0xC4]);
     write_u16_be(out, len);
     out.push(class_and_id);
