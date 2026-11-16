@@ -115,6 +115,12 @@ pub enum RenderCommand {
         query: String,
         range: Option<PageRange>,
     },
+    TrimCache {
+        document_id: DocumentId,
+        keep_start: u32,
+        keep_end: u32,
+        evict_inactive_documents: bool,
+    },
     CloseDocument(DocumentId),
     Shutdown,
 }

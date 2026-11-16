@@ -1,0 +1,177 @@
+// Bağımsız Tasarım Taslağı — Faz 5 (docs/analiz/05-oneriler.md)
+// Not: slint-viewer / slint-lsp kurulu olmadığı için derleme/çalıştırma doğrulaması yapılmamıştır.
+// Kapsam: FocusScope + Esc kapatma destekli kanonik modal çerçeve, assertif live-region
+//        hata şeridi, sürükle-bırak yanına klavye dostu Browse yedek düğmesi ve
+//        760x520 pencere sınırında kırpmasız ScrollView duyarlı Crop yerleşimi.
+
+import { ScrollView } from "std-widgets.slint";
+import { PrototypeTokens, ActionButton } from "./accessible_controls.slint";
+
+export component AccessibleDropZone inherits Rectangle {
+    in property <string> drop-hint: "Drop PDF file here";
+    in property <string> browse-label: "Browse PDF…";
+    in property <string> selected-path: "";
+    callback browse-clicked;
+
+    min-height: 76px;
+    border-radius: PrototypeTokens.control-radius;
+    border-width: 1px;
+    border-color: PrototypeTokens.stroke-control;
+    background: PrototypeTokens.control;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: selected-path != "" ? selected-path : root.drop-hint;
+                color: selected-path != "" ? PrototypeTokens.text : PrototypeTokens.text-subtle;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+
+        // Sürükle-bırak gerektiren işlemlerde klavye/ekran okuyucu erişilebilirliği için zorunlu yedek CTA
+        ActionButton {
+            label: root.browse-label;
+            clicked => { root.browse-clicked(); }
+        }
+    }
+}
+
+export component ResponsiveToolsModalShell inherits Rectangle {
+    in-out property <bool> is-open: false;
+    in property <string> modal-title: "PDF Tools";
+    in property <string> error-message: "";
+    in property <string> apply-label: "Apply";
+    in property <string> close-label: "Close";
+
+    callback apply-clicked;
+    callback closed;
+
+    forward-focus: modal-fs;
+
+    if is-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: PrototypeTokens.scrim-modal;
+
+        TouchArea {
+            clicked => {
+                root.is-open = false;
+                root.closed();
+            }
+        }
+
+        modal-fs := FocusScope {
+            x: (parent.width - shell.width) / 2;
+            y: (parent.height - shell.height) / 2;
+            width: shell.width;
+            height: shell.height;
+            accessible-role: none;
+
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.is-open = false;
+                    root.closed();
+                    return accept;
+                }
+                return reject;
+            }
+
+            // 760x520 pencere altında kenarlardan kırpılmayı önleyen esnek sınırlar
+            shell := Rectangle {
+                width: min(840px, max(480px, parent.width - 32px));
+                height: min(560px, max(360px, parent.height - 32px));
+                border-radius: PrototypeTokens.overlay-radius;
+                background: PrototypeTokens.layer;
+                border-width: 1px;
+                border-color: PrototypeTokens.stroke-control;
+
+                TouchArea {}
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    // Başlık şeridi
+                    HorizontalLayout {
+                        Text {
+                            text: root.modal-title;
+                            color: PrototypeTokens.text;
+                            font-size: 16px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        ActionButton {
+                            label: "×";
+                            accessible-name: root.close-label;
+                            min-width: 32px;
+                            clicked => {
+                                root.is-open = false;
+                                root.closed();
+                            }
+                        }
+                    }
+
+                    // Ekran okuyucular için assertif canlı hata duyurusu (live region)
+                    if error-message != "": Rectangle {
+                        min-height: 36px;
+                        border-radius: PrototypeTokens.control-radius;
+                        border-width: 1px;
+                        border-color: PrototypeTokens.danger;
+                        background: PrototypeTokens.control;
+                        accessible-role: text;
+                        accessible-live-region: assertive;
+                        accessible-label: root.error-message;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            Text {
+                                text: root.error-message;
+                                color: PrototypeTokens.danger;
+                                font-size: 12px;
+                                font-weight: 600;
+                                wrap: word-wrap;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Crop / Form içeriğini dar pencerelerde dikey kaydırma içine alır
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 12px;
+                            AccessibleDropZone {}
+                            @children
+                        }
+                    }
+
+                    // Alt eylem çubuğu
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton {
+                            label: root.close-label;
+                            clicked => {
+                                root.is-open = false;
+                                root.closed();
+                            }
+                        }
+                        ActionButton {
+                            label: root.apply-label;
+                            primary: true;
+                            clicked => { root.apply-clicked(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -758,4 +758,17 @@ mod tests {
             other => panic!("expected inverted PageRendered event, got {other:?}"),
         }
     }
+
+    #[test]
+    fn scheduler_accepts_trim_cache_command() {
+        let scheduler = scheduler();
+        open_document(&scheduler, DocumentId::new(7));
+
+        assert!(scheduler.send_command(RenderCommand::TrimCache {
+            document_id: DocumentId::new(7),
+            keep_start: 0,
+            keep_end: 4,
+            evict_inactive_documents: true,
+        }));
+    }
 }

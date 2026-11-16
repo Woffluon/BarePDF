@@ -1,0 +1,196 @@
+// Bağımsız Tasarım Taslağı — Faz 5 (docs/analiz/05-oneriler.md)
+// Not: slint-viewer / slint-lsp kurulu olmadığı için derleme/çalıştırma doğrulaması yapılmamıştır.
+// Kapsam: Ölü PreferencesDialog + Ayarlar Flyout'unu tek i18n uyumlu, klavye destekli
+//        Tercihler ve Hakkında panelinde birleştiren tasarım taslağı.
+
+import { PrototypeTokens, ActionButton, AccessibleFilterPill } from "./accessible_controls.slint";
+
+export component UnifiedPreferencesPanel inherits Rectangle {
+    in-out property <bool> is-open: false;
+    in-out property <int> theme-mode: 0;       // 0: System, 1: Light, 2: Dark
+    in-out property <int> paper-tint: 0;       // 0: Normal, 1: Sepia, 2: Night, 3: Amber
+    in-out property <bool> invert-colors: false;
+    in-out property <int> language-index: 0;   // 0: English, 1: Türkçe
+    in-out property <bool> updates-opted-in: false;
+
+    // Tüm etiketler barepdf_i18n üzerinden beslenmek üzere dışa açık property olarak tanımlanır
+    in property <string> label-title: "Preferences";
+    in property <string> label-theme: "Theme";
+    in property <[string]> labels-theme: ["System", "Light", "Dark"];
+    in property <string> label-tint: "Paper Tint";
+    in property <[string]> labels-tint: ["Normal", "Sepia", "Night", "Amber"];
+    in property <string> label-invert: "Invert document colors";
+    in property <string> label-language: "Language";
+    in property <string> label-updates: "Update check (opt-in)";
+    in property <string> label-check-updates: "Check for Updates";
+    in property <string> label-version: "Version 1.25.3 · Offline-first PDF";
+    in property <string> label-close: "Close";
+
+    callback theme-changed(int);
+    callback tint-changed(int);
+    callback invert-toggled(bool);
+    callback language-changed(int);
+    callback check-updates-requested;
+    callback closed;
+
+    if is-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: PrototypeTokens.scrim-modal;
+
+        TouchArea {
+            clicked => {
+                root.is-open = false;
+                root.closed();
+            }
+        }
+
+        fs := FocusScope {
+            x: (parent.width - card.width) / 2;
+            y: (parent.height - card.height) / 2;
+            width: card.width;
+            height: card.height;
+
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.is-open = false;
+                    root.closed();
+                    return accept;
+                }
+                return reject;
+            }
+
+            card := Rectangle {
+                width: min(460px, parent.width - 32px);
+                height: col.preferred-height;
+                border-radius: PrototypeTokens.overlay-radius;
+                background: PrototypeTokens.layer;
+                border-width: 1px;
+                border-color: PrototypeTokens.stroke-control;
+
+                TouchArea {} // Kart içi tıklamanın scrim'e sızmasını engeller
+
+                col := VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        Text {
+                            text: root.label-title;
+                            color: PrototypeTokens.text;
+                            font-size: 16px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        ActionButton {
+                            label: "×";
+                            accessible-name: root.label-close;
+                            min-width: 32px;
+                            clicked => {
+                                root.is-open = false;
+                                root.closed();
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: PrototypeTokens.divider; }
+
+                    // Tema grubu
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: root.label-theme; color: PrototypeTokens.text-muted; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for opt[idx] in root.labels-theme: AccessibleFilterPill {
+                                label: opt;
+                                active: root.theme-mode == idx;
+                                clicked => {
+                                    root.theme-mode = idx;
+                                    root.theme-changed(idx);
+                                }
+                            }
+                        }
+                    }
+
+                    // Kağıt tonu grubu
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: root.label-tint; color: PrototypeTokens.text-muted; font-size: 12px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for opt[idx] in root.labels-tint: AccessibleFilterPill {
+                                label: opt;
+                                active: root.paper-tint == idx;
+                                clicked => {
+                                    root.paper-tint = idx;
+                                    root.tint-changed(idx);
+                                }
+                            }
+                        }
+                    }
+
+                    // Ters renk & Dil
+                    HorizontalLayout {
+                        spacing: 8px;
+                        AccessibleFilterPill {
+                            label: root.label-invert;
+                            active: root.invert-colors;
+                            clicked => {
+                                root.invert-colors = !root.invert-colors;
+                                root.invert-toggled(root.invert-colors);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: root.label-language; color: PrototypeTokens.text-muted; font-size: 12px; vertical-alignment: center; }
+                        AccessibleFilterPill {
+                            label: "EN";
+                            active: root.language-index == 0;
+                            clicked => {
+                                root.language-index = 0;
+                                root.language-changed(0);
+                            }
+                        }
+                        AccessibleFilterPill {
+                            label: "TR";
+                            active: root.language-index == 1;
+                            clicked => {
+                                root.language-index = 1;
+                                root.language-changed(1);
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: PrototypeTokens.divider; }
+
+                    // Çevrimdışı öncelikli güncelleme opt-in + sürüm bilgisi
+                    HorizontalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text { text: root.label-updates; color: PrototypeTokens.text; font-size: 12px; font-weight: 600; }
+                            Text { text: root.label-version; color: PrototypeTokens.text-subtle; font-size: 11px; }
+                        }
+                        ActionButton {
+                            label: root.label-check-updates;
+                            clicked => { root.check-updates-requested(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton {
+                            label: root.label-close;
+                            primary: true;
+                            clicked => {
+                                root.is-open = false;
+                                root.closed();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

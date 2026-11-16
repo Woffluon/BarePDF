@@ -4,15 +4,44 @@ export interface BenchmarkMetrics {
     os: string;
     processor: string;
     processorCount: number;
+    totalPhysicalRamMB?: number;
     fixture: string;
+    multiPageFixturePages?: number;
+    scrollSteps?: number;
   };
   metrics: {
+    coldStartupMs?: number;
+    hotStartup?: {
+      p50: number;
+      p95: number;
+      avg: number;
+      min: number;
+      max: number;
+      samples: number;
+    };
     idle: {
       privateBytesMB: number;
       workingSetMB: number;
       cpuPercent: number;
     };
     documentLoaded: {
+      privateBytesMB: number;
+      workingSetMB: number;
+      idleCpuPercent: number;
+    };
+    multiPageLoaded?: {
+      pages: number;
+      privateBytesMB: number;
+      workingSetMB: number;
+      idleCpuPercent: number;
+    };
+    afterRapidScroll?: {
+      scrollSteps: number;
+      startPage?: number;
+      endPage?: number;
+      scrollCpuMs: number;
+      peakPrivateBytesMB: number;
+      peakWorkingSetMB: number;
       privateBytesMB: number;
       workingSetMB: number;
       idleCpuPercent: number;

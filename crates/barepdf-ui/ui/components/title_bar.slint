@@ -59,8 +59,8 @@ export component TitleBar inherits Rectangle {
         Flickable {
             width: min(tabs-layout.preferred-width, max(0px, root.width - 256px));
             height: parent.height;
-            viewport-width: tabs-layout.preferred-width;
-            viewport-height: parent.height;
+            content-width: tabs-layout.preferred-width;
+            content-height: parent.height;
             interactive: false;
 
             tabs-layout := HorizontalLayout {

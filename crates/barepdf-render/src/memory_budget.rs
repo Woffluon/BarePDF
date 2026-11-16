@@ -9,7 +9,13 @@ pub struct SystemHardwareProfile {
 impl SystemHardwareProfile {
     #[must_use]
     pub fn detect() -> Self {
-        let total_ram_mb = detect_system_ram_mb().unwrap_or(4096);
+        Self::detect_with_platform_ram(None)
+    }
+
+    #[must_use]
+    pub fn detect_with_platform_ram(platform_ram_mb: Option<u64>) -> Self {
+        let env_ram = std::env::var("BAREPDF_TOTAL_RAM_MB").ok();
+        let total_ram_mb = resolve_total_ram_mb(env_ram.as_deref(), platform_ram_mb);
         Self {
             total_ram_mb,
             primary_screen_dpi: 96.0,
@@ -23,10 +29,25 @@ impl Default for SystemHardwareProfile {
     }
 }
 
+fn resolve_total_ram_mb(env_override: Option<&str>, platform_ram_mb: Option<u64>) -> u64 {
+    if let Some(mb) = env_override
+        .and_then(|val| val.trim().parse::<u64>().ok())
+        .filter(|&mb| mb > 0)
+    {
+        return mb;
+    }
+
+    detect_system_ram_mb()
+        .or_else(|| platform_ram_mb.filter(|&mb| mb > 0))
+        .unwrap_or(4096)
+}
+
 fn detect_system_ram_mb() -> Option<u64> {
     if let Ok(val) = std::env::var("BAREPDF_TOTAL_RAM_MB") {
         if let Ok(mb) = val.trim().parse::<u64>() {
-            return Some(mb);
+            if mb > 0 {
+                return Some(mb);
+            }
         }
     }
 
@@ -50,15 +71,15 @@ fn detect_system_ram_mb() -> Option<u64> {
 #[must_use]
 pub fn calculate_adaptive_memory_budget(profile: &SystemHardwareProfile) -> MemoryBudget {
     let final_mb = if profile.total_ram_mb <= 1024 {
-        64
+        32
     } else if profile.total_ram_mb <= 2048 {
-        128
+        48
     } else if profile.total_ram_mb <= 4096 {
-        256
+        64
     } else if profile.total_ram_mb <= 8192 {
-        384
+        96
     } else {
-        1024
+        128
     };
 
     MemoryBudget::new(final_mb * 1024 * 1024)
@@ -83,31 +104,41 @@ mod tests {
             total_ram_mb: 1024,
             primary_screen_dpi: 96.0,
         });
-        assert_eq!(budget.get(), 64 * 1024 * 1024);
+        assert_eq!(budget.get(), 32 * 1024 * 1024);
 
         let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
             total_ram_mb: 2048,
             primary_screen_dpi: 96.0,
         });
-        assert_eq!(budget.get(), 128 * 1024 * 1024);
+        assert_eq!(budget.get(), 48 * 1024 * 1024);
 
         let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
             total_ram_mb: 4096,
             primary_screen_dpi: 96.0,
         });
-        assert_eq!(budget.get(), 256 * 1024 * 1024);
+        assert_eq!(budget.get(), 64 * 1024 * 1024);
 
         let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
             total_ram_mb: 8192,
             primary_screen_dpi: 96.0,
         });
-        assert_eq!(budget.get(), 384 * 1024 * 1024);
+        assert_eq!(budget.get(), 96 * 1024 * 1024);
 
         let budget = calculate_adaptive_memory_budget(&SystemHardwareProfile {
             total_ram_mb: 16384,
             primary_screen_dpi: 192.0,
         });
-        assert_eq!(budget.get(), 1024 * 1024 * 1024);
+        assert_eq!(budget.get(), 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn resolve_total_ram_mb_prefers_env_override_over_platform_ram() {
+        assert_eq!(resolve_total_ram_mb(Some("2048"), Some(16384)), 2048);
+        assert_eq!(resolve_total_ram_mb(Some(" 8192 "), None), 8192);
+        assert_eq!(resolve_total_ram_mb(Some("invalid"), Some(16384)), 16384);
+        assert_eq!(resolve_total_ram_mb(Some("0"), Some(16384)), 16384);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(resolve_total_ram_mb(None, None), 4096);
     }
 
     #[test]

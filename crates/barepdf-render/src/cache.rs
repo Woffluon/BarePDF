@@ -82,16 +82,44 @@ impl BitmapCache {
     }
 
     pub fn evict_document(&mut self, document_id: DocumentId) {
+        self.remove_matching(|k| k.document_id == document_id);
+    }
+
+    /// Evicts cached bitmaps for `document_id` outside `keep_start..=keep_end`, returning freed bytes.
+    pub fn evict_outside_window(
+        &mut self,
+        document_id: DocumentId,
+        keep_start: u32,
+        keep_end: u32,
+    ) -> usize {
+        self.remove_matching(|k| {
+            k.document_id == document_id && !(keep_start..=keep_end).contains(&k.page_index.get())
+        })
+    }
+
+    /// Evicts cached bitmaps belonging to documents other than `active_document`, returning freed bytes.
+    pub fn evict_other_documents(&mut self, active_document: DocumentId) -> usize {
+        self.remove_matching(|k| k.document_id != active_document)
+    }
+
+    fn remove_matching<F>(&mut self, mut predicate: F) -> usize
+    where
+        F: FnMut(&CacheKey) -> bool,
+    {
         let keys = self
             .cache
             .iter()
-            .filter_map(|(k, _)| (k.document_id == document_id).then_some(*k))
+            .filter_map(|(k, _)| predicate(k).then_some(*k))
             .collect::<Vec<_>>();
+        let mut freed = 0usize;
         for key in keys {
             if let Some(popped) = self.cache.pop(&key) {
-                self.current_bytes = self.current_bytes.saturating_sub(popped.pixels().len());
+                let len = popped.pixels().len();
+                self.current_bytes = self.current_bytes.saturating_sub(len);
+                freed = freed.saturating_add(len);
             }
         }
+        freed
     }
 
     pub fn clear(&mut self) {
@@ -357,5 +385,52 @@ mod tests {
         let miss_invert =
             cache.get_larger_compatible(DocumentId::new(1), 0, Rotation::Degrees0, true, 5, 5);
         assert!(miss_invert.is_none());
+    }
+
+    #[test]
+    fn evict_outside_window_removes_distant_pages_and_preserves_window() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(100));
+        let mut weak_pages = Vec::new();
+        for page in 0..8 {
+            weak_pages.push(Arc::downgrade(&cache.insert(key(page), bitmap())));
+        }
+        let mut doc2_key = key(0);
+        doc2_key.document_id = DocumentId::new(2);
+        let weak_doc2 = Arc::downgrade(&cache.insert(doc2_key, bitmap()));
+        assert_eq!(cache.current_bytes(), 36);
+
+        // Keep pages 3..=5 for document 1 (pages 0..=2 and 6..=7 are evicted)
+        let freed = cache.evict_outside_window(DocumentId::new(1), 3, 5);
+        assert_eq!(freed, 20);
+        assert_eq!(cache.current_bytes(), 16);
+
+        for (page, weak) in weak_pages.into_iter().enumerate() {
+            let page_u32 = page as u32;
+            if (3..=5).contains(&page_u32) {
+                assert!(cache.get(&key(page_u32)).is_some());
+                assert!(weak.upgrade().is_some());
+            } else {
+                assert!(cache.get(&key(page_u32)).is_none());
+                assert!(weak.upgrade().is_none());
+            }
+        }
+        // Other document stays intact
+        assert!(cache.get(&doc2_key).is_some());
+        assert!(weak_doc2.upgrade().is_some());
+    }
+
+    #[test]
+    fn evict_other_documents_drops_inactive_tabs_and_keeps_active() {
+        let mut cache = BitmapCache::new(MemoryBudget::new(100));
+        let weak_active = Arc::downgrade(&cache.insert(key(2), bitmap()));
+        let mut doc2_key = key(0);
+        doc2_key.document_id = DocumentId::new(2);
+        let weak_other = Arc::downgrade(&cache.insert(doc2_key, bitmap()));
+
+        let freed = cache.evict_other_documents(DocumentId::new(1));
+        assert_eq!(freed, 4);
+        assert_eq!(cache.current_bytes(), 4);
+        assert!(weak_active.upgrade().is_some());
+        assert!(weak_other.upgrade().is_none());
     }
 }

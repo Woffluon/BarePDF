@@ -383,3 +383,8 @@ pub fn send_window_command(_window: WindowHandle<'_>, _command: WindowCommand) -
 pub fn reduce_visual_effects() -> bool {
     false
 }
+
+#[must_use]
+pub fn detect_total_ram_mb() -> Option<u64> {
+    None
+}

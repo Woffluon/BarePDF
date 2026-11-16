@@ -2,6 +2,8 @@
 import { getLatestBenchmarks } from '../lib/benchmarks';
 
 const benchmarks = await getLatestBenchmarks();
+const multiPage = benchmarks?.metrics.multiPageLoaded;
+const afterScroll = benchmarks?.metrics.afterRapidScroll;
 ---
 
 {benchmarks && (
@@ -32,25 +34,49 @@ const benchmarks = await getLatestBenchmarks();
           <div class="metric-card">
             <span class="metric-val">{benchmarks.metrics.idle.privateBytesMB.toFixed(2)} MB</span>
             <span class="metric-label" data-i18n data-en="Idle Private Memory" data-tr="Boşta Özel Bellek">Idle Private Memory</span>
-            <span class="metric-hint" data-i18n data-en="Clean application start, no document loaded" data-tr="Belge yüklenmemiş temiz başlangıç">Clean application start, no document loaded</span>
+            <span class="metric-hint" data-i18n
+              data-en={`Working Set: ${benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB (no document open)`}
+              data-tr={`Çalışma Kümesi: ${benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB (belge açık değil)`}>
+              Working Set: {benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB (no document open)
+            </span>
           </div>
 
           <div class="metric-card">
-            <span class="metric-val">{benchmarks.metrics.documentLoaded.privateBytesMB.toFixed(2)} MB</span>
-            <span class="metric-label" data-i18n data-en="Document Loaded Memory" data-tr="Belge Yüklü Bellek">Document Loaded Memory</span>
-            <span class="metric-hint" data-i18n data-en="With sample PDF loaded in memory" data-tr="Örnek PDF belgesi yüklendiğinde">With sample PDF loaded in memory</span>
+            <span class="metric-val">{(multiPage ?? benchmarks.metrics.documentLoaded).privateBytesMB.toFixed(2)} MB</span>
+            <span class="metric-label" data-i18n
+              data-en={multiPage ? `Multi-Page PDF (${multiPage.pages} Pages)` : 'Document Loaded Memory'}
+              data-tr={multiPage ? `Çok Sayfalı PDF (${multiPage.pages} Sayfa)` : 'Belge Yüklü Bellek'}>
+              {multiPage ? `Multi-Page PDF (${multiPage.pages} Pages)` : 'Document Loaded Memory'}
+            </span>
+            <span class="metric-hint" data-i18n
+              data-en={`Working Set: ${(multiPage ?? benchmarks.metrics.documentLoaded).workingSetMB.toFixed(1)} MB${multiPage ? ` · Single PDF: ${benchmarks.metrics.documentLoaded.privateBytesMB.toFixed(2)} MB` : ''}`}
+              data-tr={`Çalışma Kümesi: ${(multiPage ?? benchmarks.metrics.documentLoaded).workingSetMB.toFixed(1)} MB${multiPage ? ` · Tek PDF: ${benchmarks.metrics.documentLoaded.privateBytesMB.toFixed(2)} MB` : ''}`}>
+              Working Set: {(multiPage ?? benchmarks.metrics.documentLoaded).workingSetMB.toFixed(1)} MB{multiPage ? ` · Single PDF: ${benchmarks.metrics.documentLoaded.privateBytesMB.toFixed(2)} MB` : ''}
+            </span>
           </div>
+
+          {afterScroll ? (
+            <div class="metric-card">
+              <span class="metric-val">{afterScroll.privateBytesMB.toFixed(2)} MB</span>
+              <span class="metric-label" data-i18n data-en="After Rapid Scroll (LRU)" data-tr="Hızlı Kaydırma Sonrası (LRU)">After Rapid Scroll (LRU)</span>
+              <span class="metric-hint" data-i18n
+                data-en={`Working Set: ${afterScroll.workingSetMB.toFixed(1)} MB · Peak: ${afterScroll.peakPrivateBytesMB.toFixed(2)} MB (${afterScroll.scrollSteps} steps)`}
+                data-tr={`Çalışma Kümesi: ${afterScroll.workingSetMB.toFixed(1)} MB · Tepe: ${afterScroll.peakPrivateBytesMB.toFixed(2)} MB (${afterScroll.scrollSteps} adım)`}>
+                Working Set: {afterScroll.workingSetMB.toFixed(1)} MB · Peak: {afterScroll.peakPrivateBytesMB.toFixed(2)} MB ({afterScroll.scrollSteps} steps)
+              </span>
+            </div>
+          ) : (
+            <div class="metric-card">
+              <span class="metric-val">{benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB</span>
+              <span class="metric-label" data-i18n data-en="Working Set Footprint" data-tr="Çalışma Kümesi Boyutu">Working Set Footprint</span>
+              <span class="metric-hint" data-i18n data-en="Total active memory footprint under OS" data-tr="İşletim sistemindeki toplam aktif bellek">Total active memory footprint under OS</span>
+            </div>
+          )}
 
           <div class="metric-card">
             <span class="metric-val">{benchmarks.metrics.idle.cpuPercent.toFixed(1)}%</span>
             <span class="metric-label" data-i18n data-en="Settled Idle CPU Usage" data-tr="Boşta CPU Kullanımı">Settled Idle CPU Usage</span>
             <span class="metric-hint" data-i18n data-en="Zero background polling threads" data-tr="Sıfır arka plan sorgu iş parçacığı">Zero background polling threads</span>
-          </div>
-
-          <div class="metric-card">
-            <span class="metric-val">{benchmarks.metrics.idle.workingSetMB.toFixed(1)} MB</span>
-            <span class="metric-label" data-i18n data-en="Working Set Footprint" data-tr="Çalışma Kümesi Boyutu">Working Set Footprint</span>
-            <span class="metric-hint" data-i18n data-en="Total active memory footprint under OS" data-tr="İşletim sistemindeki toplam aktif bellek">Total active memory footprint under OS</span>
           </div>
         </div>
 

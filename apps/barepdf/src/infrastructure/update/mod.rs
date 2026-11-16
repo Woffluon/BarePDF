@@ -82,6 +82,11 @@ pub(crate) enum UpdateCommand {
 pub(crate) enum UpdateEvent {
     UpToDate,
     Available(VerifiedUpdate),
+    DownloadProgress {
+        downloaded: u64,
+        total: u64,
+        verifying: bool,
+    },
     Downloaded {
         path: PathBuf,
         update: VerifiedUpdate,
@@ -304,12 +309,25 @@ fn run_worker(
                 }
             }
             UpdateCommand::Download(update) => {
-                match download::download_update(&agent, &update, cancelled) {
+                crate::diagnostics::ensure_update_logging();
+                match download::download_update(
+                    &agent,
+                    &update,
+                    cancelled,
+                    |downloaded, total, verifying| {
+                        let _ = events.try_send(UpdateEvent::DownloadProgress {
+                            downloaded,
+                            total,
+                            verifying,
+                        });
+                    },
+                ) {
                     Ok(path) => UpdateEvent::Downloaded { path, update },
                     Err(error) => UpdateEvent::Error(error),
                 }
             }
             UpdateCommand::Install { path, update } => {
+                crate::diagnostics::ensure_update_logging();
                 match download::verify_download(&path, &update).and_then(|()| {
                     transport::check_cancelled(cancelled)?;
                     launch_installer(&path).map_err(|source| UpdateFailure::Platform {

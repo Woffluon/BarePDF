@@ -30,8 +30,8 @@ use barepdf_core::{
 use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform_windows::{
-    ask_yes_no, install_file_drop, reduce_visual_effects, show_fatal_error, WindowsClipboard,
-    WindowsFileDialogs,
+    ask_yes_no, detect_total_ram_mb, install_file_drop, reduce_visual_effects, show_fatal_error,
+    WindowsClipboard, WindowsFileDialogs,
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderError, RenderEvent, RenderJob, RenderKind, RenderScheduler,
@@ -53,9 +53,9 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 #[allow(dead_code)]
-pub(crate) const RAW_BITMAP_BUDGET: usize = 128 * 1024 * 1024;
-pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 128 * 1024 * 1024;
-pub(crate) const PAGE_IMAGE_BUDGET: usize = 64 * 1024 * 1024;
+pub(crate) const RAW_BITMAP_BUDGET: usize = 64 * 1024 * 1024;
+pub(crate) const UI_IMAGE_CACHE_BUDGET: usize = 64 * 1024 * 1024;
+pub(crate) const PAGE_IMAGE_BUDGET: usize = 32 * 1024 * 1024;
 pub(crate) const THUMB_IMAGE_BUDGET: usize = 4 * 1024 * 1024;
 const THUMB_ROW_HEIGHT: f32 = 188.0;
 const THUMBNAIL_PREFETCH_ROWS: u32 = 2;
@@ -101,7 +101,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     }
     preferences.viewing_mode = normalize_viewing_mode(preferences.viewing_mode);
 
-    let hardware_profile = SystemHardwareProfile::detect();
+    let hardware_profile = SystemHardwareProfile::detect_with_platform_ram(detect_total_ram_mb());
     let scheduler = Rc::new(RenderScheduler::spawn_adaptive(
         pdf_engine,
         &hardware_profile,
@@ -396,6 +396,12 @@ pub(crate) fn process_view_changes(
         app.last_thumbnail_scroll_y = thumbnail_scroll;
         request_visible_thumbnails(&mut app, scheduler, window);
     }
+
+    if app.last_user_scroll_at.is_some() && !user_is_scrolling(app.last_user_scroll_at, now) {
+        app.last_user_scroll_at = None;
+        let active_pages = app.visible_page_indices.clone();
+        trim_caches_to_window(&mut app, scheduler, &active_pages, true);
+    }
 }
 
 pub(crate) fn invert_rgba_pixels(pixels: &mut [u8]) {
@@ -477,6 +483,8 @@ pub(crate) fn handle_render_event(
                 };
             }
             app.visible_page_indices.clear();
+            app.budget_evicted_pages.clear();
+            app.last_trimmed_cache = None;
             app.status.first_page_ready = false;
             app.status.profile_recorded = false;
             app.open_started_at = Some(ready.started_at());
@@ -581,13 +589,23 @@ pub(crate) fn handle_render_event(
             match kind {
                 RenderKind::Page => {
                     app.failed_pages.remove(&(document_id, page_index.get()));
-                    app.page_images.insert(
+                    app.budget_evicted_pages
+                        .remove(&(document_id, page_index.get()));
+                    let evicted = app.page_images.insert(
                         document_id,
                         page_index.get(),
                         RenderKind::Page,
                         image.clone(),
                         bitmap.pixels().len(),
                     );
+                    for (evicted_doc, evicted_page) in evicted {
+                        if evicted_doc == document_id
+                            && app.visible_page_indices.contains(&evicted_page)
+                            && evicted_page != page_index.get()
+                        {
+                            app.budget_evicted_pages.insert((evicted_doc, evicted_page));
+                        }
+                    }
                     if page_index.get() == app.current_page {
                         window.set_page_bitmap(image);
                     }
@@ -945,6 +963,7 @@ pub(crate) fn invalidate_layout_and_render(
         if let Some(document) = app.active_document() {
             app.page_images.remove_document(document);
         }
+        app.last_trimmed_cache = None;
     }
     app.generation = scheduler.bump_generation();
     refresh_generation_bound_views(app, scheduler, window);
@@ -956,6 +975,7 @@ pub(crate) fn refresh_generation_bound_views(
     window: &AppWindow,
 ) {
     app.failed_pages.clear();
+    app.budget_evicted_pages.clear();
     run_generation_refreshes(
         app,
         |app| render_visible_pages(app, scheduler, window),
@@ -1055,10 +1075,11 @@ pub(crate) fn visible_page_indices(app: &AppState, window: &AppWindow) -> Vec<u3
         .last()
         .map(|page| page.get())
         .unwrap_or(app.current_page);
+    let max_page = app.page_count().saturating_sub(1);
     if app.zoom_factor.get() >= 3.0 {
-        (first..=last.min(app.page_count().saturating_sub(1))).collect()
+        (first..=last.min(max_page)).collect()
     } else {
-        (first.saturating_sub(1)..=(last + 1).min(app.page_count().saturating_sub(1))).collect()
+        (first.saturating_sub(2)..=last.saturating_add(2).min(max_page)).collect()
     }
 }
 
@@ -1083,6 +1104,42 @@ fn user_is_scrolling(last_scroll: Option<Instant>, now: Instant) -> bool {
     last_scroll.is_some_and(|last| now.saturating_duration_since(last) < SCROLL_IDLE_DELAY)
 }
 
+pub(crate) fn trim_caches_to_window(
+    app: &mut AppState,
+    scheduler: &RenderScheduler,
+    pages: &[u32],
+    evict_inactive_documents: bool,
+) {
+    let Some(document_id) = app.active_document() else {
+        return;
+    };
+    let (keep_start, keep_end) = match (pages.iter().copied().min(), pages.iter().copied().max()) {
+        (Some(min), Some(max)) => (min, max),
+        _ => (app.current_page, app.current_page),
+    };
+    app.page_images
+        .evict_outside_window(document_id, keep_start, keep_end);
+    if evict_inactive_documents {
+        app.page_images.evict_other_documents(document_id);
+        app.thumbnail_images.evict_other_documents(document_id);
+    }
+    let trim_key = (document_id, keep_start, keep_end, evict_inactive_documents);
+    if app.last_trimmed_cache != Some(trim_key)
+        && send_render_command(
+            app,
+            scheduler,
+            RenderCommand::TrimCache {
+                document_id,
+                keep_start,
+                keep_end,
+                evict_inactive_documents,
+            },
+        )
+    {
+        app.last_trimmed_cache = Some(trim_key);
+    }
+}
+
 pub(crate) fn render_visible_pages(
     app: &mut AppState,
     scheduler: &RenderScheduler,
@@ -1092,9 +1149,13 @@ pub(crate) fn render_visible_pages(
         return;
     };
     ensure_layout(app);
+    if let Some(effective_zoom) = effective_zoom_factor(app) {
+        app.update_cache_budget_for_zoom(effective_zoom);
+    }
     window.set_document_total_height(app.layout.total_height);
 
     let pages = visible_page_indices(app, window);
+    trim_caches_to_window(app, scheduler, &pages, false);
 
     for page in pages.iter().copied() {
         let Some(layout_page) = app.layout.pages.get(page as usize) else {
@@ -1183,6 +1244,13 @@ pub(crate) fn request_visible_thumbnails(
         window.get_thumbnail_scroll_y(),
         window.get_thumbnail_viewport_height(),
     );
+    if !page_indices.is_empty() {
+        app.thumbnail_images.evict_outside_window(
+            document_id,
+            page_indices.start,
+            page_indices.end.saturating_sub(1),
+        );
+    }
     for index in page_indices {
         if app
             .thumbnail_images
@@ -1451,6 +1519,20 @@ pub(crate) fn compute_search_highlights(
     boxes
 }
 
+fn effective_zoom_factor(app: &AppState) -> Option<ZoomFactor> {
+    if matches!(app.zoom_mode, ZoomMode::Custom(_)) {
+        return Some(app.zoom_factor);
+    }
+    let layout_page = app.layout.pages.get(app.current_page as usize)?;
+    let page_width = app
+        .page_dimensions
+        .get(app.current_page as usize)
+        .map(|dimensions| dimensions.0)
+        .unwrap_or(app.first_page_dimensions.0)
+        .max(1.0);
+    Some(ZoomFactor::new(layout_page.width as f32 / page_width))
+}
+
 pub(crate) fn sync_effective_zoom(app: &mut AppState) {
     if matches!(app.zoom_mode, ZoomMode::Custom(_)) {
         let zoom = app.zoom_factor;
@@ -1458,16 +1540,9 @@ pub(crate) fn sync_effective_zoom(app: &mut AppState) {
         return;
     }
     ensure_layout(app);
-    let Some(layout_page) = app.layout.pages.get(app.current_page as usize) else {
+    let Some(zoom_factor) = effective_zoom_factor(app) else {
         return;
     };
-    let page_width = app
-        .page_dimensions
-        .get(app.current_page as usize)
-        .map(|dimensions| dimensions.0)
-        .unwrap_or(app.first_page_dimensions.0)
-        .max(1.0);
-    let zoom_factor = ZoomFactor::new(layout_page.width as f32 / page_width);
     app.zoom_factor = zoom_factor;
     app.update_cache_budget_for_zoom(zoom_factor);
 }
@@ -2279,17 +2354,21 @@ mod tests {
             let window = AppWindow::new().unwrap();
             window.set_current_scroll_y(-app.layout.pages[4].y_offset);
 
-            // At zoom < 3.0 (default 1.0), ±1 neighbors are included
+            // At zoom < 3.0 (default 1.0), ±2 neighbors are included
             app.zoom_factor = ZoomFactor::new(1.0);
             let normal_indices = visible_page_indices(&app, &window);
+            assert!(!normal_indices.contains(&1));
+            assert!(normal_indices.contains(&2));
             assert!(normal_indices.contains(&3));
             assert!(normal_indices.contains(&4));
             assert!(normal_indices.contains(&5));
+            assert!(normal_indices.contains(&6));
+            assert!(!normal_indices.contains(&7));
 
-            // At zoom >= 3.0, off-screen ±1 neighbors are skipped
+            // At zoom >= 3.0, off-screen ±2 neighbors are skipped
             app.zoom_factor = ZoomFactor::new(3.0);
             let high_zoom_indices = visible_page_indices(&app, &window);
-            // Page 4 is visible; neighbors 3 and 5 are not prefetched if not in viewport
+            // Page 4 is visible; neighbors 2, 3, 5, and 6 are not prefetched if not in viewport
             assert_eq!(high_zoom_indices, vec![4]);
         });
     }
@@ -2419,6 +2498,114 @@ mod tests {
 
             scheduler.shutdown();
         });
+    }
+
+    #[test]
+    fn trim_caches_to_window_evicts_distant_pages_and_coalesces_worker_commands() {
+        use barepdf_core::{PageCount, PageIndex, PdfError, RawBitmap, Rotation};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+
+        struct MockDoc;
+        impl PdfDocument for MockDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::new(10).expect("non-zero"))
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+                Ok(barepdf_core::PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+        }
+
+        let mut app = AppState::new(UserPreferences::default());
+        let doc1 = DocumentId::new(1);
+        let doc2 = DocumentId::new(2);
+        crate::application::DocumentController::begin_open(
+            &mut app.application,
+            doc1,
+            PathBuf::from("doc1.pdf"),
+            Instant::now(),
+        );
+        let _ =
+            crate::application::DocumentController::opened(&mut app.application, doc1, 10, 10_000);
+
+        for page in 0..10 {
+            app.page_images
+                .insert(doc1, page, RenderKind::Page, Image::default(), 1024);
+        }
+        app.page_images
+            .insert(doc2, 0, RenderKind::Page, Image::default(), 1024);
+        app.thumbnail_images
+            .insert(doc2, 0, RenderKind::Thumbnail, Image::default(), 512);
+
+        let scheduler = RenderScheduler::spawn(MockBackend, barepdf_core::MemoryBudget::default());
+        trim_caches_to_window(&mut app, &scheduler, &[2, 3, 4, 5, 6], false);
+
+        for page in 0..10 {
+            assert_eq!(
+                app.page_images.contains_key(doc1, page, RenderKind::Page),
+                (2..=6).contains(&page)
+            );
+        }
+        assert!(app.page_images.contains_key(doc2, 0, RenderKind::Page));
+        assert_eq!(app.last_trimmed_cache, Some((doc1, 2, 6, false)));
+
+        // Idle trim evicts inactive document UI caches too
+        trim_caches_to_window(&mut app, &scheduler, &[2, 3, 4, 5, 6], true);
+        assert!(!app.page_images.contains_key(doc2, 0, RenderKind::Page));
+        assert!(!app
+            .thumbnail_images
+            .contains_key(doc2, 0, RenderKind::Thumbnail));
+        assert_eq!(app.last_trimmed_cache, Some((doc1, 2, 6, true)));
+        let _ = scheduler.shutdown();
     }
 
     #[test]

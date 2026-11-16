@@ -138,6 +138,8 @@ export component AppWindow inherits Window {
     in property <bool> toast-action-enabled: true;
     in property <int> toast-kind: 0; // 0: Info, 1: Update, 2: Error, 3: Success
     in property <string> toast-version-diff: "";
+    in property <float> toast-progress: 0.0;
+    in property <bool> toast-show-progress: false;
     callback request-dismiss-toast();
     callback request-toast-action();
     callback request-dismiss-print-status();
@@ -159,11 +161,12 @@ export component AppWindow inherits Window {
     in-out property <int> print-preview-paper-size: 0;
     in-out property <int> print-preview-duplex: 0;
     in-out property <bool> tools-open: false;
-    in-out property <int> current-tool: -1;
+    in-out property <int> current-tool: 0;
     in-out property <[string]> merge-files: [];
     in property <[image]> merge-first-page-images: [];
     in-out property <int> selected-merge-index: -1;
     in-out property <int> merge-drag-index: -1;
+    in-out property <int> merge-hover-index: -1;
     in-out property <string> tools-page-range: "";
     in-out property <string> page-selection-range: "";
     in-out property <int> tools-split-mode: 0;
@@ -171,6 +174,28 @@ export component AppWindow inherits Window {
     in-out property <int> tools-convert-format: 0;
     in-out property <int> tools-convert-dpi: 150;
     in-out property <int> tools-convert-jpeg-quality: 90;
+    in-out property <int> tools-convert-scope: 0;
+    in-out property <int> crop-preset: 1;
+    in-out property <string> crop-left-input: "36";
+    in-out property <string> crop-bottom-input: "36";
+    in-out property <string> crop-right-input: "36";
+    in-out property <string> crop-top-input: "36";
+    in property <float> crop-page-width: 612.0;
+    in property <float> crop-page-height: 792.0;
+    in property <int> crop-preview-page-index: 0;
+    in-out property <[ThumbnailItem]> reorder-items: [];
+    in-out property <int> selected-reorder-index: -1;
+    in-out property <int> reorder-drag-index: -1;
+    in-out property <int> reorder-hover-index: -1;
+    in-out property <string> reorder-sequence-input: "";
+    in-out property <int> compress-mode: 1;
+    in property <string> compress-source-size: "";
+    in property <bool> compress-has-result: false;
+    in property <bool> compress-unchanged: false;
+    in property <string> compress-before-size: "";
+    in property <string> compress-after-size: "";
+    in property <string> compress-saved-percent: "";
+    in property <string> compress-output-path: "";
     in property <string> tools-error: "";
     in property <bool> tools-working: false;
     in-out property <bool> tool-password-prompt-open: false;
@@ -316,6 +341,47 @@ export component AppWindow inherits Window {
     in property <string> text-tools-btn-convert-all: "Convert All Pages";
     in property <string> text-tools-merge-drag-hint: "First page • drag or ↑ / ↓ to reorder";
     in property <string> text-tools-merge-dragged-hint: "Release on a card to move";
+    in property <string> text-tools-split-extract-short: "Extract Range";
+    in property <string> text-tools-split-separate-short: "Split All Pages";
+    in property <string> text-tools-rotation-90-short: "90° CW";
+    in property <string> text-tools-rotation-180-short: "180°";
+    in property <string> text-tools-rotation-270-short: "90° CCW";
+    in property <string> text-tools-drop-crop: "Drop a PDF to crop pages";
+    in property <string> text-tools-drop-reorder: "Drop a PDF to reorder pages";
+    in property <string> text-tools-drop-compress: "Drop a PDF to compress";
+    in property <string> text-tools-crop-placeholder: "Pages to crop (empty = all)";
+    in property <string> text-tools-crop-preset: "Margin Preset";
+    in property <string> text-tools-crop-preset-narrow: "Narrow 18pt";
+    in property <string> text-tools-crop-preset-normal: "Normal 36pt";
+    in property <string> text-tools-crop-preset-wide: "Wide 54pt";
+    in property <string> text-tools-crop-preset-custom: "Custom";
+    in property <string> text-tools-crop-preview: "Live Crop Preview";
+    in property <string> text-tools-crop-left: "Left (pt)";
+    in property <string> text-tools-crop-right: "Right (pt)";
+    in property <string> text-tools-crop-top: "Top (pt)";
+    in property <string> text-tools-crop-bottom: "Bottom (pt)";
+    in property <string> text-tools-reorder-hint: "Drag page cards or use Move Earlier / Later to reorder.";
+    in property <string> text-tools-reorder-move-earlier: "Move Earlier";
+    in property <string> text-tools-reorder-move-later: "Move Later";
+    in property <string> text-tools-reorder-reset: "Reset";
+    in property <string> text-tools-reorder-sequence-label: "Page Order:";
+    in property <string> text-tools-compress: "Compress PDF";
+    in property <string> text-tools-compress-desc: "Shrink raster images while keeping vector text and drawings 100% lossless.";
+    in property <string> text-tools-compress-mode: "Compression Mode";
+    in property <string> text-tools-compress-light: "Light (220 DPI)";
+    in property <string> text-tools-compress-balanced: "Balanced (150 DPI)";
+    in property <string> text-tools-compress-maximum: "Maximum (110 DPI)";
+    in property <string> text-tools-compress-light-detail: "220 DPI · 85% JPEG · High-resolution archival quality";
+    in property <string> text-tools-compress-balanced-detail: "150 DPI · 75% JPEG · Optimal balance of clarity and size";
+    in property <string> text-tools-compress-maximum-detail: "110 DPI · 60% JPEG · Smallest footprint for sharing";
+    in property <string> text-tools-compress-vector-note: "Text, fonts, and vector paths remain 100% lossless. Transparent images are untouched.";
+    in property <string> text-tools-compress-btn-run: "Compress & Save…";
+    in property <string> text-tools-compress-result-title: "Compression Complete";
+    in property <string> text-tools-compress-result-unchanged: "Already Optimal Size";
+    in property <string> text-tools-compress-before: "Before";
+    in property <string> text-tools-compress-after: "After";
+    in property <string> text-tools-compress-saved: "Saved";
+    in property <string> text-tools-compress-open-output: "Open Compressed PDF";
     in property <string> text-exit-presentation: root.current-language == 2 ? "Sunumdan Çık (Esc)" : "Exit (Esc)";
     in-out property <string> text-toolbar-rotate: "Rotate (Ctrl+R)";
     in-out property <string> text-toolbar-draw: "Draw";
@@ -468,8 +534,13 @@ export component AppWindow inherits Window {
     callback request-delete-pages-execute(string);
     callback request-rotate-pages-execute(string, int);
     callback request-convert-execute(int, int, int, string);
+    callback request-crop-preset(int);
     callback request-crop-pages-execute(string, string, string, string, string);
+    callback request-reorder-move(int, int);
+    callback request-reorder-reset();
     callback request-reorder-pages-execute(string);
+    callback request-compress-execute(int);
+    callback request-open-compressed-file();
     callback request-tool-drop(data-transfer, int);
     callback request-submit-tool-password(string);
     callback request-cancel-tool-password();
@@ -561,11 +632,7 @@ export component AppWindow inherits Window {
                 if (root.command-palette-open) { root.command-palette-open = false; return accept; }
                 if (root.print-preview-open) { root.request-close-print-preview(); return accept; }
                 if (root.tools-open) {
-                    if (root.current-tool != -1) {
-                        root.current-tool = -1;
-                    } else {
-                        root.tools-open = false;
-                    }
+                    root.request-close-tools();
                     return accept;
                 }
                 if (root.fit-menu-open) { root.fit-menu-open = false; return accept; }
@@ -1053,7 +1120,7 @@ export component AppWindow inherits Window {
 
                     sidebar-list := Rectangle {
                         if root.sidebar-tab == 0 : ListView {
-                            viewport-y <=> root.thumbnail-scroll-y;
+                            content-y <=> root.thumbnail-scroll-y;
                             for thumb in root.thumbnail-items : Rectangle {
                                 height: 188px;
                                 border-radius: ThemeTokens.control-radius;
@@ -1303,13 +1370,13 @@ export component AppWindow inherits Window {
                     property <int> second-idx: root.visible-pages.length > 1 ? root.visible-pages[1].page-index : root.second-page-index;
                     property <length> spread-total-w: root.page-display-width + (self.show-second ? (12px + self.second-w) : 0px);
                     property <length> spread-max-h: self.show-second ? Math.max(root.page-display-height, self.second-h) : root.page-display-height;
-                    property <length> spread-start-x: Math.max(24px, (self.viewport-width - self.spread-total-w) / 2);
+                    property <length> spread-start-x: Math.max(24px, (self.content-width - self.spread-total-w) / 2);
 
-                    viewport-width: Math.max(self.width, self.spread-total-w + 48px);
-                    viewport-height: Math.max(self.height, self.spread-max-h + 48px);
+                    content-width: Math.max(self.width, self.spread-total-w + 48px);
+                    content-height: Math.max(self.height, self.spread-max-h + 48px);
                     TouchArea {
-                        width: parent.viewport-width;
-                        height: parent.viewport-height;
+                        width: parent.content-width;
+                        height: parent.content-height;
                         scroll-event(event) => {
                             if (event.modifiers.control) {
                                 if (event.delta-y > 0) { root.request-zoom-in(); }
@@ -1322,7 +1389,7 @@ export component AppWindow inherits Window {
                     Rectangle {
                         width: root.page-display-width; height: root.page-display-height;
                         x: spread-scroll.spread-start-x;
-                        y: Math.max(24px, (parent.viewport-height - self.height) / 2);
+                        y: Math.max(24px, (parent.content-height - self.height) / 2);
                         background: white; border-radius: ThemeTokens.page-radius;
                         border-width: 1px;
                         border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
@@ -1395,8 +1462,8 @@ export component AppWindow inherits Window {
                                         let dx = current-abs-x - self.pan-last-abs-x;
                                         self.pan-last-abs-y = current-abs-y;
                                         self.pan-last-abs-x = current-abs-x;
-                                        spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
-                                        spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                        spread-scroll.content-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.content-height, spread-scroll.content-y + dy));
+                                        spread-scroll.content-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.content-width, spread-scroll.content-x + dx));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-move(spread-scroll.first-idx, self.mouse-x, self.mouse-y);
                                     }
@@ -1491,7 +1558,7 @@ export component AppWindow inherits Window {
                     if spread-scroll.show-second : Rectangle {
                         width: spread-scroll.second-w; height: spread-scroll.second-h;
                         x: spread-scroll.spread-start-x + root.page-display-width + 12px;
-                        y: Math.max(24px, (parent.viewport-height - self.height) / 2);
+                        y: Math.max(24px, (parent.content-height - self.height) / 2);
                         background: white; border-radius: ThemeTokens.page-radius;
                         border-width: 1px;
                         border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
@@ -1556,8 +1623,8 @@ export component AppWindow inherits Window {
                                         let dx = current-abs-x - self.pan-last-abs-x;
                                         self.pan-last-abs-y = current-abs-y;
                                         self.pan-last-abs-x = current-abs-x;
-                                        spread-scroll.viewport-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.viewport-height, spread-scroll.viewport-y + dy));
-                                        spread-scroll.viewport-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.viewport-width, spread-scroll.viewport-x + dx));
+                                        spread-scroll.content-y = Math.min(0px, Math.max(spread-scroll.height - spread-scroll.content-height, spread-scroll.content-y + dy));
+                                        spread-scroll.content-x = Math.min(0px, Math.max(spread-scroll.width - spread-scroll.content-width, spread-scroll.content-x + dx));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-move(spread-scroll.second-idx, self.mouse-x, self.mouse-y);
                                     }
@@ -1652,12 +1719,12 @@ export component AppWindow inherits Window {
                 }
 
                 if root.has-document && root.view-mode == 0 : continuous-scroll := ScrollView {
-                    viewport-width: Math.max(self.width, root.page-display-width + 48px);
-                    viewport-height: Math.max(self.height, root.document-total-height + 48px);
-                    viewport-y <=> root.current-scroll-y;
+                    content-width: Math.max(self.width, root.page-display-width + 48px);
+                    content-height: Math.max(self.height, root.document-total-height + 48px);
+                    content-y <=> root.current-scroll-y;
                     TouchArea {
-                        width: parent.viewport-width;
-                        height: parent.viewport-height;
+                        width: parent.content-width;
+                        height: parent.content-height;
                         scroll-event(event) => {
                             if (root.print-preview-open) {
                                 return accept;
@@ -1672,7 +1739,7 @@ export component AppWindow inherits Window {
                     }
                     for page in root.visible-pages : Rectangle {
                         width: page.width; height: page.height;
-                        x: Math.max(24px, (parent.viewport-width - page.width) / 2); y: page.y-offset;
+                        x: Math.max(24px, (parent.content-width - page.width) / 2); y: page.y-offset;
                         background: white; border-radius: ThemeTokens.page-radius;
                         border-width: 1px;
                         border-color: ThemeTokens.dark ? #ffffff18 : #0000001f;
@@ -1752,8 +1819,8 @@ export component AppWindow inherits Window {
                                         self.pan-last-abs-y = current-abs-y;
                                         self.pan-last-abs-x = current-abs-x;
                                         self.pan-last-dy = dy;
-                                        root.current-scroll-y = Math.min(0px, Math.max(continuous-scroll.height - continuous-scroll.viewport-height, root.current-scroll-y + dy));
-                                        continuous-scroll.viewport-x = Math.min(0px, Math.max(continuous-scroll.width - continuous-scroll.viewport-width, continuous-scroll.viewport-x + dx));
+                                        root.current-scroll-y = Math.min(0px, Math.max(continuous-scroll.height - continuous-scroll.content-height, root.current-scroll-y + dy));
+                                        continuous-scroll.content-x = Math.min(0px, Math.max(continuous-scroll.width - continuous-scroll.content-width, continuous-scroll.content-x + dx));
                                     } else if (!root.pan-mode-active) {
                                         root.pointer-move(page.page-index, self.mouse-x, self.mouse-y);
                                     }
@@ -2211,12 +2278,35 @@ export component AppWindow inherits Window {
                     page-thumbnails: root.thumbnail-items;
                     selected-merge-index <=> root.selected-merge-index;
                     merge-drag-index <=> root.merge-drag-index;
+                    merge-hover-index <=> root.merge-hover-index;
                     page-range-input <=> root.page-selection-range;
                     split-mode <=> root.tools-split-mode;
                     rotation <=> root.tools-rotation;
                     convert-format <=> root.tools-convert-format;
                     convert-dpi <=> root.tools-convert-dpi;
                     convert-jpeg-quality <=> root.tools-convert-jpeg-quality;
+                    convert-scope <=> root.tools-convert-scope;
+                    crop-preset <=> root.crop-preset;
+                    crop-left-input <=> root.crop-left-input;
+                    crop-bottom-input <=> root.crop-bottom-input;
+                    crop-right-input <=> root.crop-right-input;
+                    crop-top-input <=> root.crop-top-input;
+                    crop-page-width: root.crop-page-width;
+                    crop-page-height: root.crop-page-height;
+                    crop-preview-page-index: root.crop-preview-page-index;
+                    reorder-items: root.reorder-items;
+                    selected-reorder-index <=> root.selected-reorder-index;
+                    reorder-drag-index <=> root.reorder-drag-index;
+                    reorder-hover-index <=> root.reorder-hover-index;
+                    reorder-sequence-input <=> root.reorder-sequence-input;
+                    compress-mode <=> root.compress-mode;
+                    compress-source-size: root.compress-source-size;
+                    compress-has-result: root.compress-has-result;
+                    compress-unchanged: root.compress-unchanged;
+                    compress-before-size: root.compress-before-size;
+                    compress-after-size: root.compress-after-size;
+                    compress-saved-percent: root.compress-saved-percent;
+                    compress-output-path: root.compress-output-path;
                     error-text: root.tools-error;
                     is-working: root.tools-working;
                     active-doc-title: root.document-title;
@@ -2231,6 +2321,15 @@ export component AppWindow inherits Window {
                     text-delete-desc: root.text-tools-delete-desc;
                     text-rotate: root.text-tools-rotate;
                     text-rotate-desc: root.text-tools-rotate-desc;
+                    text-convert: root.text-tools-convert;
+                    text-convert-desc: root.text-tools-convert-desc;
+                    text-crop: root.text-tools-crop;
+                    text-crop-desc: root.text-tools-crop-desc;
+                    text-reorder: root.text-tools-reorder;
+                    text-reorder-desc: root.text-tools-reorder-desc;
+                    text-compress: root.text-tools-compress;
+                    text-compress-desc: root.text-tools-compress-desc;
+
                     btn-add-files: root.text-tools-btn-add-files;
                     btn-move-up: root.text-tools-btn-move-up;
                     btn-move-down: root.text-tools-btn-move-down;
@@ -2240,19 +2339,20 @@ export component AppWindow inherits Window {
                     btn-save: root.text-tools-btn-save;
                     label-pages: root.text-tools-label-pages;
                     label-split-mode: root.text-tools-label-split-mode;
-                    split-extract: root.text-tools-split-extract;
-                    split-separate: root.text-tools-split-separate;
+                    split-extract: root.text-tools-split-extract-short;
+                    split-separate: root.text-tools-split-separate-short;
                     label-rotation: root.text-tools-label-rotation;
-                    rotation-90: root.text-tools-rotation-90;
-                    rotation-180: root.text-tools-rotation-180;
-                    rotation-270: root.text-tools-rotation-270;
-                    text-convert: root.text-tools-convert;
-                    text-convert-desc: root.text-tools-convert-desc;
+                    rotation-90: root.text-tools-rotation-90-short;
+                    rotation-180: root.text-tools-rotation-180-short;
+                    rotation-270: root.text-tools-rotation-270-short;
                     text-drop-merge: root.text-tools-drop-merge;
                     text-drop-split: root.text-tools-drop-split;
                     text-drop-delete: root.text-tools-drop-delete;
                     text-drop-rotate: root.text-tools-drop-rotate;
                     text-drop-convert: root.text-tools-drop-convert;
+                    text-drop-crop: root.text-tools-drop-crop;
+                    text-drop-reorder: root.text-tools-drop-reorder;
+                    text-drop-compress: root.text-tools-drop-compress;
                     text-pages-unit: root.text-tools-pages-unit;
                     text-pages-empty-hint: root.text-tools-pages-empty-hint;
                     text-pages-select-all: root.text-tools-select-all;
@@ -2266,12 +2366,39 @@ export component AppWindow inherits Window {
                     text-convert-all: root.text-tools-convert-all;
                     text-convert-custom: root.text-tools-convert-custom;
                     btn-convert-all: root.text-tools-btn-convert-all;
-                    text-crop: root.text-tools-crop;
-                    text-crop-desc: root.text-tools-crop-desc;
-                    text-reorder: root.text-tools-reorder;
-                    text-reorder-desc: root.text-tools-reorder-desc;
                     text-merge-drag-hint: root.text-tools-merge-drag-hint;
                     text-merge-dragged-hint: root.text-tools-merge-dragged-hint;
+                    text-crop-placeholder: root.text-tools-crop-placeholder;
+                    text-crop-preset: root.text-tools-crop-preset;
+                    text-crop-preset-narrow: root.text-tools-crop-preset-narrow;
+                    text-crop-preset-normal: root.text-tools-crop-preset-normal;
+                    text-crop-preset-wide: root.text-tools-crop-preset-wide;
+                    text-crop-preset-custom: root.text-tools-crop-preset-custom;
+                    text-crop-preview: root.text-tools-crop-preview;
+                    text-crop-left: root.text-tools-crop-left;
+                    text-crop-right: root.text-tools-crop-right;
+                    text-crop-top: root.text-tools-crop-top;
+                    text-crop-bottom: root.text-tools-crop-bottom;
+                    text-reorder-hint: root.text-tools-reorder-hint;
+                    text-reorder-move-earlier: root.text-tools-reorder-move-earlier;
+                    text-reorder-move-later: root.text-tools-reorder-move-later;
+                    text-reorder-reset: root.text-tools-reorder-reset;
+                    text-reorder-sequence-label: root.text-tools-reorder-sequence-label;
+                    text-compress-mode: root.text-tools-compress-mode;
+                    text-compress-light: root.text-tools-compress-light;
+                    text-compress-balanced: root.text-tools-compress-balanced;
+                    text-compress-maximum: root.text-tools-compress-maximum;
+                    text-compress-light-detail: root.text-tools-compress-light-detail;
+                    text-compress-balanced-detail: root.text-tools-compress-balanced-detail;
+                    text-compress-maximum-detail: root.text-tools-compress-maximum-detail;
+                    text-compress-vector-note: root.text-tools-compress-vector-note;
+                    text-compress-btn-run: root.text-tools-compress-btn-run;
+                    text-compress-result-title: root.text-tools-compress-result-title;
+                    text-compress-result-unchanged: root.text-tools-compress-result-unchanged;
+                    text-compress-before: root.text-tools-compress-before;
+                    text-compress-after: root.text-tools-compress-after;
+                    text-compress-saved: root.text-tools-compress-saved;
+                    text-compress-open-output: root.text-tools-compress-open-output;
 
                     select-tool(tool-id) => { root.request-open-tool(tool-id); }
                     close => { root.request-close-tools(); }
@@ -2287,8 +2414,13 @@ export component AppWindow inherits Window {
                     delete-submit(range) => { root.request-delete-pages-execute(range); }
                     rotate-submit(range, rot) => { root.request-rotate-pages-execute(range, rot); }
                     convert-submit(format, dpi, quality, range) => { root.request-convert-execute(format, dpi, quality, range); }
+                    crop-preset-selected(preset) => { root.request-crop-preset(preset); }
                     crop-submit(range, left, bottom, right, top) => { root.request-crop-pages-execute(range, left, bottom, right, top); }
+                    reorder-move(from, to) => { root.request-reorder-move(from, to); }
+                    reorder-reset => { root.request-reorder-reset(); }
                     reorder-submit(order) => { root.request-reorder-pages-execute(order); }
+                    compress-submit(mode) => { root.request-compress-execute(mode); }
+                    compress-open-output => { root.request-open-compressed-file(); }
                     drop-files(data, tool-id) => { root.request-tool-drop(data, tool-id); }
                     select-page(page, ctrl, shift) => { root.request-select-page-range(page, ctrl, shift); }
                     select-all-pages => { root.request-select-all-tool-pages(); }
@@ -2848,6 +2980,8 @@ export component AppWindow inherits Window {
         kind: root.toast-visible ? root.toast-kind
             : (root.banner-update-action ? 1 : (root.banner-can-retry ? 2 : 0));
         version-diff: root.toast-version-diff;
+        progress: root.toast-progress;
+        show-progress: root.toast-show-progress;
         action-label: root.toast-visible ? root.toast-action-label
             : (root.banner-update-action ? root.banner-action-label : (root.banner-can-retry ? root.text-retry : ""));
         action-enabled: root.toast-visible ? root.toast-action-enabled

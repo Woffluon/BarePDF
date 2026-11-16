@@ -1,0 +1,51 @@
+﻿{
+    "timestamp":  "2026-11-16T20:00:54.4470925Z",
+    "environment":  {
+                        "os":  "Microsoft Windows 11 Pro",
+                        "processor":  "AMD Ryzen 5 5500",
+                        "processorCount":  12,
+                        "totalPhysicalRamMB":  16176,
+                        "executable":  "D:\\BarePDF\\target\\release\\barepdf.exe",
+                        "fixture":  "D:\\BarePDF\\assets\\barepdf-welcome.pdf",
+                        "multiPageFixturePages":  60,
+                        "scrollSteps":  30
+                    },
+    "metrics":  {
+                    "coldStartupMs":  187.56,
+                    "hotStartup":  {
+                                       "p50":  186.64,
+                                       "p95":  192.09,
+                                       "avg":  185.03,
+                                       "min":  173.13,
+                                       "max":  193.38,
+                                       "samples":  5
+                                   },
+                    "idle":  {
+                                 "privateBytesMB":  85.44,
+                                 "workingSetMB":  75.74,
+                                 "cpuPercent":  0
+                             },
+                    "documentLoaded":  {
+                                           "privateBytesMB":  138.07,
+                                           "workingSetMB":  115.99,
+                                           "idleCpuPercent":  0
+                                       },
+                    "multiPageLoaded":  {
+                                            "pages":  60,
+                                            "privateBytesMB":  151.58,
+                                            "workingSetMB":  123.95,
+                                            "idleCpuPercent":  0
+                                        },
+                    "afterRapidScroll":  {
+                                             "scrollSteps":  30,
+                                             "startPage":  1,
+                                             "endPage":  31,
+                                             "scrollCpuMs":  953.12,
+                                             "peakPrivateBytesMB":  174.98,
+                                             "peakWorkingSetMB":  147.09,
+                                             "privateBytesMB":  160.11,
+                                             "workingSetMB":  135.93,
+                                             "idleCpuPercent":  0
+                                         }
+                }
+}

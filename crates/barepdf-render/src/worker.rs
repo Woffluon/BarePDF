@@ -188,6 +188,12 @@ impl<B: PdfBackend> RenderWorker<B> {
                 query,
                 range,
             } => self.search_document(document_id, query, range),
+            RenderCommand::TrimCache {
+                document_id,
+                keep_start,
+                keep_end,
+                evict_inactive_documents,
+            } => self.trim_cache(document_id, keep_start, keep_end, evict_inactive_documents),
             RenderCommand::CloseDocument(document_id) => self.close_document(document_id),
             RenderCommand::Shutdown => false,
         }
@@ -576,6 +582,21 @@ impl<B: PdfBackend> RenderWorker<B> {
         )
     }
 
+    fn trim_cache(
+        &mut self,
+        document_id: DocumentId,
+        keep_start: u32,
+        keep_end: u32,
+        evict_inactive_documents: bool,
+    ) -> bool {
+        self.cache
+            .evict_outside_window(document_id, keep_start, keep_end);
+        if evict_inactive_documents {
+            self.cache.evict_other_documents(document_id);
+        }
+        true
+    }
+
     fn close_document(&mut self, document_id: DocumentId) -> bool {
         self.active_docs.pop(&document_id);
         self.cache.evict_document(document_id);
@@ -729,33 +750,33 @@ mod tests {
             primary_screen_dpi: 96.0,
         };
         let worker_low = create_adaptive_worker(&low_ram);
-        assert_eq!(worker_low.budget().get(), 128 * 1024 * 1024);
+        assert_eq!(worker_low.budget().get(), 48 * 1024 * 1024);
 
         let mid_ram = SystemHardwareProfile {
             total_ram_mb: 8192,
             primary_screen_dpi: 96.0,
         };
         let worker_mid = create_adaptive_worker(&mid_ram);
-        assert_eq!(worker_mid.budget().get(), 384 * 1024 * 1024);
+        assert_eq!(worker_mid.budget().get(), 96 * 1024 * 1024);
 
         let high_ram = SystemHardwareProfile {
             total_ram_mb: 32768,
             primary_screen_dpi: 144.0,
         };
         let worker_high = create_adaptive_worker(&high_ram);
-        assert_eq!(worker_high.budget().get(), 1024 * 1024 * 1024);
+        assert_eq!(worker_high.budget().get(), 128 * 1024 * 1024);
     }
 
     #[test]
     fn worker_set_hardware_profile_dynamically_adjusts_budget() {
-        let mut worker = create_test_worker(MemoryBudget::new(64 * 1024 * 1024));
-        assert_eq!(worker.budget().get(), 64 * 1024 * 1024);
+        let mut worker = create_test_worker(MemoryBudget::new(32 * 1024 * 1024));
+        assert_eq!(worker.budget().get(), 32 * 1024 * 1024);
 
         worker.set_hardware_profile(&SystemHardwareProfile {
             total_ram_mb: 16384,
             primary_screen_dpi: 96.0,
         });
-        assert_eq!(worker.budget().get(), 1024 * 1024 * 1024);
+        assert_eq!(worker.budget().get(), 128 * 1024 * 1024);
     }
 
     #[test]
@@ -1078,5 +1099,102 @@ mod tests {
             }
             other => panic!("expected PageRendered, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn worker_trim_cache_evicts_outside_window_and_inactive_documents() {
+        let (_shutdown_tx, shutdown_rx) = unbounded();
+        let (critical_tx, _critical_rx) = unbounded();
+        let (event_tx, _event_rx) = unbounded();
+        let mut worker = RenderWorker::new(
+            TestBackend,
+            MemoryBudget::new(1024 * 1024),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(Mutex::new(HashSet::new())),
+            shutdown_rx,
+            critical_tx,
+            event_tx,
+        );
+        let doc1 = DocumentId::new(1);
+        let doc2 = DocumentId::new(2);
+        assert!(worker.open_document(doc1, Path::new("doc1.pdf"), None));
+        assert!(worker.open_document(doc2, Path::new("doc2.pdf"), None));
+
+        for page in 0..7 {
+            assert!(worker.render_page(&RenderJob {
+                request_id: RequestId::new(u64::from(page) + 1),
+                generation: 1,
+                document_id: doc1,
+                page_index: PageIndex::from_raw(page),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                priority: Priority::Visible,
+                kind: RenderKind::Page,
+            }));
+        }
+        assert!(worker.render_page(&RenderJob {
+            request_id: RequestId::new(99),
+            generation: 1,
+            document_id: doc2,
+            page_index: PageIndex::zero(),
+            target_width: 1,
+            target_height: 1,
+            rotation: Rotation::Degrees0,
+            priority: Priority::Visible,
+            kind: RenderKind::Page,
+        }));
+        assert_eq!(worker.cache.current_bytes(), 32);
+
+        // Trim doc1 to pages 2..=6 (±2 around page 4) without evicting doc2
+        assert!(worker.handle_command(RenderCommand::TrimCache {
+            document_id: doc1,
+            keep_start: 2,
+            keep_end: 6,
+            evict_inactive_documents: false,
+        }));
+        assert_eq!(worker.cache.current_bytes(), 24);
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc1,
+                page_index: PageIndex::from_raw(0),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_none());
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc2,
+                page_index: PageIndex::zero(),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_some());
+
+        // Idle trim with evict_inactive_documents: true clears doc2 too
+        assert!(worker.handle_command(RenderCommand::TrimCache {
+            document_id: doc1,
+            keep_start: 2,
+            keep_end: 6,
+            evict_inactive_documents: true,
+        }));
+        assert_eq!(worker.cache.current_bytes(), 20);
+        assert!(worker
+            .cache
+            .get(&CacheKey {
+                document_id: doc2,
+                page_index: PageIndex::zero(),
+                target_width: 1,
+                target_height: 1,
+                rotation: Rotation::Degrees0,
+                invert_colors: false,
+            })
+            .is_none());
     }
 }

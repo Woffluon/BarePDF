@@ -390,13 +390,16 @@ impl UiImageCache {
         self.evict_to_budget();
     }
 
-    pub(crate) fn evict_to_budget(&mut self) {
+    pub(crate) fn evict_to_budget(&mut self) -> Vec<(DocumentId, u32)> {
+        let mut evicted_keys = Vec::new();
         while self.bytes > self.budget {
-            let Some((_, evicted)) = self.entries.pop_lru() else {
+            let Some((key, evicted)) = self.entries.pop_lru() else {
                 break;
             };
             self.bytes = self.bytes.saturating_sub(evicted.bytes);
+            evicted_keys.push((key.0, key.1));
         }
+        evicted_keys
     }
 
     pub(crate) fn update_cache_budget_for_zoom(&mut self, zoom: ZoomFactor) {
@@ -410,9 +413,9 @@ impl UiImageCache {
         kind: RenderKind,
         image: Image,
         bytes: usize,
-    ) {
+    ) -> Vec<(DocumentId, u32)> {
         if bytes > self.budget {
-            return;
+            return vec![(document, page)];
         }
         if let Some(old) = self
             .entries
@@ -421,33 +424,47 @@ impl UiImageCache {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.evict_to_budget();
+        self.evict_to_budget()
     }
 
     pub(crate) fn remove_document(&mut self, document: DocumentId) {
-        let keys = self
-            .entries
-            .iter()
-            .filter_map(|(key, _)| (key.0 == document).then_some(*key))
-            .collect::<Vec<_>>();
-        for key in keys {
-            if let Some(removed) = self.entries.pop(&key) {
-                self.bytes = self.bytes.saturating_sub(removed.bytes);
-            }
-        }
+        self.remove_matching(|key| key.0 == document);
     }
 
     pub(crate) fn remove_page(&mut self, document: DocumentId, page: u32) {
+        self.remove_matching(|key| key.0 == document && key.1 == page);
+    }
+
+    pub(crate) fn evict_outside_window(
+        &mut self,
+        document: DocumentId,
+        keep_start: u32,
+        keep_end: u32,
+    ) -> usize {
+        self.remove_matching(|key| key.0 == document && !(keep_start..=keep_end).contains(&key.1))
+    }
+
+    pub(crate) fn evict_other_documents(&mut self, active_document: DocumentId) -> usize {
+        self.remove_matching(|key| key.0 != active_document)
+    }
+
+    fn remove_matching<F>(&mut self, mut predicate: F) -> usize
+    where
+        F: FnMut(&(DocumentId, u32, RenderKind)) -> bool,
+    {
         let keys = self
             .entries
             .iter()
-            .filter_map(|(key, _)| (key.0 == document && key.1 == page).then_some(*key))
+            .filter_map(|(key, _)| predicate(key).then_some(*key))
             .collect::<Vec<_>>();
+        let mut freed = 0usize;
         for key in keys {
             if let Some(removed) = self.entries.pop(&key) {
                 self.bytes = self.bytes.saturating_sub(removed.bytes);
+                freed = freed.saturating_add(removed.bytes);
             }
         }
+        freed
     }
 }
 
@@ -711,6 +728,8 @@ pub(crate) struct AppState {
     pub(crate) page_images: UiImageCache,
     pub(crate) thumbnail_images: UiImageCache,
     pub(crate) failed_pages: HashSet<(DocumentId, u32)>,
+    pub(crate) budget_evicted_pages: HashSet<(DocumentId, u32)>,
+    pub(crate) last_trimmed_cache: Option<(DocumentId, u32, u32, bool)>,
     pub(crate) update: UpdateController,
     pub(crate) search: SearchSession,
     pub(crate) print: PrintSession,
@@ -775,6 +794,8 @@ impl AppState {
             page_images: UiImageCache::new(adaptive_cache_budget(initial_zoom)),
             thumbnail_images: UiImageCache::new(THUMB_IMAGE_BUDGET),
             failed_pages: HashSet::new(),
+            budget_evicted_pages: HashSet::new(),
+            last_trimmed_cache: None,
             update: UpdateController::default(),
             search: SearchSession::default(),
             print: PrintSession::default(),
@@ -889,6 +910,7 @@ impl AppState {
                         .page_images
                         .contains_key(document, *page, RenderKind::Page)
                         && !self.failed_pages.contains(&(document, *page))
+                        && !self.budget_evicted_pages.contains(&(document, *page))
                 })
             })
             || DocumentController::pending_path(&self.application).is_some()
@@ -995,9 +1017,9 @@ impl AppState {
 #[must_use]
 pub(crate) fn adaptive_cache_budget(zoom: ZoomFactor) -> usize {
     if zoom.factor() <= 1.25 {
-        32 * 1024 * 1024
+        24 * 1024 * 1024
     } else if zoom.factor() <= 2.0 {
-        64 * 1024 * 1024
+        48 * 1024 * 1024
     } else {
         UI_IMAGE_CACHE_BUDGET
     }
@@ -1155,6 +1177,32 @@ mod tests {
     }
 
     #[test]
+    fn budget_evicted_visible_page_does_not_cause_infinite_60hz_pump_polling() {
+        let mut app = AppState::new(UserPreferences::default());
+        let document_id = DocumentId::new(1);
+        DocumentController::begin_open(
+            &mut app.application,
+            document_id,
+            PathBuf::from("fixture.pdf"),
+            Instant::now(),
+        );
+        assert!(matches!(
+            DocumentController::opened(&mut app.application, document_id, 5, 10_000),
+            crate::application::OpenTransition::Ready(_)
+        ));
+        app.visible_page_indices = vec![0, 1, 2, 3, 4];
+        assert!(app.pump_requires_active(Instant::now()));
+
+        for page in 1..=4 {
+            app.page_images
+                .insert(document_id, page, RenderKind::Page, Image::default(), 1024);
+        }
+        // Page 0 was evicted due to tight cache budget
+        app.budget_evicted_pages.insert((document_id, 0));
+        assert!(!app.pump_requires_active(Instant::now()));
+    }
+
+    #[test]
     fn text_geometry_is_isolated_by_document() {
         let mut cache = TextGeometryCache::new();
         let first = DocumentId::new(1);
@@ -1274,40 +1322,36 @@ mod tests {
 
         cache.insert(doc, 0, RenderKind::Page, Image::default(), page_bytes);
         cache.insert(doc, 1, RenderKind::Page, Image::default(), page_bytes);
-        cache.insert(doc, 2, RenderKind::Page, Image::default(), page_bytes);
-        cache.insert(doc, 3, RenderKind::Page, Image::default(), page_bytes);
 
         assert!(cache.contains_key(doc, 0, RenderKind::Page));
         assert!(cache.contains_key(doc, 1, RenderKind::Page));
-        assert!(cache.contains_key(doc, 2, RenderKind::Page));
-        assert!(cache.contains_key(doc, 3, RenderKind::Page));
     }
 
     #[test]
     fn adaptive_budget_scales_correctly_with_zoom() {
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(1.0)),
-            32 * 1024 * 1024
+            24 * 1024 * 1024
         );
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(1.25)),
-            32 * 1024 * 1024
+            24 * 1024 * 1024
         );
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(1.5)),
-            64 * 1024 * 1024
+            48 * 1024 * 1024
         );
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(2.0)),
-            64 * 1024 * 1024
+            48 * 1024 * 1024
         );
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(2.5)),
-            128 * 1024 * 1024
+            64 * 1024 * 1024
         );
         assert_eq!(
             adaptive_cache_budget(ZoomFactor::new(3.5)),
-            128 * 1024 * 1024
+            64 * 1024 * 1024
         );
     }
 
@@ -1317,37 +1361,33 @@ mod tests {
         let doc = DocumentId::new(1);
         let page_bytes = 20 * 1024 * 1024; // 20 MB
 
-        // Set zoom to 350% -> 128 MB budget
+        // Set zoom to 350% -> 64 MB budget
         app.update_cache_budget_for_zoom(ZoomFactor::new(3.5));
-        assert_eq!(app.page_images.budget(), 128 * 1024 * 1024);
+        assert_eq!(app.page_images.budget(), 64 * 1024 * 1024);
 
-        // Insert 4 pages (4 * 20 MB = 80 MB, fits in 128 MB)
+        // Insert 3 pages (3 * 20 MB = 60 MB, fits in 64 MB)
         app.page_images
             .insert(doc, 0, RenderKind::Page, Image::default(), page_bytes);
         app.page_images
             .insert(doc, 1, RenderKind::Page, Image::default(), page_bytes);
         app.page_images
             .insert(doc, 2, RenderKind::Page, Image::default(), page_bytes);
-        app.page_images
-            .insert(doc, 3, RenderKind::Page, Image::default(), page_bytes);
 
-        assert_eq!(app.page_images.bytes(), 80 * 1024 * 1024);
+        assert_eq!(app.page_images.bytes(), 60 * 1024 * 1024);
         assert!(app.page_images.contains_key(doc, 0, RenderKind::Page));
         assert!(app.page_images.contains_key(doc, 1, RenderKind::Page));
         assert!(app.page_images.contains_key(doc, 2, RenderKind::Page));
-        assert!(app.page_images.contains_key(doc, 3, RenderKind::Page));
 
-        // Decrease zoom to 100% -> 32 MB budget
+        // Decrease zoom to 100% -> 24 MB budget
         app.update_cache_budget_for_zoom(ZoomFactor::new(1.0));
-        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
+        assert_eq!(app.page_images.budget(), 24 * 1024 * 1024);
 
-        // Under 32 MB budget, only 1 page of 20MB can fit (oldest 3 evicted)
-        assert!(app.page_images.bytes() <= 32 * 1024 * 1024);
+        // Under 24 MB budget, only 1 page of 20MB can fit (oldest 2 evicted)
+        assert!(app.page_images.bytes() <= 24 * 1024 * 1024);
         assert_eq!(app.page_images.bytes(), 20 * 1024 * 1024);
         assert!(!app.page_images.contains_key(doc, 0, RenderKind::Page));
         assert!(!app.page_images.contains_key(doc, 1, RenderKind::Page));
-        assert!(!app.page_images.contains_key(doc, 2, RenderKind::Page));
-        assert!(app.page_images.contains_key(doc, 3, RenderKind::Page));
+        assert!(app.page_images.contains_key(doc, 2, RenderKind::Page));
     }
 
     #[test]
@@ -1356,7 +1396,7 @@ mod tests {
         let doc1 = DocumentId::new(1);
         let doc2 = DocumentId::new(2);
 
-        // Tab 1 at 350% zoom (128MB budget)
+        // Tab 1 at 350% zoom (64MB budget)
         app.update_cache_budget_for_zoom(ZoomFactor::new(3.5));
         let page_bytes = 20 * 1024 * 1024; // 20 MB each
         app.page_images
@@ -1365,27 +1405,50 @@ mod tests {
             .insert(doc1, 1, RenderKind::Page, Image::default(), page_bytes);
         app.page_images
             .insert(doc1, 2, RenderKind::Page, Image::default(), page_bytes);
-        app.page_images
-            .insert(doc1, 3, RenderKind::Page, Image::default(), page_bytes);
-        assert_eq!(app.page_images.bytes(), 80 * 1024 * 1024);
+        assert_eq!(app.page_images.bytes(), 60 * 1024 * 1024);
 
-        // Switching to Tab 2 which is at 100% zoom (32MB budget)
+        // Switching to Tab 2 which is at 100% zoom (24MB budget)
         let tab2_zoom = ZoomFactor::new(1.0);
         app.update_cache_budget_for_zoom(tab2_zoom);
-        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
-        assert!(app.page_images.bytes() <= 32 * 1024 * 1024);
+        assert_eq!(app.page_images.budget(), 24 * 1024 * 1024);
+        assert!(app.page_images.bytes() <= 24 * 1024 * 1024);
         assert_eq!(app.page_images.bytes(), 20 * 1024 * 1024);
 
-        // Add page for doc2
-        app.page_images.insert(
-            doc2,
-            0,
-            RenderKind::Page,
-            Image::default(),
-            10 * 1024 * 1024,
-        );
-        assert_eq!(app.page_images.bytes(), 30 * 1024 * 1024);
+        // Add page for doc2 (4 MB -> 20 + 4 = 24 MB)
+        app.page_images
+            .insert(doc2, 0, RenderKind::Page, Image::default(), 4 * 1024 * 1024);
+        assert_eq!(app.page_images.bytes(), 24 * 1024 * 1024);
         assert!(app.page_images.contains_key(doc2, 0, RenderKind::Page));
+    }
+
+    #[test]
+    fn ui_image_cache_evict_outside_window_and_other_documents() {
+        let mut cache = UiImageCache::new(1024);
+        let doc1 = DocumentId::new(1);
+        let doc2 = DocumentId::new(2);
+
+        for page in 0..8 {
+            cache.insert(doc1, page, RenderKind::Page, Image::default(), 100);
+        }
+        cache.insert(doc2, 0, RenderKind::Page, Image::default(), 100);
+        assert_eq!(cache.bytes(), 900);
+
+        // Keep window 2..=6 (±2 around page 4) for doc1
+        let freed = cache.evict_outside_window(doc1, 2, 6);
+        assert_eq!(freed, 300);
+        assert_eq!(cache.bytes(), 600);
+        assert!(!cache.contains_key(doc1, 0, RenderKind::Page));
+        assert!(!cache.contains_key(doc1, 1, RenderKind::Page));
+        assert!(!cache.contains_key(doc1, 7, RenderKind::Page));
+        for page in 2..=6 {
+            assert!(cache.contains_key(doc1, page, RenderKind::Page));
+        }
+        assert!(cache.contains_key(doc2, 0, RenderKind::Page));
+
+        let freed_other = cache.evict_other_documents(doc1);
+        assert_eq!(freed_other, 100);
+        assert_eq!(cache.bytes(), 500);
+        assert!(!cache.contains_key(doc2, 0, RenderKind::Page));
     }
 
     #[test]
@@ -1742,7 +1805,7 @@ mod tests {
         assert!(!view1.sidebar_visible);
         assert_eq!(view1.sidebar_tab, 1);
         assert_eq!(app.page_dimensions.len(), 20);
-        assert_eq!(app.page_images.budget(), 128 * 1024 * 1024);
+        assert_eq!(app.page_images.budget(), 64 * 1024 * 1024);
 
         // Switch back to Tab 2 and verify no leakage from Tab 1
         assert!(app.application.tabs.activate(tab2_id));
@@ -1756,6 +1819,6 @@ mod tests {
         assert!(view2.sidebar_visible);
         assert_eq!(view2.sidebar_tab, 2);
         assert_eq!(app.page_dimensions.len(), 8);
-        assert_eq!(app.page_images.budget(), 32 * 1024 * 1024);
+        assert_eq!(app.page_images.budget(), 24 * 1024 * 1024);
     }
 }

@@ -1,14 +1,16 @@
 use std::collections::HashSet;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use barepdf_core::{
-    pages_to_remove_to_retained_pages, validate_page_selection, PageCount, PageCropRect, PageIndex,
-    PdfError, Rotation,
+    pages_to_remove_to_retained_pages, validate_page_selection, CompressionMode, CompressionReport,
+    PageCount, PageCropRect, PageIndex, PdfError, Rotation,
 };
 use pdfium_render::prelude::*;
 
+use crate::jpeg_encoder::{encode_gray_jpeg, encode_rgb_jpeg};
 use crate::pdfium_lifetime::process_pdfium;
 
 pub struct PdfOperationInput<'a> {
@@ -826,6 +828,410 @@ impl PdfOperations {
 
         atomic_write_file(output, &bytes)?;
         Ok(())
+    }
+
+    /// Compresses a PDF while keeping all text, fonts, and vector paths lossless.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source file cannot be loaded or the output cannot be saved.
+    pub fn compress_pdf(
+        source: &Path,
+        mode: CompressionMode,
+        output: &Path,
+    ) -> Result<CompressionReport, PdfError> {
+        Self::compress_pdf_with_password(source, mode, output, None)
+    }
+
+    /// Compresses a PDF using an optional borrowed source password.
+    ///
+    /// Cleans unreachable/dead objects via `create_new_pdf` + `copy_page_from_document`,
+    /// preserves text/fonts/vector graphics losslessly, preserves z-order, skips images
+    /// with transparent alpha or clip paths, downsamples raster images exceeding the mode's
+    /// target DPI, and replaces images only when baseline JPEG encoding shrinks their raw size.
+    /// If the resulting PDF does not shrink overall, the original bytes are preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if the source file is missing, cannot be loaded with the password,
+    /// contains no pages, or the output file cannot be written.
+    pub fn compress_pdf_with_password(
+        source: &Path,
+        mode: CompressionMode,
+        output: &Path,
+        password: Option<&str>,
+    ) -> Result<CompressionReport, PdfError> {
+        if !source.is_file() {
+            return Err(PdfError::FileNotFound(source.display().to_string()));
+        }
+
+        let original_bytes = std::fs::metadata(source)
+            .map_err(|err| PdfError::FileAccess {
+                source: Arc::new(err),
+            })?
+            .len();
+
+        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let pdfium = process_pdfium()?;
+        let src_doc = pdfium
+            .load_pdf_from_file(source, password)
+            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
+
+        let total_pages = src_doc.pages().len();
+        let _ = validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
+
+        let mut work_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+        for src_idx in 0..total_pages {
+            work_doc
+                .pages_mut()
+                .copy_page_from_document(&src_doc, src_idx, src_idx)
+                .map_err(map_pdfium_error)?;
+        }
+        drop(src_doc);
+
+        let mut any_page_modified = false;
+        for p_idx in 0..total_pages {
+            let mut page = work_doc.pages_mut().get(p_idx).map_err(map_pdfium_error)?;
+            page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
+            let obj_count = page.objects().len();
+            let mut page_modified = false;
+
+            for obj_idx in 0..obj_count {
+                let candidate = {
+                    let Ok(obj) = page.objects().get(obj_idx) else {
+                        continue;
+                    };
+                    if obj.has_transparency()
+                        || obj.get_clip_path().is_some_and(|cp| !cp.is_empty())
+                    {
+                        continue;
+                    }
+                    let Some(img) = obj.as_image_object() else {
+                        continue;
+                    };
+                    prepare_compressed_jpeg(&work_doc, img, mode)
+                };
+
+                if let Some((jpeg_bytes, orig_matrix)) = candidate {
+                    let Ok(mut new_img) = PdfPageImageObject::new_from_jpeg_reader(
+                        &work_doc,
+                        Cursor::new(&jpeg_bytes),
+                    ) else {
+                        continue;
+                    };
+                    if new_img.reset_matrix(orig_matrix).is_err() {
+                        continue;
+                    }
+                    let removed = page
+                        .objects_mut()
+                        .remove_object_at_index(obj_idx)
+                        .map_err(map_pdfium_error)?;
+                    drop(removed);
+                    page.objects_mut()
+                        .insert_object_at_index(obj_idx, PdfPageObject::Image(new_img))
+                        .map_err(map_pdfium_error)?;
+                    page_modified = true;
+                }
+            }
+
+            if page_modified {
+                page.regenerate_content().map_err(map_pdfium_error)?;
+                any_page_modified = true;
+            }
+        }
+
+        // Replacing page image objects leaves orphaned XObject streams in PDFium's indirect table;
+        // copying pages into a fresh document retains only reachable objects.
+        let bytes = if any_page_modified {
+            let mut clean_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+            for p_idx in 0..total_pages {
+                clean_doc
+                    .pages_mut()
+                    .copy_page_from_document(&work_doc, p_idx, p_idx)
+                    .map_err(map_pdfium_error)?;
+            }
+            let out = clean_doc.save_to_bytes().map_err(map_pdfium_error)?;
+            drop(clean_doc);
+            drop(work_doc);
+            out
+        } else {
+            let out = work_doc.save_to_bytes().map_err(map_pdfium_error)?;
+            drop(work_doc);
+            out
+        };
+        drop(_ffi_guard);
+
+        let compressed_len = bytes.len() as u64;
+        if compressed_len < original_bytes {
+            atomic_write_file(output, &bytes)?;
+            Ok(CompressionReport::from_sizes(
+                original_bytes,
+                compressed_len,
+            ))
+        } else {
+            if !paths_refer_to_same_file(source, output) {
+                let original_data = std::fs::read(source).map_err(|err| PdfError::FileAccess {
+                    source: Arc::new(err),
+                })?;
+                atomic_write_file(output, &original_data)?;
+            }
+            Ok(CompressionReport::from_sizes(
+                original_bytes,
+                original_bytes,
+            ))
+        }
+    }
+}
+
+enum ExtractedPixels {
+    Gray(Vec<u8>),
+    Rgb(Vec<u8>),
+}
+
+fn prepare_compressed_jpeg(
+    doc: &PdfDocument<'_>,
+    img: &PdfPageImageObject<'_>,
+    mode: CompressionMode,
+) -> Option<(Vec<u8>, PdfMatrix)> {
+    if img.has_transparency() {
+        return None;
+    }
+    // PDFium's FPDFPageObj_HasTransparency can return false for images carrying an /SMask or /Mask;
+    // inspect the rendered bitmap alpha channel so masked/transparent images remain untouched.
+    let processed_bmp = img.get_processed_bitmap(doc).ok()?;
+    if bitmap_has_non_opaque_alpha(&processed_bmp)? {
+        return None;
+    }
+    if matches!(img.bits_per_pixel(), Ok(bpp) if bpp <= 1) {
+        return None;
+    }
+    let has_bitonal_or_jpx_filter = img
+        .filters()
+        .iter()
+        .any(|f| matches!(f.name(), "JBIG2Decode" | "CCITTFaxDecode"));
+    if has_bitonal_or_jpx_filter {
+        return None;
+    }
+    let is_already_jpeg = img.filters().iter().any(|f| f.name() == "DCTDecode");
+
+    let orig_matrix = img.matrix().ok()?;
+    let w_pts = orig_matrix.a().hypot(orig_matrix.b());
+    let h_pts = orig_matrix.c().hypot(orig_matrix.d());
+    if !w_pts.is_finite() || !h_pts.is_finite() || w_pts <= 0.0 || h_pts <= 0.0 {
+        return None;
+    }
+
+    let bitmap = img.get_raw_bitmap().ok()?;
+    let src_w = u32::try_from(bitmap.width()).ok().filter(|&w| w > 0)?;
+    let src_h = u32::try_from(bitmap.height()).ok().filter(|&h| h > 0)?;
+
+    #[allow(clippy::cast_precision_loss)]
+    let dpi_x = (src_w as f32) * 72.0 / w_pts;
+    #[allow(clippy::cast_precision_loss)]
+    let dpi_y = (src_h as f32) * 72.0 / h_pts;
+    let max_dpi = dpi_x.max(dpi_y);
+    let target_dpi = f32::from(mode.target_dpi());
+
+    if max_dpi <= target_dpi && is_already_jpeg {
+        return None;
+    }
+
+    let raw_len = img
+        .get_raw_image_data()
+        .ok()
+        .filter(|data| !data.is_empty())?
+        .len();
+
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let (dst_w, dst_h) = if max_dpi > target_dpi {
+        let scale_x = (target_dpi / dpi_x).min(1.0);
+        let scale_y = (target_dpi / dpi_y).min(1.0);
+        let dw = ((src_w as f32) * scale_x).round().clamp(1.0, src_w as f32) as u32;
+        let dh = ((src_h as f32) * scale_y).round().clamp(1.0, src_h as f32) as u32;
+        (dw, dh)
+    } else {
+        (src_w, src_h)
+    };
+
+    let pixels = extract_opaque_pixels(&bitmap, src_w, src_h)?;
+    let quality = mode.jpeg_quality();
+    let jpeg_bytes = match pixels {
+        ExtractedPixels::Gray(gray) => {
+            let sampled = if (dst_w, dst_h) != (src_w, src_h) {
+                downsample_area_average(&gray, src_w, src_h, dst_w, dst_h, 1)
+            } else {
+                gray
+            };
+            encode_gray_jpeg(&sampled, dst_w, dst_h, quality).ok()?
+        }
+        ExtractedPixels::Rgb(rgb) => {
+            let sampled = if (dst_w, dst_h) != (src_w, src_h) {
+                downsample_area_average(&rgb, src_w, src_h, dst_w, dst_h, 3)
+            } else {
+                rgb
+            };
+            encode_rgb_jpeg(&sampled, dst_w, dst_h, quality).ok()?
+        }
+    };
+
+    if jpeg_bytes.len() < raw_len {
+        Some((jpeg_bytes, orig_matrix))
+    } else {
+        None
+    }
+}
+
+fn bitmap_has_non_opaque_alpha(bitmap: &PdfBitmap<'_>) -> Option<bool> {
+    let format = bitmap.format().ok()?;
+    if format != PdfBitmapFormat::BGRA {
+        return Some(false);
+    }
+    let w = usize::try_from(bitmap.width()).ok().filter(|&v| v > 0)?;
+    let h = usize::try_from(bitmap.height()).ok().filter(|&v| v > 0)?;
+    let row_bytes = w.checked_mul(4)?;
+    let raw = bitmap.as_raw_bytes();
+    let stride = raw.len().checked_div(h)?;
+    if stride < row_bytes {
+        return None;
+    }
+    for y in 0..h {
+        let row = &raw[y * stride..y * stride + row_bytes];
+        if row.chunks_exact(4).any(|px| px[3] != 255) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+fn extract_opaque_pixels(
+    bitmap: &PdfBitmap<'_>,
+    width: u32,
+    height: u32,
+) -> Option<ExtractedPixels> {
+    let w = width as usize;
+    let h = height as usize;
+    let format = bitmap.format().ok()?;
+    let raw = bitmap.as_raw_bytes();
+    let stride = raw.len().checked_div(h)?;
+
+    match format {
+        PdfBitmapFormat::Gray => {
+            if stride < w {
+                return None;
+            }
+            let mut out = Vec::with_capacity(w.checked_mul(h)?);
+            for y in 0..h {
+                let row = &raw[y * stride..y * stride + w];
+                out.extend_from_slice(row);
+            }
+            Some(ExtractedPixels::Gray(out))
+        }
+        PdfBitmapFormat::BGR => {
+            let row_bytes = w.checked_mul(3)?;
+            if stride < row_bytes {
+                return None;
+            }
+            let mut out = Vec::with_capacity(row_bytes.checked_mul(h)?);
+            for y in 0..h {
+                let row = &raw[y * stride..y * stride + row_bytes];
+                for px in row.chunks_exact(3) {
+                    out.push(px[2]);
+                    out.push(px[1]);
+                    out.push(px[0]);
+                }
+            }
+            Some(ExtractedPixels::Rgb(out))
+        }
+        PdfBitmapFormat::BGRx => {
+            let row_bytes = w.checked_mul(4)?;
+            if stride < row_bytes {
+                return None;
+            }
+            let mut out = Vec::with_capacity(w.checked_mul(3)?.checked_mul(h)?);
+            for y in 0..h {
+                let row = &raw[y * stride..y * stride + row_bytes];
+                for px in row.chunks_exact(4) {
+                    out.push(px[2]);
+                    out.push(px[1]);
+                    out.push(px[0]);
+                }
+            }
+            Some(ExtractedPixels::Rgb(out))
+        }
+        PdfBitmapFormat::BGRA => {
+            let row_bytes = w.checked_mul(4)?;
+            if stride < row_bytes {
+                return None;
+            }
+            let mut out = Vec::with_capacity(w.checked_mul(3)?.checked_mul(h)?);
+            for y in 0..h {
+                let row = &raw[y * stride..y * stride + row_bytes];
+                for px in row.chunks_exact(4) {
+                    if px[3] != 255 {
+                        return None;
+                    }
+                    out.push(px[2]);
+                    out.push(px[1]);
+                    out.push(px[0]);
+                }
+            }
+            Some(ExtractedPixels::Rgb(out))
+        }
+    }
+}
+
+fn downsample_area_average(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+    channels: usize,
+) -> Vec<u8> {
+    let sw = src_w as usize;
+    let sh = src_h as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+    let mut dst = Vec::with_capacity(dw * dh * channels);
+
+    for dy in 0..dh {
+        let y0 = (dy * sh) / dh;
+        let y1 = (((dy + 1) * sh).div_ceil(dh)).max(y0 + 1).min(sh);
+        for dx in 0..dw {
+            let x0 = (dx * sw) / dw;
+            let x1 = (((dx + 1) * sw).div_ceil(dw)).max(x0 + 1).min(sw);
+            let count = ((x1 - x0) * (y1 - y0)) as u64;
+            let mut sums = [0_u64; 3];
+            for sy in y0..y1 {
+                let row_base = sy * sw * channels;
+                for sx in x0..x1 {
+                    let px = row_base + sx * channels;
+                    for c in 0..channels {
+                        sums[c] += u64::from(src[px + c]);
+                    }
+                }
+            }
+            for &sum in sums.iter().take(channels) {
+                #[allow(clippy::cast_possible_truncation)]
+                let avg = ((sum + count / 2) / count).min(255) as u8;
+                dst.push(avg);
+            }
+        }
+    }
+    dst
+}
+
+fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
     }
 }
 

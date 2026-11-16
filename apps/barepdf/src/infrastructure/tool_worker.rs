@@ -1,4 +1,7 @@
-use barepdf_core::{PageCount, PageIndex, PageRangeSelection, PdfError, Rotation, SecretPassword};
+use barepdf_core::{
+    CompressionMode, CompressionReport, PageCount, PageIndex, PageRangeSelection, PdfError,
+    Rotation, SecretPassword,
+};
 use barepdf_pdf::conversion::{
     convert_pdf, CancellationToken, ConversionDpi, ConversionFormat, ConversionReport,
     ConversionRequest, JobPassword,
@@ -84,6 +87,11 @@ pub(crate) enum ToolOperation {
         new_order: Vec<barepdf_core::PageIndex>,
         output: PathBuf,
     },
+    Compress {
+        source: PathBuf,
+        mode: CompressionMode,
+        output: PathBuf,
+    },
     #[cfg(test)]
     Test,
 }
@@ -167,6 +175,10 @@ pub(crate) enum ToolOutcome {
         file_count: usize,
     },
     Conversion(ConversionReport),
+    Compress {
+        output: PathBuf,
+        report: CompressionReport,
+    },
     #[cfg(test)]
     Test,
 }
@@ -883,6 +895,30 @@ fn execute_request_inner(request: &ToolRequest) -> Result<ToolOutcome, ToolFailu
                 output: output.clone(),
             })
         }
+        ToolOperation::Compress {
+            source,
+            mode,
+            output,
+        } => {
+            let backend = new_backend()?;
+            preflight(&backend, source, request.password_for(source))?;
+            check_cancel(request)?;
+            let staged = tempfile::NamedTempFile::new_in(parent_directory(output))
+                .map_err(|error| ToolFailure::Failed(format_error_with_source(&error)))?;
+            let report = PdfOperations::compress_pdf_with_password(
+                source,
+                *mode,
+                staged.path(),
+                request.password_for(source),
+            )
+            .map_err(|error| operation_error(Some(source), error))?;
+            check_cancel(request)?;
+            persist_file(staged, output)?;
+            Ok(ToolOutcome::Compress {
+                output: output.clone(),
+                report,
+            })
+        }
         #[cfg(test)]
         ToolOperation::Test => Ok(ToolOutcome::Test),
     }
@@ -1151,7 +1187,7 @@ mod tests {
 
     #[test]
     fn tool_task_supports_crop_and_reorder() {
-        use barepdf_core::{PageCropRect, PageIndex};
+        use barepdf_core::{CompressionMode, PageCropRect, PageIndex};
         let crop_op = ToolTask::Crop {
             source: PathBuf::from("in.pdf"),
             crops: vec![PageCropRect {
@@ -1171,5 +1207,12 @@ mod tests {
             output: PathBuf::from("reorder.pdf"),
         };
         assert!(matches!(reorder_op, ToolOperation::Reorder { .. }));
+
+        let compress_op = ToolTask::Compress {
+            source: PathBuf::from("in.pdf"),
+            mode: CompressionMode::Balanced,
+            output: PathBuf::from("compressed.pdf"),
+        };
+        assert!(matches!(compress_op, ToolOperation::Compress { .. }));
     }
 }

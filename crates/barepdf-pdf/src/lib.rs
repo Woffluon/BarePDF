@@ -2,6 +2,7 @@
 
 pub mod backend;
 pub mod conversion;
+pub mod jpeg_encoder;
 pub mod operations;
 pub mod pdfium_adapter;
 pub mod pdfium_lifetime;
@@ -12,7 +13,8 @@ pub use backend::{
     TextSpan,
 };
 pub use barepdf_core::{
-    AnnotationRecord, CancellationToken, EncodedImageFormat, ImageEncodeError, ImageEncoder,
+    AnnotationRecord, CancellationToken, CompressionMode, CompressionReport, EncodedImageFormat,
+    ImageEncodeError, ImageEncoder,
 };
 pub use operations::{PdfOperationInput, PdfOperations};
 pub use pdfium_adapter::PdfiumEngine;

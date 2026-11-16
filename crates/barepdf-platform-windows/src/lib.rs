@@ -87,6 +87,48 @@ pub fn reduce_visual_effects() -> bool {
     should_reduce_visual_effects(high_contrast_active, animations_enabled)
 }
 
+#[cfg(windows)]
+#[must_use]
+pub fn detect_total_ram_mb() -> Option<u64> {
+    #[repr(C)]
+    struct MemoryStatusEx {
+        dw_length: u32,
+        dw_memory_load: u32,
+        ull_total_phys: u64,
+        ull_avail_phys: u64,
+        ull_total_page_file: u64,
+        ull_avail_page_file: u64,
+        ull_total_virtual: u64,
+        ull_avail_virtual: u64,
+        ull_avail_extended_virtual: u64,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalMemoryStatusEx(lp_buffer: *mut MemoryStatusEx) -> i32;
+    }
+
+    let mut status = MemoryStatusEx {
+        dw_length: u32::try_from(std::mem::size_of::<MemoryStatusEx>()).ok()?,
+        dw_memory_load: 0,
+        ull_total_phys: 0,
+        ull_avail_phys: 0,
+        ull_total_page_file: 0,
+        ull_avail_page_file: 0,
+        ull_total_virtual: 0,
+        ull_avail_virtual: 0,
+        ull_avail_extended_virtual: 0,
+    };
+    // SAFETY: `status` is a valid, stack-allocated, properly aligned `MEMORYSTATUSEX` buffer
+    // with `dw_length` initialized to its exact byte size; `GlobalMemoryStatusEx` writes only
+    // within that buffer and does not retain the pointer after returning.
+    let ok = unsafe { GlobalMemoryStatusEx(&raw mut status) };
+    if ok == 0 || status.ull_total_phys == 0 {
+        return None;
+    }
+    Some(status.ull_total_phys / (1024 * 1024))
+}
+
 #[cfg(any(windows, test))]
 fn should_reduce_visual_effects(
     high_contrast_active: Option<bool>,
@@ -111,5 +153,12 @@ mod tests {
         assert!(should_reduce_visual_effects(None, Some(true)));
         assert!(should_reduce_visual_effects(Some(false), None));
         assert!(!should_reduce_visual_effects(Some(false), Some(true)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detect_total_ram_mb_returns_positive_physical_ram() {
+        let ram_mb = super::detect_total_ram_mb().expect("GlobalMemoryStatusEx should succeed");
+        assert!(ram_mb >= 256);
     }
 }

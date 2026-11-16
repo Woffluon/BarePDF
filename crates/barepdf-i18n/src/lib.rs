@@ -525,6 +525,65 @@ const ENGLISH_TOOLS: &[(&str, &str)] = &[
     ("tools.error.no_pages", "Please specify pages to process."),
     ("tools.error.invalid_range", "Invalid page range entered."),
     ("tools.prompt.open_result", "Open in New Tab"),
+    ("tools.drop.crop", "Drop a PDF to crop pages"),
+    ("tools.drop.reorder", "Drop a PDF to reorder pages"),
+    ("tools.drop.compress", "Drop a PDF to compress"),
+    ("tools.crop.placeholder", "Pages to crop (empty = all)"),
+    ("tools.crop.preset", "Margin Preset"),
+    ("tools.crop.preset.narrow", "Narrow 18pt"),
+    ("tools.crop.preset.normal", "Normal 36pt"),
+    ("tools.crop.preset.wide", "Wide 54pt"),
+    ("tools.crop.preset.custom", "Custom"),
+    ("tools.crop.preview", "Live Crop Preview"),
+    ("tools.crop.left", "Left (pt)"),
+    ("tools.crop.right", "Right (pt)"),
+    ("tools.crop.top", "Top (pt)"),
+    ("tools.crop.bottom", "Bottom (pt)"),
+    (
+        "tools.reorder.hint",
+        "Drag page cards or use Move Earlier / Later to reorder.",
+    ),
+    ("tools.reorder.move_earlier", "Move Earlier"),
+    ("tools.reorder.move_later", "Move Later"),
+    ("tools.reorder.reset", "Reset"),
+    ("tools.reorder.sequence_label", "Page Order:"),
+    ("tools.split_mode.extract_short", "Extract Range"),
+    ("tools.split_mode.separate_short", "Split All Pages"),
+    ("tools.rotation.90_short", "90° CW"),
+    ("tools.rotation.180_short", "180°"),
+    ("tools.rotation.270_short", "90° CCW"),
+    ("tools.compress", "Compress PDF"),
+    (
+        "tools.compress.desc",
+        "Shrink raster images while keeping vector text and drawings 100% lossless.",
+    ),
+    ("tools.compress.mode", "Compression Mode"),
+    ("tools.compress.mode.light", "Light (220 DPI)"),
+    ("tools.compress.mode.balanced", "Balanced (150 DPI)"),
+    ("tools.compress.mode.maximum", "Maximum (110 DPI)"),
+    (
+        "tools.compress.mode.light_detail",
+        "220 DPI · 85% JPEG · High-resolution archival quality",
+    ),
+    (
+        "tools.compress.mode.balanced_detail",
+        "150 DPI · 75% JPEG · Optimal balance of clarity and size",
+    ),
+    (
+        "tools.compress.mode.maximum_detail",
+        "110 DPI · 60% JPEG · Smallest footprint for sharing",
+    ),
+    (
+        "tools.compress.vector_note",
+        "Text, fonts, and vector paths remain 100% lossless. Transparent images are untouched.",
+    ),
+    ("tools.compress.btn_run", "Compress & Save…"),
+    ("tools.compress.result_title", "Compression Complete"),
+    ("tools.compress.result_unchanged", "Already Optimal Size"),
+    ("tools.compress.before", "Before"),
+    ("tools.compress.after", "After"),
+    ("tools.compress.saved", "Saved"),
+    ("tools.compress.open_output", "Open Compressed PDF"),
 ];
 
 const TURKISH_TOOLS: &[(&str, &str)] = &[
@@ -650,6 +709,74 @@ const TURKISH_TOOLS: &[(&str, &str)] = &[
         "Geçersiz sayfa aralığı girildi.",
     ),
     ("tools.prompt.open_result", "Yeni Sekmede Aç"),
+    ("tools.drop.crop", "Sayfaları kırpmak için bir PDF bırakın"),
+    (
+        "tools.drop.reorder",
+        "Sayfaları sıralamak için bir PDF bırakın",
+    ),
+    ("tools.drop.compress", "Sıkıştırmak için bir PDF bırakın"),
+    (
+        "tools.crop.placeholder",
+        "Kırpılacak sayfalar (tümü için boş bırakın)",
+    ),
+    ("tools.crop.preset", "Kenar Boşluğu Şablonu"),
+    ("tools.crop.preset.narrow", "Dar 18pt"),
+    ("tools.crop.preset.normal", "Normal 36pt"),
+    ("tools.crop.preset.wide", "Geniş 54pt"),
+    ("tools.crop.preset.custom", "Özel"),
+    ("tools.crop.preview", "Canlı Kırpma Önizlemesi"),
+    ("tools.crop.left", "Sol (pt)"),
+    ("tools.crop.right", "Sağ (pt)"),
+    ("tools.crop.top", "Üst (pt)"),
+    ("tools.crop.bottom", "Alt (pt)"),
+    (
+        "tools.reorder.hint",
+        "Kartları sürükleyin veya Öne Al / Arkaya Al butonlarıyla sıralayın.",
+    ),
+    ("tools.reorder.move_earlier", "Öne Al"),
+    ("tools.reorder.move_later", "Arkaya Al"),
+    ("tools.reorder.reset", "Sıfırla"),
+    ("tools.reorder.sequence_label", "Sayfa Sırası:"),
+    ("tools.split_mode.extract_short", "Aralık Ayıkla"),
+    ("tools.split_mode.separate_short", "Tüm Sayfaları Böl"),
+    ("tools.rotation.90_short", "90° Sağ"),
+    ("tools.rotation.180_short", "180°"),
+    ("tools.rotation.270_short", "90° Sol"),
+    ("tools.compress", "PDF Sıkıştır"),
+    (
+        "tools.compress.desc",
+        "Metin ve vektör çizimleri %100 kayıpsız koruyarak raster görselleri küçültün.",
+    ),
+    ("tools.compress.mode", "Sıkıştırma Modu"),
+    ("tools.compress.mode.light", "Hafif (220 DPI)"),
+    ("tools.compress.mode.balanced", "Dengeli (150 DPI)"),
+    ("tools.compress.mode.maximum", "Maksimum (110 DPI)"),
+    (
+        "tools.compress.mode.light_detail",
+        "220 DPI · %85 JPEG · Yüksek çözünürlüklü arşiv kalitesi",
+    ),
+    (
+        "tools.compress.mode.balanced_detail",
+        "150 DPI · %75 JPEG · Netlik ve boyut arasında önerilen denge",
+    ),
+    (
+        "tools.compress.mode.maximum_detail",
+        "110 DPI · %60 JPEG · Paylaşım için en küçük dosya boyutu",
+    ),
+    (
+        "tools.compress.vector_note",
+        "Metinler, fontlar ve vektör çizimler %100 kayıpsız korunur. Saydam görsellere dokunulmaz.",
+    ),
+    ("tools.compress.btn_run", "Sıkıştır ve Kaydet…"),
+    ("tools.compress.result_title", "Sıkıştırma Tamamlandı"),
+    (
+        "tools.compress.result_unchanged",
+        "Dosya Zaten En İyi Boyutta",
+    ),
+    ("tools.compress.before", "Önceki"),
+    ("tools.compress.after", "Sonraki"),
+    ("tools.compress.saved", "Kazanç"),
+    ("tools.compress.open_output", "Sıkıştırılan PDF'i Aç"),
 ];
 
 const ENGLISH_ANNOTATIONS: &[(&str, &str)] = &[
@@ -1233,6 +1360,47 @@ mod tests {
                 "Reloaded document",
                 "Belge güncellendi",
             ),
+        ];
+
+        for (key, en, tr) in cases {
+            assert_eq!(
+                t(ResolvedLanguage::English, key),
+                en,
+                "English mismatch for {key}"
+            );
+            assert_eq!(
+                t(ResolvedLanguage::Turkish, key),
+                tr,
+                "Turkish mismatch for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn compress_crop_reorder_strings_are_localized() {
+        let cases = [
+            ("tools.compress", "Compress PDF", "PDF Sıkıştır"),
+            (
+                "tools.compress.mode.light",
+                "Light (220 DPI)",
+                "Hafif (220 DPI)",
+            ),
+            (
+                "tools.compress.mode.balanced",
+                "Balanced (150 DPI)",
+                "Dengeli (150 DPI)",
+            ),
+            (
+                "tools.compress.mode.maximum",
+                "Maximum (110 DPI)",
+                "Maksimum (110 DPI)",
+            ),
+            ("tools.crop.preset.narrow", "Narrow 18pt", "Dar 18pt"),
+            ("tools.crop.preset.normal", "Normal 36pt", "Normal 36pt"),
+            ("tools.crop.preset.wide", "Wide 54pt", "Geniş 54pt"),
+            ("tools.crop.preset.custom", "Custom", "Özel"),
+            ("tools.reorder.move_earlier", "Move Earlier", "Öne Al"),
+            ("tools.reorder.move_later", "Move Later", "Arkaya Al"),
         ];
 
         for (key, en, tr) in cases {

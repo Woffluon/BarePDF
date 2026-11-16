@@ -3,8 +3,11 @@ use std::fmt::Display;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{reload, Registry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DiagnosticEvent {
@@ -92,6 +95,9 @@ impl Write for TeeWriter {
     }
 }
 
+static RELOAD_HANDLE: OnceLock<reload::Handle<LevelFilter, Registry>> = OnceLock::new();
+static INIT_MUTEX: Mutex<()> = Mutex::new(());
+
 pub(crate) fn init() {
     let has_log_flag = std::env::args_os().any(|arg| arg == "--log");
     let Some(level) =
@@ -99,22 +105,105 @@ pub(crate) fn init() {
     else {
         return;
     };
-    let log_file = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .and_then(|base_dir| init_log_file_in_dir(&base_dir).ok());
-    let writer = TeeWriter::new(log_file);
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_ansi(false)
-        .with_writer(writer)
-        .try_init();
+    install_or_raise_level(LevelFilter::from_level(level));
 }
 
-pub(crate) fn init_log_file_in_dir(base_dir: &Path) -> io::Result<File> {
-    let log_dir = base_dir.join("BarePDF").join("logs");
-    fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join("barepdf.log");
+/// Ensures structured `tracing` output is active (at least `INFO` level) to both
+/// `stderr` and the platform log file during update downloads, even when `--log`
+/// or `BAREPDF_LOG` was not supplied on startup.
+pub(crate) fn ensure_update_logging() {
+    install_or_raise_level(LevelFilter::INFO);
+}
+
+fn install_or_raise_level(min_level: LevelFilter) {
+    let _guard = match INIT_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(handle) = RELOAD_HANDLE.get() {
+        let _ = handle.modify(|current| {
+            if *current < min_level {
+                *current = min_level;
+            }
+        });
+        return;
+    }
+    let log_file = default_log_path().and_then(|path| open_log_file_at(&path).ok());
+    let writer = TeeWriter::new(log_file);
+    let (filter_layer, reload_handle) = reload::Layer::new(min_level);
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer);
+    let subscriber = tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer);
+    if subscriber.try_init().is_ok() {
+        let _ = RELOAD_HANDLE.set(reload_handle);
+    }
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn windows_log_path(local_app_data: Option<&OsStr>) -> Option<PathBuf> {
+    let base = local_app_data.filter(|value| !value.is_empty())?;
+    Some(
+        PathBuf::from(base)
+            .join("BarePDF")
+            .join("logs")
+            .join("barepdf.log"),
+    )
+}
+
+#[cfg(any(not(windows), test))]
+pub(crate) fn linux_log_path(
+    xdg_cache_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(cache_home) = xdg_cache_home.filter(|value| !value.is_empty()) {
+        return Some(
+            PathBuf::from(cache_home)
+                .join("barepdf")
+                .join("logs")
+                .join("barepdf.log"),
+        );
+    }
+    let home = home.filter(|value| !value.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(".cache")
+            .join("barepdf")
+            .join("logs")
+            .join("barepdf.log"),
+    )
+}
+
+pub(crate) fn default_log_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows_log_path(std::env::var_os("LOCALAPPDATA").as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        linux_log_path(
+            std::env::var_os("XDG_CACHE_HOME").as_deref(),
+            std::env::var_os("HOME").as_deref(),
+        )
+    }
+}
+
+pub(crate) fn open_log_file_at(log_path: &Path) -> io::Result<File> {
+    if let Some(parent) = log_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
     OpenOptions::new().create(true).append(true).open(log_path)
+}
+
+#[cfg(test)]
+pub(crate) fn init_log_file_in_dir(base_dir: &Path) -> io::Result<File> {
+    let log_path = base_dir.join("BarePDF").join("logs").join("barepdf.log");
+    open_log_file_at(&log_path)
 }
 
 pub(crate) fn resolve_opt_in_with_args(
@@ -282,5 +371,80 @@ mod tests {
         assert!(!message.contains("secret.json"));
         assert!(message.contains("[path]"));
         assert!(message.contains("access denied to"));
+    }
+
+    #[test]
+    fn windows_log_path_resolves_localappdata_hierarchy() {
+        assert_eq!(windows_log_path(None), None);
+        assert_eq!(windows_log_path(Some(OsStr::new(""))), None);
+        let path = windows_log_path(Some(OsStr::new(r"C:\Users\Alice\AppData\Local")))
+            .expect("windows log path");
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\Alice\AppData\Local")
+                .join("BarePDF")
+                .join("logs")
+                .join("barepdf.log")
+        );
+    }
+
+    #[test]
+    fn linux_log_path_prefers_xdg_cache_home_then_dot_cache() {
+        assert_eq!(linux_log_path(None, None), None);
+        assert_eq!(
+            linux_log_path(Some(OsStr::new("")), Some(OsStr::new(""))),
+            None
+        );
+        let xdg_path = linux_log_path(
+            Some(OsStr::new("/var/cache/custom")),
+            Some(OsStr::new("/home/alice")),
+        )
+        .expect("xdg log path");
+        assert_eq!(
+            xdg_path,
+            PathBuf::from("/var/cache/custom")
+                .join("barepdf")
+                .join("logs")
+                .join("barepdf.log")
+        );
+        let home_path =
+            linux_log_path(Some(OsStr::new("")), Some(OsStr::new("/home/alice"))).expect("home");
+        assert_eq!(
+            home_path,
+            PathBuf::from("/home/alice")
+                .join(".cache")
+                .join("barepdf")
+                .join("logs")
+                .join("barepdf.log")
+        );
+    }
+
+    #[test]
+    fn reloadable_filter_upgrades_warn_to_info_for_update_logging() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let log_path = temp.path().join("barepdf").join("logs").join("barepdf.log");
+        let file = open_log_file_at(&log_path).expect("log file should open");
+        let (filter_layer, reload_handle) = reload::Layer::new(LevelFilter::WARN);
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(TeeWriter::new(Some(file)));
+        let subscriber = tracing_subscriber::registry()
+            .with(filter_layer)
+            .with(fmt_layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(event = "hidden_before_upgrade", "should not appear");
+            let _ = reload_handle.modify(|current| {
+                if *current < LevelFilter::INFO {
+                    *current = LevelFilter::INFO;
+                }
+            });
+            tracing::info!(event = "update_download_started", "visible after upgrade");
+        });
+
+        let contents = fs::read_to_string(&log_path).expect("log file should be readable");
+        assert!(!contents.contains("hidden_before_upgrade"));
+        assert!(contents.contains("update_download_started"));
+        assert!(contents.contains("visible after upgrade"));
     }
 }

@@ -1230,3 +1230,304 @@ fn signature_custom_stroke_width_is_preserved() {
         .expect("save with custom signature stroke succeeds");
     assert!(output.exists());
 }
+
+// ---------------------------------------------------------------------------
+// compress_pdf tests
+// ---------------------------------------------------------------------------
+
+fn make_gradient_photo_bgra(width: i32, height: i32, alpha: u8) -> Vec<u8> {
+    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            // Smooth multi-frequency photographic gradient (realistic natural tones)
+            let fx = x as f32 / width as f32;
+            let fy = y as f32 / height as f32;
+            let r = ((128.0 + 90.0 * (fx * 6.0).sin() + 30.0 * (fy * 11.0).cos()).clamp(0.0, 255.0))
+                as u8;
+            let g = ((120.0 + 70.0 * (fy * 5.0).sin() + 40.0 * ((fx + fy) * 8.0).cos())
+                .clamp(0.0, 255.0)) as u8;
+            let b = ((140.0 + 80.0 * ((fx - fy) * 7.0).cos()).clamp(0.0, 255.0)) as u8;
+            bgra.extend_from_slice(&[b, g, r, alpha]);
+        }
+    }
+    bgra
+}
+
+fn create_hybrid_vector_and_image_pdf(path: &Path, img_w: i32, img_h: i32) {
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
+    let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdfium = Pdfium::default();
+    let mut doc = pdfium.create_new_pdf().expect("create new pdf");
+    let font = doc.fonts_mut().helvetica();
+    let mut page = doc
+        .pages_mut()
+        .create_page_at_end(PdfPagePaperSize::a4())
+        .expect("create A4 page");
+
+    // Z=0: background vector rectangle
+    let bg_rect = PdfPagePathObject::new_rect(
+        &doc,
+        PdfRect::new_from_values(100.0, 50.0, 500.0, 540.0),
+        Some(PdfColor::BLUE),
+        Some(PdfPoints::new(2.0)),
+        Some(PdfColor::new(240, 244, 248, 255)),
+    )
+    .expect("create background rect");
+    page.objects_mut()
+        .add_path_object(bg_rect)
+        .expect("add bg rect");
+
+    // Z=1: high-DPI opaque raster image (placed in 240x180 pt box => ~360 DPI at 1200x900)
+    let mut bgr = Vec::with_capacity((img_w * img_h * 3) as usize);
+    for px in make_gradient_photo_bgra(img_w, img_h, 255).chunks_exact(4) {
+        bgr.extend_from_slice(&px[..3]);
+    }
+    let bitmap =
+        PdfBitmap::from_bytes(img_w, img_h, PdfBitmapFormat::BGR, &mut bgr).expect("create bitmap");
+    let mut img = PdfPageImageObject::new(&doc).expect("create image obj");
+    img.set_bitmap(&bitmap).expect("set bitmap");
+    img.scale(240.0, 180.0).expect("scale image");
+    img.translate(PdfPoints::new(80.0), PdfPoints::new(200.0))
+        .expect("translate image");
+    page.objects_mut().add_image_object(img).expect("add image");
+
+    // Z=2: foreground vector stroke over the image
+    let fg_line = PdfPagePathObject::new_line(
+        &doc,
+        PdfPoints::new(80.0),
+        PdfPoints::new(200.0),
+        PdfPoints::new(320.0),
+        PdfPoints::new(380.0),
+        PdfColor::RED,
+        PdfPoints::new(1.5),
+    )
+    .expect("create foreground line");
+    page.objects_mut()
+        .add_path_object(fg_line)
+        .expect("add fg line");
+
+    // Z=3: foreground lossless vector text
+    let mut text_obj = PdfPageTextObject::new(
+        &doc,
+        "BarePDF Lossless Vector Text",
+        font,
+        PdfPoints::new(16.0),
+    )
+    .expect("create text obj");
+    text_obj
+        .translate(PdfPoints::new(80.0), PdfPoints::new(560.0))
+        .expect("translate text");
+    page.objects_mut()
+        .add_text_object(text_obj)
+        .expect("add text");
+
+    page.regenerate_content().expect("regenerate content");
+    drop(page);
+    doc.save_to_file(path).expect("save hybrid pdf");
+}
+
+#[test]
+fn test_compress_pdf_preserves_text_vectors_zorder_and_shrinks_all_modes() {
+    use barepdf_core::CompressionMode;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("hybrid_src.pdf");
+    create_hybrid_vector_and_image_pdf(&src, 1200, 900);
+
+    let out_light = dir.path().join("compressed_light.pdf");
+    let out_balanced = dir.path().join("compressed_balanced.pdf");
+    let out_max = dir.path().join("compressed_max.pdf");
+
+    let rep_light = PdfOperations::compress_pdf(&src, CompressionMode::LosslessLight, &out_light)
+        .expect("LosslessLight compress succeeds");
+    let rep_balanced = PdfOperations::compress_pdf(&src, CompressionMode::Balanced, &out_balanced)
+        .expect("Balanced compress succeeds");
+    let rep_max = PdfOperations::compress_pdf(&src, CompressionMode::Maximum, &out_max)
+        .expect("Maximum compress succeeds");
+
+    println!(
+        "COMPRESS_METRICS 1200x900: orig={}B | Light={}B ({:.1}%) | Balanced={}B ({:.1}%) | Max={}B ({:.1}%)",
+        rep_light.original_bytes,
+        rep_light.compressed_bytes,
+        rep_light.saved_percent,
+        rep_balanced.compressed_bytes,
+        rep_balanced.saved_percent,
+        rep_max.compressed_bytes,
+        rep_max.saved_percent,
+    );
+
+    assert!(rep_light.compressed_bytes < rep_light.original_bytes);
+    assert!(rep_balanced.compressed_bytes < rep_balanced.original_bytes);
+    assert!(rep_max.compressed_bytes < rep_max.original_bytes);
+    assert!(rep_light.saved_percent > 0.0);
+    assert!(rep_max.compressed_bytes <= rep_balanced.compressed_bytes);
+    assert!(rep_balanced.compressed_bytes <= rep_light.compressed_bytes);
+
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
+    let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdfium = Pdfium::default();
+    for out_path in [&out_light, &out_balanced, &out_max] {
+        let doc = pdfium
+            .load_pdf_from_file(out_path, None)
+            .expect("compressed PDF loads");
+        let page = doc.pages().get(0).expect("page 0");
+
+        let extracted_text = page.text().expect("page text").all();
+        assert!(
+            extracted_text.contains("BarePDF Lossless Vector Text"),
+            "Text must be 100% preserved in {out_path:?}, got: {extracted_text}"
+        );
+
+        let obj_types: Vec<PdfPageObjectType> =
+            page.objects().iter().map(|obj| obj.object_type()).collect();
+        assert_eq!(
+            obj_types,
+            vec![
+                PdfPageObjectType::Path,
+                PdfPageObjectType::Image,
+                PdfPageObjectType::Path,
+                PdfPageObjectType::Text,
+            ],
+            "Z-order and vector/text objects must remain intact"
+        );
+
+        let img_bounds = page
+            .objects()
+            .get(1)
+            .expect("image object")
+            .bounds()
+            .expect("image bounds")
+            .to_rect();
+        assert!((img_bounds.left().value - 80.0).abs() < 1.0);
+        assert!((img_bounds.bottom().value - 200.0).abs() < 1.0);
+        assert!((img_bounds.width().value - 240.0).abs() < 1.0);
+        assert!((img_bounds.height().value - 180.0).abs() < 1.0);
+
+        let rendered = page
+            .render_with_config(&PdfRenderConfig::new().set_target_width(400))
+            .expect("compressed page renders cleanly");
+        assert_eq!(rendered.width(), 400);
+    }
+}
+
+#[test]
+fn test_compress_pdf_skips_transparent_alpha_images() {
+    use barepdf_core::CompressionMode;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("alpha_src.pdf");
+    let out = dir.path().join("alpha_out.pdf");
+
+    {
+        let _lock = barepdf_pdf::pdfium_ffi_lock();
+        let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+        let pdfium = Pdfium::default();
+        let mut doc = pdfium.create_new_pdf().expect("create new pdf");
+        let mut page = doc
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::a4())
+            .expect("create page");
+
+        // Transparent image (alpha = 120) at high DPI
+        let mut alpha_bgra = make_gradient_photo_bgra(600, 600, 120);
+        let alpha_bmp = PdfBitmap::from_bytes(600, 600, PdfBitmapFormat::BGRA, &mut alpha_bgra)
+            .expect("alpha bitmap");
+        let mut alpha_img = PdfPageImageObject::new(&doc).expect("alpha img obj");
+        alpha_img.set_bitmap(&alpha_bmp).expect("set alpha bitmap");
+        alpha_img.scale(100.0, 100.0).expect("scale alpha img");
+        page.objects_mut()
+            .add_image_object(alpha_img)
+            .expect("add alpha img");
+
+        page.regenerate_content().expect("regen");
+        drop(page);
+        doc.save_to_file(&src).expect("save alpha pdf");
+    }
+
+    let before_raw_len = {
+        let _lock = barepdf_pdf::pdfium_ffi_lock();
+        let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+        let pdfium = Pdfium::default();
+        let doc = pdfium.load_pdf_from_file(&src, None).expect("load src");
+        let page = doc.pages().get(0).expect("page 0");
+        let obj = page.objects().get(0).expect("obj 0");
+        let img = obj.as_image_object().expect("image obj");
+        img.get_raw_image_data().expect("raw data").len()
+    };
+
+    PdfOperations::compress_pdf(&src, CompressionMode::Maximum, &out)
+        .expect("compress alpha pdf succeeds");
+
+    let _lock = barepdf_pdf::pdfium_ffi_lock();
+    let _engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdfium = Pdfium::default();
+    let doc = pdfium.load_pdf_from_file(&out, None).expect("load out");
+    let page = doc.pages().get(0).expect("page 0");
+    let obj = page.objects().get(0).expect("obj 0");
+    let img = obj.as_image_object().expect("image obj");
+    let after_raw_len = img.get_raw_image_data().expect("raw data").len();
+    let filters: Vec<String> = img.filters().iter().map(|f| f.name().to_owned()).collect();
+    assert!(!filters.iter().any(|f| f == "DCTDecode"));
+    assert_eq!(after_raw_len, before_raw_len);
+    let processed = img.get_processed_bitmap(&doc).expect("processed alpha bmp");
+    assert_eq!(processed.format().ok(), Some(PdfBitmapFormat::BGRA));
+    assert_eq!(processed.as_raw_bytes().get(3).copied(), Some(120));
+}
+
+#[test]
+fn test_compress_pdf_preserves_original_bytes_when_no_reduction() {
+    use barepdf_core::CompressionMode;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("minimal.pdf");
+    let out = dir.path().join("minimal_out.pdf");
+    create_test_pdf(&src, 1);
+    let original_bytes = std::fs::read(&src).expect("read original");
+
+    let report = PdfOperations::compress_pdf(&src, CompressionMode::LosslessLight, &out)
+        .expect("compress minimal succeeds");
+    let output_bytes = std::fs::read(&out).expect("read output");
+
+    if report.compressed_bytes == report.original_bytes {
+        assert_eq!(report.saved_percent, 0.0);
+        assert_eq!(output_bytes, original_bytes);
+    } else {
+        assert!(output_bytes.len() < original_bytes.len());
+    }
+}
+
+#[test]
+fn test_compress_pdf_handles_missing_and_encrypted_sources() {
+    use barepdf_core::CompressionMode;
+
+    let dir = tempdir().expect("tempdir");
+    let missing = dir.path().join("missing.pdf");
+    let out = dir.path().join("out.pdf");
+    assert!(matches!(
+        PdfOperations::compress_pdf(&missing, CompressionMode::Balanced, &out),
+        Err(PdfError::FileNotFound(_))
+    ));
+
+    let encrypted = dir.path().join("encrypted.pdf");
+    create_encrypted_test_pdf(&encrypted);
+    assert!(matches!(
+        PdfOperations::compress_pdf_with_password(
+            &encrypted,
+            CompressionMode::Balanced,
+            &out,
+            Some("wrong-password")
+        ),
+        Err(PdfError::IncorrectPassword)
+    ));
+    assert!(!out.exists());
+
+    let report = PdfOperations::compress_pdf_with_password(
+        &encrypted,
+        CompressionMode::Balanced,
+        &out,
+        Some("right-password"),
+    )
+    .expect("compress with right password succeeds");
+    assert!(out.is_file());
+    assert!(report.compressed_bytes <= report.original_bytes);
+}

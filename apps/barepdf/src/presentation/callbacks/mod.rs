@@ -27,7 +27,7 @@ pub(super) use self::drawing::handle_background_ui_event;
 pub(super) use self::print::{handle_print_event, requeue_print_preview_for_generation};
 pub(super) use self::tabs::{clear_document_transients, restore_active_view, snapshot_active_view};
 pub(super) use self::tools::{
-    handle_tool_event, refresh_merge_files, selected_tool_pages, set_tool_source,
+    handle_tool_event, refresh_merge_files, selected_tool_pages, set_tool_source, sync_tools_i18n,
 };
 
 use crate::application::{DocumentController, PrintController};
@@ -171,6 +171,7 @@ pub(super) fn wire_callbacks(
                 language.resolve(),
             )));
             update_ui_strings(&window, language.resolve());
+            sync_tools_i18n(&window, language.resolve());
             refresh_thumbnail_model(&mut app, &window);
             render_update_ui(&window, &app);
         }

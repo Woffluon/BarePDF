@@ -36,12 +36,43 @@ pub(crate) enum UpdateUiState {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DownloadProgress {
+    pub(crate) downloaded: u64,
+    pub(crate) total: u64,
+    pub(crate) verifying: bool,
+}
+
+impl DownloadProgress {
+    #[must_use]
+    pub(crate) fn fraction(self) -> f32 {
+        if self.verifying {
+            return 1.0;
+        }
+        if self.total == 0 {
+            return 0.0;
+        }
+        let permille = u16::try_from(
+            u128::from(self.downloaded)
+                .saturating_mul(1000)
+                .checked_div(u128::from(self.total))
+                .unwrap_or(0)
+                .min(1000),
+        )
+        .unwrap_or(1000);
+        f32::from(permille) / 1000.0
+    }
+}
+
 enum UpdateLifecycle {
     Ready,
     Checking,
     Current,
     Available(VerifiedUpdate),
-    Downloading(VerifiedUpdate),
+    Downloading {
+        update: VerifiedUpdate,
+        progress: DownloadProgress,
+    },
     Installing(VerifiedUpdate),
     Verified {
         path: PathBuf,
@@ -67,7 +98,7 @@ impl UpdateController {
         matches!(
             &self.lifecycle,
             UpdateLifecycle::Checking
-                | UpdateLifecycle::Downloading(_)
+                | UpdateLifecycle::Downloading { .. }
                 | UpdateLifecycle::Installing(_)
         )
     }
@@ -78,7 +109,7 @@ impl UpdateController {
             UpdateLifecycle::Checking => UpdateUiState::Checking,
             UpdateLifecycle::Current => UpdateUiState::Current,
             UpdateLifecycle::Available(_) => UpdateUiState::Available,
-            UpdateLifecycle::Downloading(_) => UpdateUiState::Downloading,
+            UpdateLifecycle::Downloading { .. } => UpdateUiState::Downloading,
             UpdateLifecycle::Installing(_) => UpdateUiState::Installing,
             UpdateLifecycle::Verified { .. } => UpdateUiState::Verified,
             UpdateLifecycle::Error => UpdateUiState::Error,
@@ -123,7 +154,7 @@ impl UpdateController {
     pub(crate) fn release_url(&self) -> Option<&str> {
         match &self.lifecycle {
             UpdateLifecycle::Available(update)
-            | UpdateLifecycle::Downloading(update)
+            | UpdateLifecycle::Downloading { update, .. }
             | UpdateLifecycle::Installing(update)
             | UpdateLifecycle::Verified { update, .. } => Some(update.release_url()),
             UpdateLifecycle::Ready
@@ -138,8 +169,39 @@ impl UpdateController {
             return None;
         };
         let update = update.clone();
-        self.lifecycle = UpdateLifecycle::Downloading(update.clone());
+        self.lifecycle = UpdateLifecycle::Downloading {
+            update: update.clone(),
+            progress: DownloadProgress {
+                downloaded: 0,
+                total: 0,
+                verifying: false,
+            },
+        };
         Some(update)
+    }
+
+    pub(crate) fn update_download_progress(
+        &mut self,
+        downloaded: u64,
+        total: u64,
+        verifying: bool,
+    ) -> bool {
+        let UpdateLifecycle::Downloading { progress, .. } = &mut self.lifecycle else {
+            return false;
+        };
+        *progress = DownloadProgress {
+            downloaded,
+            total,
+            verifying,
+        };
+        true
+    }
+
+    pub(crate) fn downloading_progress(&self) -> Option<(&VerifiedUpdate, DownloadProgress)> {
+        let UpdateLifecycle::Downloading { update, progress } = &self.lifecycle else {
+            return None;
+        };
+        Some((update, *progress))
     }
 
     pub(crate) fn begin_install(&mut self) -> Option<(PathBuf, VerifiedUpdate)> {
@@ -192,5 +254,37 @@ mod tests {
 
         assert_eq!(updates.ui_state(), UpdateUiState::Error);
         assert!(!updates.is_busy());
+    }
+
+    #[test]
+    fn download_progress_tracks_bytes_verification_and_rejects_stale_updates() {
+        let mut updates = UpdateController::default();
+        assert!(!updates.update_download_progress(10, 100, false));
+        assert!(updates.downloading_progress().is_none());
+
+        let available = VerifiedUpdate::for_test("2.0.0", "a".repeat(64), 1024);
+        updates.mark_available(available);
+        assert!(updates.begin_download().is_some());
+        assert_eq!(updates.ui_state(), UpdateUiState::Downloading);
+        assert!(updates.is_busy());
+
+        assert!(updates.update_download_progress(512, 1024, false));
+        let (update, progress) = updates
+            .downloading_progress()
+            .expect("downloading progress is present");
+        assert_eq!(update.version(), "2.0.0");
+        assert!((progress.fraction() - 0.5).abs() < 1e-6);
+        assert!(!progress.verifying);
+
+        assert!(updates.update_download_progress(1024, 1024, true));
+        let (_, verifying_progress) = updates
+            .downloading_progress()
+            .expect("verifying progress is present");
+        assert!((verifying_progress.fraction() - 1.0).abs() < 1e-6);
+        assert!(verifying_progress.verifying);
+
+        updates.mark_failed();
+        assert!(!updates.update_download_progress(1024, 1024, false));
+        assert!(updates.downloading_progress().is_none());
     }
 }

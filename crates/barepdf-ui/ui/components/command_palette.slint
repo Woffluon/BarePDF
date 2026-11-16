@@ -76,11 +76,11 @@ export component CommandPalette inherits Rectangle {
             // Command suggestions list
             Flickable {
                 vertical-stretch: 1;
-                viewport-height: root.command-titles.length * 36px;
+                content-height: root.command-titles.length * 36px;
 
                 VerticalLayout {
                     y: 0px;
-                    height: parent.viewport-height;
+                    height: parent.content-height;
                     spacing: 4px;
 
                     for title[idx] in root.command-titles : Rectangle {

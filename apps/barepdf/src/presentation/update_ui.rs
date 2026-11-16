@@ -3,9 +3,10 @@ use super::ui::persist_preferences;
 use crate::application::UpdateUiState;
 use crate::diagnostics::{self, DiagnosticEvent};
 use crate::infrastructure::{
-    UpdateCheckCanceller, UpdateCommand, UpdateEvent, AUTO_CHECK_INTERVAL_SECONDS,
+    UpdateCheckCanceller, UpdateCommand, UpdateEvent, AUTO_CHECK_INTERVAL_SECONDS, CURRENT_VERSION,
 };
 use barepdf_core::UserPreferences;
+use barepdf_i18n::ResolvedLanguage;
 use barepdf_platform_windows::is_installed_build;
 use barepdf_ui::AppWindow;
 use slint::SharedString;
@@ -51,6 +52,18 @@ pub(crate) fn handle_update_event(
             persist_preferences(&app.preferences, preferences_path, Some(window));
             app.update.mark_available(update);
         }
+        UpdateEvent::DownloadProgress {
+            downloaded,
+            total,
+            verifying,
+        } => {
+            if !app
+                .update
+                .update_download_progress(downloaded, total, verifying)
+            {
+                return;
+            }
+        }
         UpdateEvent::Downloaded { path, update } => app.update.mark_downloaded(path, update),
         UpdateEvent::InstallerStarted => {
             let _ = slint::quit_event_loop();
@@ -84,12 +97,29 @@ pub(crate) fn render_update_ui(window: &AppWindow, app: &AppState) {
             false,
             false,
         ),
-        UpdateUiState::Downloading => (
-            barepdf_i18n::t(language, "updates.status.downloading").to_string(),
-            "",
-            false,
-            false,
-        ),
+        UpdateUiState::Downloading => {
+            let (status, progress_value, version_diff, title) =
+                downloading_update_ui(app, language);
+            window.set_update_status(SharedString::from(status.as_str()));
+            window.set_update_action_label(SharedString::default());
+            window.set_update_action_enabled(false);
+            if window.get_banner_update_action() {
+                window.set_banner_update_action(false);
+                window.set_banner_action_label(SharedString::default());
+                window.set_banner_action_enabled(false);
+                window.set_banner_visible(false);
+            }
+            window.set_toast_title(SharedString::from(title));
+            window.set_toast_version_diff(SharedString::from(version_diff.as_str()));
+            window.set_toast_kind(1);
+            window.set_toast_message(SharedString::from(status.as_str()));
+            window.set_toast_action_label(SharedString::default());
+            window.set_toast_action_enabled(false);
+            window.set_toast_progress(progress_value);
+            window.set_toast_show_progress(true);
+            window.set_toast_visible(true);
+            return;
+        }
         UpdateUiState::Installing => (
             barepdf_i18n::t(language, "updates.status.installing").to_string(),
             "",
@@ -118,6 +148,16 @@ pub(crate) fn render_update_ui(window: &AppWindow, app: &AppState) {
     window.set_update_status(SharedString::from(status.as_str()));
     window.set_update_action_label(SharedString::from(action));
     window.set_update_action_enabled(enabled);
+    if window.get_toast_show_progress() {
+        window.set_toast_visible(false);
+        window.set_toast_title(SharedString::default());
+        window.set_toast_message(SharedString::default());
+        window.set_toast_version_diff(SharedString::default());
+        window.set_toast_action_label(SharedString::default());
+        window.set_toast_action_enabled(true);
+    }
+    window.set_toast_show_progress(false);
+    window.set_toast_progress(0.0);
     if show_banner {
         window.set_banner_text(SharedString::from(status.as_str()));
         window.set_banner_can_retry(false);
@@ -169,6 +209,58 @@ fn available_update_ui(
         },
     );
     Some((status, action))
+}
+
+fn downloading_update_ui(
+    app: &AppState,
+    language: ResolvedLanguage,
+) -> (String, f32, String, &'static str) {
+    const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
+    let title = match language {
+        ResolvedLanguage::Turkish => "Güncelleme",
+        ResolvedLanguage::English => "Update",
+    };
+    let Some((update, progress)) = app.update.downloading_progress() else {
+        let msg = barepdf_i18n::t(language, "updates.status.downloading").to_string();
+        return (msg, 0.0, String::new(), title);
+    };
+    let version_diff = format!("v{CURRENT_VERSION} → v{}", update.version());
+    if progress.verifying {
+        let msg = match language {
+            ResolvedLanguage::Turkish => "Bütünlük doğrulanıyor...",
+            ResolvedLanguage::English => "Verifying integrity...",
+        };
+        return (msg.to_string(), 1.0, version_diff, title);
+    }
+    if progress.total > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let downloaded_mb = progress.downloaded as f64 / BYTES_PER_MIB;
+        #[allow(clippy::cast_precision_loss)]
+        let total_mb = progress.total as f64 / BYTES_PER_MIB;
+        let pct = u32::try_from(
+            u128::from(progress.downloaded)
+                .saturating_mul(100)
+                .saturating_add(u128::from(progress.total) / 2)
+                .checked_div(u128::from(progress.total))
+                .unwrap_or(0)
+                .min(100),
+        )
+        .unwrap_or(100);
+        let msg = match language {
+            ResolvedLanguage::Turkish => {
+                format!("İndiriliyor... {downloaded_mb:.1} / {total_mb:.1} MB ({pct}%)")
+            }
+            ResolvedLanguage::English => {
+                format!("Downloading... {downloaded_mb:.1} / {total_mb:.1} MB ({pct}%)")
+            }
+        };
+        return (msg, progress.fraction(), version_diff, title);
+    }
+    let msg = match language {
+        ResolvedLanguage::Turkish => "İndiriliyor...",
+        ResolvedLanguage::English => "Downloading...",
+    };
+    (msg.to_string(), 0.0, version_diff, title)
 }
 
 #[allow(dead_code)]
@@ -310,6 +402,85 @@ mod tests {
                 barepdf_i18n::t(lang, "updates.action.install")
             );
             assert!(window.get_update_action_enabled());
+        });
+    }
+
+    #[test]
+    fn handle_update_event_updates_live_download_progress_toast() {
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let window = AppWindow::new().expect("slint app window");
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let prefs_path = temp_dir.path().join("preferences.json");
+            let preferences = UserPreferences {
+                language: barepdf_i18n::Language::English,
+                ..Default::default()
+            };
+            let state = Rc::new(RefCell::new(AppState::new(preferences)));
+
+            let update = VerifiedUpdate::for_test("2.0.0", "a".repeat(64), 10 * 1024 * 1024);
+            handle_update_event(
+                UpdateEvent::Available(update.clone()),
+                &window,
+                &state,
+                &prefs_path,
+            );
+            assert!(state.borrow_mut().update.begin_download().is_some());
+            render_update_ui(&window, &state.borrow());
+            assert!(window.get_toast_visible());
+            assert!(window.get_toast_show_progress());
+            assert!((window.get_toast_progress() - 0.0).abs() < 1e-6);
+            assert!(window
+                .get_toast_message()
+                .as_str()
+                .contains("Downloading..."));
+
+            handle_update_event(
+                UpdateEvent::DownloadProgress {
+                    downloaded: 5 * 1024 * 1024,
+                    total: 10 * 1024 * 1024,
+                    verifying: false,
+                },
+                &window,
+                &state,
+                &prefs_path,
+            );
+            assert!(window.get_toast_show_progress());
+            assert!((window.get_toast_progress() - 0.5).abs() < 1e-3);
+            assert!(window
+                .get_toast_message()
+                .as_str()
+                .contains("5.0 / 10.0 MB (50%)"));
+
+            handle_update_event(
+                UpdateEvent::DownloadProgress {
+                    downloaded: 10 * 1024 * 1024,
+                    total: 10 * 1024 * 1024,
+                    verifying: true,
+                },
+                &window,
+                &state,
+                &prefs_path,
+            );
+            assert!(window.get_toast_show_progress());
+            assert!((window.get_toast_progress() - 1.0).abs() < 1e-6);
+            assert_eq!(
+                window.get_toast_message().as_str(),
+                "Verifying integrity..."
+            );
+
+            handle_update_event(
+                UpdateEvent::Downloaded {
+                    path: std::path::PathBuf::from("/tmp/BarePDF-Setup.exe"),
+                    update,
+                },
+                &window,
+                &state,
+                &prefs_path,
+            );
+            assert!(!window.get_toast_show_progress());
+            assert!(!window.get_toast_visible());
+            assert!((window.get_toast_progress() - 0.0).abs() < 1e-6);
+            assert!(window.get_banner_visible());
         });
     }
 }

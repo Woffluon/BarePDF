@@ -676,6 +676,94 @@ pub struct PageCropRect {
     pub top: f32,
 }
 
+/// Quality/size trade-off preset for hybrid vector-preserving PDF compression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum CompressionMode {
+    /// Light downsampling (220 DPI) and high-quality JPEG (85%).
+    LosslessLight,
+    /// Balanced downsampling (150 DPI) and medium-high JPEG (75%).
+    #[default]
+    Balanced,
+    /// Aggressive downsampling (110 DPI) and compact JPEG (60%).
+    Maximum,
+}
+
+impl CompressionMode {
+    /// Target raster image DPI above which embedded images are downsampled.
+    #[must_use]
+    pub const fn target_dpi(self) -> u16 {
+        match self {
+            Self::LosslessLight => 220,
+            Self::Balanced => 150,
+            Self::Maximum => 110,
+        }
+    }
+
+    /// Baseline JPEG quality (1-100) applied to recompressed raster images.
+    #[must_use]
+    pub const fn jpeg_quality(self) -> u8 {
+        match self {
+            Self::LosslessLight => 85,
+            Self::Balanced => 75,
+            Self::Maximum => 60,
+        }
+    }
+
+    /// Converts a Slint UI segment index (`0..=2`) to [`CompressionMode`].
+    #[must_use]
+    pub const fn from_slint_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::LosslessLight),
+            1 => Some(Self::Balanced),
+            2 => Some(Self::Maximum),
+            _ => None,
+        }
+    }
+
+    /// Converts this [`CompressionMode`] to a Slint UI segment index (`0..=2`).
+    #[must_use]
+    pub const fn to_slint_index(self) -> i32 {
+        match self {
+            Self::LosslessLight => 0,
+            Self::Balanced => 1,
+            Self::Maximum => 2,
+        }
+    }
+}
+
+/// Byte-size and savings summary returned after compressing a PDF document.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CompressionReport {
+    pub original_bytes: u64,
+    pub compressed_bytes: u64,
+    pub saved_percent: f32,
+}
+
+impl CompressionReport {
+    /// Builds a [`CompressionReport`] from pre- and post-compression file sizes.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn from_sizes(original_bytes: u64, compressed_bytes: u64) -> Self {
+        let saved_percent = if original_bytes == 0 || compressed_bytes >= original_bytes {
+            0.0
+        } else {
+            let saved = original_bytes - compressed_bytes;
+            ((saved as f64 / original_bytes as f64) * 100.0) as f32
+        };
+        Self {
+            original_bytes,
+            compressed_bytes,
+            saved_percent,
+        }
+    }
+
+    /// Returns the number of bytes saved (`0` if output did not shrink).
+    #[must_use]
+    pub const fn saved_bytes(self) -> u64 {
+        self.original_bytes.saturating_sub(self.compressed_bytes)
+    }
+}
+
 /// A read-only representation of an annotation loaded from a PDF document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AnnotationRecord {
@@ -1687,5 +1775,42 @@ mod tests {
                 serde_json::from_str(&serialized).expect("field record deserializes");
             assert_eq!(record, deserialized);
         }
+    }
+
+    #[test]
+    fn compression_mode_and_report_calculations() {
+        assert_eq!(CompressionMode::LosslessLight.target_dpi(), 220);
+        assert_eq!(CompressionMode::LosslessLight.jpeg_quality(), 85);
+        assert_eq!(CompressionMode::Balanced.target_dpi(), 150);
+        assert_eq!(CompressionMode::Balanced.jpeg_quality(), 75);
+        assert_eq!(CompressionMode::Maximum.target_dpi(), 110);
+        assert_eq!(CompressionMode::Maximum.jpeg_quality(), 60);
+
+        assert_eq!(
+            CompressionMode::from_slint_index(0),
+            Some(CompressionMode::LosslessLight)
+        );
+        assert_eq!(
+            CompressionMode::from_slint_index(1),
+            Some(CompressionMode::Balanced)
+        );
+        assert_eq!(
+            CompressionMode::from_slint_index(2),
+            Some(CompressionMode::Maximum)
+        );
+        assert_eq!(CompressionMode::from_slint_index(3), None);
+
+        let report = CompressionReport::from_sizes(1_000, 400);
+        assert_eq!(report.original_bytes, 1_000);
+        assert_eq!(report.compressed_bytes, 400);
+        assert_eq!(report.saved_bytes(), 600);
+        assert!((report.saved_percent - 60.0).abs() < 0.001);
+
+        let unchanged = CompressionReport::from_sizes(1_000, 1_200);
+        assert_eq!(unchanged.saved_bytes(), 0);
+        assert_eq!(unchanged.saved_percent, 0.0);
+
+        let empty = CompressionReport::from_sizes(0, 0);
+        assert_eq!(empty.saved_percent, 0.0);
     }
 }
