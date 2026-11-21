@@ -225,6 +225,7 @@ pub(crate) fn run() -> Result<(), AppError> {
     app.preferences.open_tabs = sessions;
     app.preferences.active_tab_index = active_index;
     persist_preferences(&app.preferences, &preferences_path, None);
+    app.clear_all_document_passwords();
     Ok(())
 }
 
@@ -446,8 +447,16 @@ pub(crate) fn handle_render_event(
                 page_count,
                 MAX_DOCUMENT_PAGES,
             ) {
-                OpenTransition::Ready(ready) => ready,
+                OpenTransition::Ready(ready) => {
+                    app.finalize_opened_document_password(document_id);
+                    ready
+                }
                 OpenTransition::InvalidPageCount => {
+                    if app.has_ready_document(document_id) {
+                        app.clear_pending_document_password(document_id);
+                    } else {
+                        app.clear_document_passwords(document_id);
+                    }
                     show_banner(
                         window,
                         format!("PDF page count must be between 1 and {MAX_DOCUMENT_PAGES}."),
@@ -455,7 +464,10 @@ pub(crate) fn handle_render_event(
                     );
                     return;
                 }
-                OpenTransition::Stale => return,
+                OpenTransition::Stale => {
+                    app.clear_pending_document_password(document_id);
+                    return;
+                }
             };
             let page_count = ready.page_count().get();
             let path = ready.path().to_path_buf();
@@ -729,6 +741,11 @@ pub(crate) fn handle_render_event(
             if DocumentController::is_pending(&app.application, document_id) {
                 match error {
                     RenderError::Pdf(PdfError::PasswordRequired) => {
+                        if app.has_ready_document(document_id) {
+                            app.clear_pending_document_password(document_id);
+                        } else {
+                            app.clear_document_passwords(document_id);
+                        }
                         let _ =
                             DocumentController::require_password(&mut app.application, document_id);
                         let name = DocumentController::pending_path(&app.application)
@@ -740,11 +757,21 @@ pub(crate) fn handle_render_event(
                         window.set_password_required(true);
                     }
                     RenderError::Pdf(PdfError::IncorrectPassword) => {
+                        if app.has_ready_document(document_id) {
+                            app.clear_pending_document_password(document_id);
+                        } else {
+                            app.clear_document_passwords(document_id);
+                        }
                         window.set_password_error(SharedString::from("Incorrect password."));
                         window.set_password_required(true);
                     }
                     other => {
                         let _ = DocumentController::fail(&mut app.application, document_id);
+                        if app.has_ready_document(document_id) {
+                            app.clear_pending_document_password(document_id);
+                        } else {
+                            app.clear_document_passwords(document_id);
+                        }
                         show_banner(window, format!("Could not open PDF: {other}"), true);
                     }
                 }
@@ -754,6 +781,9 @@ pub(crate) fn handle_render_event(
                 generation,
                 app.generation,
             ) {
+                if generation.is_none() {
+                    app.clear_pending_document_password(document_id);
+                }
                 let visible = app.visible_page_indices.clone();
                 for page in visible {
                     if !app
@@ -764,6 +794,8 @@ pub(crate) fn handle_render_event(
                     }
                 }
                 show_banner(window, format!("PDF rendering failed: {error}"), true);
+            } else if generation.is_none() {
+                app.clear_pending_document_password(document_id);
             }
             refresh_tab_model(&app, window);
         }
@@ -773,12 +805,15 @@ pub(crate) fn handle_render_event(
 
 pub(crate) fn begin_open(
     path: PathBuf,
-    password: Option<SecretPassword>,
+    mut password: Option<SecretPassword>,
     state: &Rc<RefCell<AppState>>,
     scheduler: &RenderScheduler,
     window: &AppWindow,
 ) {
     if !is_pdf_path(&path) {
+        if let Some(ref mut secret) = password {
+            secret.clear();
+        }
         show_banner(window, "Choose an existing PDF file.", false);
         return;
     }
@@ -798,6 +833,9 @@ pub(crate) fn begin_open(
             app.application.tabs.open(path.clone(), title),
             OpenTab::Full
         ) {
+            if let Some(ref mut secret) = password {
+                secret.clear();
+            }
             show_banner(
                 window,
                 format!("A maximum of {MAX_OPEN_TABS} tabs can be open."),
@@ -811,6 +849,9 @@ pub(crate) fn begin_open(
         }
         restore_active_view(&mut app, window);
         let Some(tab_id) = app.application.tabs.active_id() else {
+            if let Some(ref mut secret) = password {
+                secret.clear();
+            }
             return;
         };
         DocumentId::new(tab_id.get())
@@ -822,6 +863,7 @@ pub(crate) fn begin_open(
         path.clone(),
         Instant::now(),
     );
+    app.set_pending_document_password(document_id, password.clone());
     window.set_status_text(SharedString::from("Opening document…"));
     window.set_password_error(SharedString::default());
     if !send_render_command(
@@ -834,6 +876,7 @@ pub(crate) fn begin_open(
         },
     ) {
         DocumentController::cancel_open(&mut app.application, document_id);
+        app.clear_pending_document_password(document_id);
         show_banner(window, "PDF work queue is unavailable. Try again.", true);
     }
     refresh_tab_model(&app, window);
@@ -2658,5 +2701,254 @@ mod tests {
 
         let loaded = crate::infrastructure::load(&path);
         assert_eq!(loaded.last_window_width, 9999);
+    }
+
+    #[test]
+    fn begin_open_and_render_events_manage_secret_password_lifecycle() {
+        use barepdf_core::{PageCount, PageIndex, PdfError, RawBitmap, Rotation};
+        use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+
+        struct MockDoc;
+        impl PdfDocument for MockDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::ONE)
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((600.0, 800.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+                Ok(barepdf_core::PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &std::path::Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockDoc))
+            }
+        }
+
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let enc_path = temp_dir.path().join("encrypted.pdf");
+            let corrupt_path = temp_dir.path().join("corrupt.pdf");
+            let invalid_pages_path = temp_dir.path().join("invalid_pages.pdf");
+            let queue_down_path = temp_dir.path().join("queue_down.pdf");
+            for path in [
+                &enc_path,
+                &corrupt_path,
+                &invalid_pages_path,
+                &queue_down_path,
+            ] {
+                std::fs::write(path, b"%PDF-1.4\n").expect("stub pdf");
+            }
+            let prefs_path = temp_dir.path().join("prefs.json");
+
+            let window = AppWindow::new().expect("window");
+            let state = Rc::new(RefCell::new(AppState::new(UserPreferences::default())));
+            let scheduler =
+                RenderScheduler::spawn(MockBackend, barepdf_core::MemoryBudget::default());
+
+            // 1. Incorrect password immediately clears pending password.
+            begin_open(
+                enc_path.clone(),
+                Some(SecretPassword::new("wrong-pass".into())),
+                &state,
+                &scheduler,
+                &window,
+            );
+            let doc1 = DocumentId::new(
+                state
+                    .borrow()
+                    .application
+                    .tabs
+                    .active_id()
+                    .expect("tab1")
+                    .get(),
+            );
+            assert_eq!(
+                state
+                    .borrow()
+                    .pending_document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("wrong-pass")
+            );
+            assert!(state.borrow().document_password(doc1).is_none());
+
+            handle_render_event(
+                RenderEvent::Error {
+                    request_id: None,
+                    document_id: doc1,
+                    generation: None,
+                    error: RenderError::Pdf(PdfError::IncorrectPassword),
+                },
+                &window,
+                &state,
+                &scheduler,
+                &prefs_path,
+            );
+            assert!(state.borrow().pending_document_password(doc1).is_none());
+            assert!(state.borrow().document_password(doc1).is_none());
+
+            // 2. Correct password promotes pending -> active on DocumentOpened.
+            begin_open(
+                enc_path,
+                Some(SecretPassword::new("right-password".into())),
+                &state,
+                &scheduler,
+                &window,
+            );
+            handle_render_event(
+                RenderEvent::DocumentOpened {
+                    document_id: doc1,
+                    page_count: 1,
+                    first_page_dimensions: (600.0, 800.0),
+                },
+                &window,
+                &state,
+                &scheduler,
+                &prefs_path,
+            );
+            assert!(state.borrow().pending_document_password(doc1).is_none());
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("right-password")
+            );
+
+            // 3. Generic open failure clears second document's pending/active password without harming doc1.
+            begin_open(
+                corrupt_path,
+                Some(SecretPassword::new("corrupt-secret".into())),
+                &state,
+                &scheduler,
+                &window,
+            );
+            let doc2 = DocumentId::new(
+                state
+                    .borrow()
+                    .application
+                    .tabs
+                    .active_id()
+                    .expect("tab2")
+                    .get(),
+            );
+            assert_ne!(doc1, doc2);
+            handle_render_event(
+                RenderEvent::Error {
+                    request_id: None,
+                    document_id: doc2,
+                    generation: None,
+                    error: RenderError::Pdf(PdfError::InvalidPdfReason("corrupt".into())),
+                },
+                &window,
+                &state,
+                &scheduler,
+                &prefs_path,
+            );
+            assert!(state.borrow().pending_document_password(doc2).is_none());
+            assert!(state.borrow().document_password(doc2).is_none());
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("right-password")
+            );
+
+            // 4. InvalidPageCount clears pending password.
+            begin_open(
+                invalid_pages_path,
+                Some(SecretPassword::new("too-many-pages".into())),
+                &state,
+                &scheduler,
+                &window,
+            );
+            let doc3 = DocumentId::new(
+                state
+                    .borrow()
+                    .application
+                    .tabs
+                    .active_id()
+                    .expect("tab3")
+                    .get(),
+            );
+            handle_render_event(
+                RenderEvent::DocumentOpened {
+                    document_id: doc3,
+                    page_count: MAX_DOCUMENT_PAGES + 1,
+                    first_page_dimensions: (600.0, 800.0),
+                },
+                &window,
+                &state,
+                &scheduler,
+                &prefs_path,
+            );
+            assert!(state.borrow().pending_document_password(doc3).is_none());
+            assert!(state.borrow().document_password(doc3).is_none());
+
+            // 5. Queue send failure cancels open and clears pending password.
+            let _ = scheduler.shutdown();
+            begin_open(
+                queue_down_path,
+                Some(SecretPassword::new("unsent-secret".into())),
+                &state,
+                &scheduler,
+                &window,
+            );
+            let doc4 = DocumentId::new(
+                state
+                    .borrow()
+                    .application
+                    .tabs
+                    .active_id()
+                    .expect("tab4")
+                    .get(),
+            );
+            assert!(state.borrow().pending_document_password(doc4).is_none());
+            assert!(state.borrow().document_password(doc4).is_none());
+        });
     }
 }

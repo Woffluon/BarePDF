@@ -1,4 +1,4 @@
-use barepdf_core::{selection::SelectionEngine, PageIndex};
+use barepdf_core::{selection::SelectionEngine, PageIndex, SecretPassword};
 use barepdf_platform_windows::WindowsFileDialogs;
 use barepdf_render::RenderScheduler;
 use barepdf_ui::AppWindow;
@@ -48,7 +48,7 @@ pub(crate) fn handle_background_ui_event(
             };
             match result {
                 Ok(()) => {
-                    {
+                    let saved_password = {
                         let mut app = state.borrow_mut();
                         app.drawing.annotations.remove(&doc_id);
                         app.drawing.active_stroke = None;
@@ -56,7 +56,8 @@ pub(crate) fn handle_background_ui_event(
                         app.thumbnail_images.remove_document(doc_id);
                         app.text_geometries.remove_document(doc_id);
                         refresh_annotation_overlays(&mut app, window);
-                    }
+                        app.document_password(doc_id).cloned()
+                    };
                     window.set_drawing_mode_active(false);
                     let name = output_path
                         .file_name()
@@ -65,7 +66,7 @@ pub(crate) fn handle_background_ui_event(
                     let msg = barepdf_i18n::t(lang, "status.saved").replace("{name}", name);
                     window.set_status_text(SharedString::from(msg.as_str()));
                     show_banner(window, msg, false);
-                    begin_open(output_path, None, state, scheduler, window);
+                    begin_open(output_path, saved_password, state, scheduler, window);
                 }
                 Err(err) => {
                     show_banner(window, format!("Failed to save annotations: {err}"), false);
@@ -982,13 +983,32 @@ pub(crate) fn connect_annotation_and_signature_callbacks(
     });
 }
 
+fn save_annotations_with_secret_password(
+    source_path: &std::path::Path,
+    annotations: &barepdf_core::DocumentAnnotations,
+    output_path: &std::path::Path,
+    mut password: Option<SecretPassword>,
+) -> Result<(), String> {
+    let result = barepdf_pdf::PdfOperations::save_with_annotations_with_password(
+        source_path,
+        annotations,
+        output_path,
+        password.as_ref().map(SecretPassword::expose),
+    )
+    .map_err(|err| err.to_string());
+    if let Some(ref mut secret) = password {
+        secret.clear();
+    }
+    result
+}
+
 fn save_active_annotations(
     state: &Rc<RefCell<AppState>>,
     _scheduler: &Rc<RenderScheduler>,
     _window: &AppWindow,
     save_as_path: Option<PathBuf>,
 ) {
-    let (doc_id, source_path, annotations) = {
+    let (doc_id, source_path, annotations, password) = {
         let mut app = state.borrow_mut();
         if app.in_flight.annotation_save {
             return;
@@ -1004,17 +1024,18 @@ fn save_active_annotations(
             return;
         }
         let source_path = doc.path().to_path_buf();
+        let password = app.document_password(doc_id).cloned();
         app.in_flight.annotation_save = true;
-        (doc_id, source_path, annotations)
+        (doc_id, source_path, annotations, password)
     };
     let output_path = save_as_path.unwrap_or_else(|| source_path.clone());
     state.borrow_mut().spawn_background_io(move || {
-        let result = barepdf_pdf::PdfOperations::save_with_annotations(
+        let result = save_annotations_with_secret_password(
             &source_path,
             &annotations,
             &output_path,
-        )
-        .map_err(|err| err.to_string());
+            password,
+        );
         BackgroundUiEvent::AnnotationsSaved {
             doc_id,
             output_path,
@@ -1130,4 +1151,309 @@ pub(crate) fn add_free_text_annotation(
     ann.free_texts.push(annotation);
     let history = app.drawing.annotation_history.entry(doc_id).or_default();
     history.push_snapshot(before);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::{DocumentState, OpenTab, ReadyDocument};
+    use barepdf_core::{
+        DocumentAnnotations, DocumentId, FreeTextAnnotation, InkColor, InkStroke, PageCount,
+        PdfError, RawBitmap, Rotation, UserPreferences,
+    };
+    use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, PdfiumEngine, TextSpan};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    fn decode_base64(value: &str) -> Vec<u8> {
+        let mut output = Vec::with_capacity(value.len() * 3 / 4);
+        let mut accumulator = 0_u32;
+        let mut bits = 0_u8;
+        for byte in value.bytes() {
+            let chunk = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => break,
+                _ => continue,
+            };
+            accumulator = (accumulator << 6) | u32::from(chunk);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                output.push((accumulator >> bits) as u8);
+                accumulator &= (1_u32 << bits) - 1;
+            }
+        }
+        output
+    }
+
+    fn create_encrypted_test_pdf(path: &Path) {
+        const PDF: &str = "JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPDhjOGU0MjU5ZDc+Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9UeXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9UeXBlIC9QYWdlCi9SZXNvdXJjZXMgPDwKPj4KL01lZGlhQm94IFsgMC4wIDAuMCA3MiA3MiBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCjUgMCBvYmoKPDwKL1YgMgovUiAzCi9MZW5ndGggMTI4Ci9QIDQyOTQ5NjcyOTIKL0ZpbHRlciAvU3RhbmRhcmQKL08gPDBjYzhjMzkyODQ4YzY0NTA5YTc1Zjk2ZjkwOTQ0MDk4NTZiNWJmYTRlMjA2ZDM5ZjNkYTQ3NjZkMzVhNDQzZTA+Ci9VIDwwMWQ5M2FhOGRhODk2ZDdmNmFkYjJlNmVhYTNlZjlmMDI4YmY0ZTVlNGU3NThhNDE2NDAwNGU1NmZmZmEwMTA4Pgo+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNTkgMDAwMDAgbiAKMDAwMDAwMDExOCAwMDAwMCBuIAowMDAwMDAwMTY3IDAwMDAwIG4gCjAwMDAwMDAyNTkgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA2Ci9Sb290IDMgMCBSCi9JbmZvIDEgMCBSCi9JRCBbIDw2NDY2NjM2MTY2MzUzNDMyMzczOTMwMzMzMjMwMzY2NDY0MzEzMTM0MzQzMTY0MzA2MjM1NjI2MTM5MzYzMTYyPiA8NjQ2NjM2MTY2MzUzNDMyMzczOTMwMzMzMjMwMzY2NDY0MzEzMTM0MzQzMTY0MzA2MjM1NjI2MTM5MzYzMTYyPiBdCi9FbmNyeXB0IDUgMCBSCj4+CnN0YXJ0eHJlZgo0NzQKJSVFT0YK";
+        std::fs::write(path, decode_base64(PDF)).expect("write encrypted PDF fixture");
+    }
+
+    #[test]
+    fn save_annotations_with_secret_password_round_trips_encrypted_pdf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("encrypted.pdf");
+        let output_none = dir.path().join("out_none.pdf");
+        let output_wrong = dir.path().join("out_wrong.pdf");
+        let output_ok = dir.path().join("out_ok.pdf");
+        create_encrypted_test_pdf(&source);
+
+        let mut annotations = DocumentAnnotations::default();
+        annotations.strokes.push(InkStroke {
+            page: PageIndex::zero(),
+            points: vec![(0.1, 0.1), (0.8, 0.8)],
+            color: InkColor::Red,
+            width_pts: 2.0,
+        });
+        annotations.free_texts.push(FreeTextAnnotation {
+            id: uuid::Uuid::new_v4(),
+            page_index: 0,
+            x: 4.0,
+            y: 36.0,
+            text: "ENC-OK".into(),
+            font_size: 6.0,
+            color_rgba: [0, 0, 0, 255],
+        });
+
+        assert!(
+            save_annotations_with_secret_password(&source, &annotations, &output_none, None)
+                .is_err()
+        );
+        assert!(!output_none.exists());
+
+        assert!(save_annotations_with_secret_password(
+            &source,
+            &annotations,
+            &output_wrong,
+            Some(SecretPassword::new("wrong-password".into())),
+        )
+        .is_err());
+        assert!(!output_wrong.exists());
+
+        save_annotations_with_secret_password(
+            &source,
+            &annotations,
+            &output_ok,
+            Some(SecretPassword::new("right-password".into())),
+        )
+        .expect("encrypted annotation save succeeds with active secret password");
+        assert!(output_ok.exists());
+
+        let engine = PdfiumEngine::new().expect("pdfium engine");
+        assert!(matches!(
+            engine.open_path(&output_ok, None),
+            Err(PdfError::PasswordRequired)
+        ));
+        let doc = engine
+            .open_path(&output_ok, Some("right-password"))
+            .expect("open annotated output with password");
+        assert_eq!(doc.page_count().expect("page count").get(), 1);
+        let text = doc.extract_text(PageIndex::zero()).expect("extract text");
+        assert!(
+            text.contains("ENC-OK"),
+            "expected flattened annotation text in output PDF, got: {text}"
+        );
+    }
+
+    #[test]
+    fn save_active_annotations_uses_active_document_password_in_background() {
+        struct MockPdfDoc;
+        impl PdfDocument for MockPdfDoc {
+            fn page_count(&self) -> Result<PageCount, PdfError> {
+                Ok(PageCount::ONE)
+            }
+            fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+                Ok((72.0, 72.0))
+            }
+            fn render_page(
+                &self,
+                _page_index: PageIndex,
+                _target_width: u32,
+                _target_height: u32,
+                _rotation: Rotation,
+            ) -> Result<RawBitmap, PdfError> {
+                RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                    .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+            }
+            fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+                Ok(String::new())
+            }
+            fn extract_text_spans(
+                &self,
+                _page_index: PageIndex,
+            ) -> Result<Vec<TextSpan>, PdfError> {
+                Ok(Vec::new())
+            }
+            fn get_page_text_geometry(
+                &self,
+                page_index: PageIndex,
+            ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
+                Ok(barepdf_core::PageTextGeometry {
+                    page_index,
+                    glyphs: Vec::new(),
+                    links: Vec::new(),
+                })
+            }
+            fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct MockBackend;
+        impl PdfBackend for MockBackend {
+            fn open_path(
+                &self,
+                _path: &Path,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+            fn open_bytes(
+                &self,
+                _bytes: Vec<u8>,
+                _password: Option<&str>,
+            ) -> Result<Box<dyn PdfDocument>, PdfError> {
+                Ok(Box::new(MockPdfDoc))
+            }
+        }
+
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let source = dir.path().join("encrypted_active.pdf");
+            let output = dir.path().join("encrypted_active_annotated.pdf");
+            create_encrypted_test_pdf(&source);
+
+            let window = AppWindow::new().expect("window");
+            let state = Rc::new(RefCell::new(AppState::new(UserPreferences::default())));
+            let scheduler = Rc::new(RenderScheduler::spawn(
+                MockBackend,
+                barepdf_core::MemoryBudget::default(),
+            ));
+
+            let OpenTab::Created(tab_id) = state
+                .borrow_mut()
+                .application
+                .tabs
+                .open(source.clone(), "encrypted_active.pdf".into())
+            else {
+                panic!("expected created tab");
+            };
+            let doc_id = DocumentId::new(tab_id.get());
+            {
+                let mut app = state.borrow_mut();
+                if let Some(tab) = app.application.tabs.active_mut() {
+                    tab.document = Some(DocumentState::Ready(ReadyDocument {
+                        id: doc_id,
+                        path: source.clone(),
+                        page_count: PageCount::ONE,
+                        started_at: Instant::now(),
+                    }));
+                }
+                app.set_pending_document_password(
+                    doc_id,
+                    Some(SecretPassword::new("right-password".into())),
+                );
+                app.finalize_opened_document_password(doc_id);
+                let ann = app.drawing.annotations.entry(doc_id).or_default();
+                ann.free_texts.push(FreeTextAnnotation {
+                    id: uuid::Uuid::new_v4(),
+                    page_index: 0,
+                    x: 4.0,
+                    y: 36.0,
+                    text: "SAVED-OK".into(),
+                    font_size: 6.0,
+                    color_rgba: [0, 0, 0, 255],
+                });
+            }
+
+            save_active_annotations(&state, &scheduler, &window, Some(output.clone()));
+            assert!(state.borrow().in_flight.annotation_save);
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let event = loop {
+                if let Some(ev) = state.borrow().try_recv_background_io() {
+                    break ev;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for background annotation save"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            };
+
+            let BackgroundUiEvent::AnnotationsSaved {
+                doc_id: saved_doc_id,
+                output_path,
+                result,
+            } = event
+            else {
+                panic!("unexpected background event");
+            };
+            assert_eq!(saved_doc_id, doc_id);
+            assert_eq!(output_path, output);
+            assert_eq!(result, Ok(()));
+
+            handle_background_ui_event(
+                BackgroundUiEvent::AnnotationsSaved {
+                    doc_id: saved_doc_id,
+                    output_path,
+                    result,
+                },
+                &window,
+                &state,
+                &scheduler,
+            );
+            assert!(!state.borrow().in_flight.annotation_save);
+            // Save As opens the saved copy in a new tab while keeping the original source password
+            // and seeding the pending password for the encrypted saved copy.
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc_id)
+                    .map(SecretPassword::expose),
+                Some("right-password")
+            );
+            let new_doc_id = DocumentId::new(
+                state
+                    .borrow()
+                    .application
+                    .tabs
+                    .active_id()
+                    .expect("new tab")
+                    .get(),
+            );
+            assert_ne!(new_doc_id, doc_id);
+            assert_eq!(
+                state
+                    .borrow()
+                    .pending_document_password(new_doc_id)
+                    .map(SecretPassword::expose),
+                Some("right-password")
+            );
+
+            let engine = PdfiumEngine::new().expect("pdfium engine");
+            assert!(matches!(
+                engine.open_path(&output, None),
+                Err(PdfError::PasswordRequired)
+            ));
+            let saved_doc = engine
+                .open_path(&output, Some("right-password"))
+                .expect("open annotated output with password");
+            let text = saved_doc
+                .extract_text(PageIndex::zero())
+                .expect("extract text");
+            assert!(
+                text.contains("SAVED-OK"),
+                "expected callback-saved annotation text, got: {text}"
+            );
+
+            let _ = scheduler.shutdown();
+        });
+    }
 }

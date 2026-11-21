@@ -11,7 +11,7 @@ use crate::application::{Application, DocumentController, UpdateController};
 use crate::infrastructure::{ToolJobKey, ToolWorker};
 use barepdf_core::{
     ContinuousLayout, DocumentId, PageCount, PageIndex, PageTextGeometry, RequestId, Rotation,
-    TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
+    SecretPassword, TextSelection, UserPreferences, ViewingMode, WindowMode, ZoomFactor, ZoomMode,
 };
 use barepdf_pdf::conversion::CancellationToken;
 use barepdf_pdf::OutlineNode;
@@ -736,6 +736,8 @@ pub(crate) struct AppState {
     pub(crate) tools: ToolsSession,
     pub(crate) drawing: DrawingSession,
     pub(crate) pending_close_tab_id: Option<barepdf_core::DocumentId>,
+    pending_document_passwords: HashMap<DocumentId, SecretPassword>,
+    document_passwords: HashMap<DocumentId, SecretPassword>,
     background_io_sender: std::sync::mpsc::Sender<BackgroundUiEvent>,
     background_io_receiver: std::sync::mpsc::Receiver<BackgroundUiEvent>,
     background_io_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -802,6 +804,8 @@ impl AppState {
             tools: ToolsSession::default(),
             drawing: DrawingSession::default(),
             pending_close_tab_id: None,
+            pending_document_passwords: HashMap::new(),
+            document_passwords: HashMap::new(),
             background_io_sender,
             background_io_receiver,
             background_io_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -871,6 +875,81 @@ impl AppState {
         self.application
             .ready_document()
             .map(crate::application::ReadyDocument::id)
+    }
+
+    pub(crate) fn set_pending_document_password(
+        &mut self,
+        document_id: DocumentId,
+        password: Option<SecretPassword>,
+    ) {
+        self.clear_pending_document_password(document_id);
+        if let Some(password) = password {
+            self.pending_document_passwords
+                .insert(document_id, password);
+        }
+    }
+
+    pub(crate) fn finalize_opened_document_password(&mut self, document_id: DocumentId) {
+        let pending = self.pending_document_passwords.remove(&document_id);
+        if let Some(mut previous) = self.document_passwords.remove(&document_id) {
+            previous.clear();
+        }
+        if let Some(password) = pending {
+            self.document_passwords.insert(document_id, password);
+        }
+    }
+
+    pub(crate) fn clear_pending_document_password(&mut self, document_id: DocumentId) {
+        if let Some(mut password) = self.pending_document_passwords.remove(&document_id) {
+            password.clear();
+        }
+    }
+
+    pub(crate) fn clear_document_passwords(&mut self, document_id: DocumentId) {
+        self.clear_pending_document_password(document_id);
+        if let Some(mut password) = self.document_passwords.remove(&document_id) {
+            password.clear();
+        }
+    }
+
+    pub(crate) fn clear_all_document_passwords(&mut self) {
+        for (_, mut password) in self.pending_document_passwords.drain() {
+            password.clear();
+        }
+        for (_, mut password) in self.document_passwords.drain() {
+            password.clear();
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn document_password(&self, document_id: DocumentId) -> Option<&SecretPassword> {
+        self.document_passwords.get(&document_id)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn pending_document_password(
+        &self,
+        document_id: DocumentId,
+    ) -> Option<&SecretPassword> {
+        self.pending_document_passwords.get(&document_id)
+    }
+
+    #[must_use]
+    pub(crate) fn has_ready_document(&self, document_id: DocumentId) -> bool {
+        self.application
+            .tabs
+            .tabs()
+            .iter()
+            .any(|tab| match &tab.document {
+                Some(crate::application::DocumentState::Ready(doc)) => doc.id == document_id,
+                Some(
+                    crate::application::DocumentState::Opening { active, .. }
+                    | crate::application::DocumentState::PasswordRequired { active, .. }
+                    | crate::application::DocumentState::Failed { active, .. },
+                ) => active.as_ref().is_some_and(|doc| doc.id == document_id),
+                None => false,
+            })
     }
 
     pub(crate) fn page_count(&self) -> u32 {
@@ -1011,6 +1090,12 @@ impl AppState {
         self.last_scroll_y = view.scroll_y;
         self.restore_active_tab_layout();
         Some(view)
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        self.clear_all_document_passwords();
     }
 }
 
@@ -1820,5 +1905,63 @@ mod tests {
         assert_eq!(view2.sidebar_tab, 2);
         assert_eq!(app.page_dimensions.len(), 8);
         assert_eq!(app.page_images.budget(), 24 * 1024 * 1024);
+    }
+
+    #[test]
+    fn document_password_lifecycle_stores_promotes_and_clears() {
+        let mut app = AppState::new(UserPreferences::default());
+        let doc1 = DocumentId::new(1);
+        let doc2 = DocumentId::new(2);
+        let doc3 = DocumentId::new(3);
+
+        app.set_pending_document_password(doc1, Some(SecretPassword::new("first-pass".into())));
+        app.set_pending_document_password(doc1, Some(SecretPassword::new("second-pass".into())));
+        assert_eq!(
+            app.pending_document_password(doc1)
+                .map(SecretPassword::expose),
+            Some("second-pass")
+        );
+        assert!(app.document_password(doc1).is_none());
+
+        app.finalize_opened_document_password(doc1);
+        assert!(app.pending_document_password(doc1).is_none());
+        assert_eq!(
+            app.document_password(doc1).map(SecretPassword::expose),
+            Some("second-pass")
+        );
+        let redacted = format!("{:?}", app.document_password(doc1));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(!redacted.contains("second-pass"));
+
+        app.set_pending_document_password(doc2, Some(SecretPassword::new("doc2-secret".into())));
+        app.finalize_opened_document_password(doc2);
+        assert_eq!(
+            app.document_password(doc2).map(SecretPassword::expose),
+            Some("doc2-secret")
+        );
+
+        // Re-opening doc1 without password clears prior active password without touching doc2.
+        app.set_pending_document_password(doc1, None);
+        app.finalize_opened_document_password(doc1);
+        assert!(app.document_password(doc1).is_none());
+        assert_eq!(
+            app.document_password(doc2).map(SecretPassword::expose),
+            Some("doc2-secret")
+        );
+
+        // Clearing pending vs active vs all.
+        app.set_pending_document_password(doc3, Some(SecretPassword::new("pending-only".into())));
+        app.clear_pending_document_password(doc3);
+        assert!(app.pending_document_password(doc3).is_none());
+
+        app.clear_document_passwords(doc2);
+        assert!(app.document_password(doc2).is_none());
+
+        app.set_pending_document_password(doc1, Some(SecretPassword::new("p1".into())));
+        app.set_pending_document_password(doc2, Some(SecretPassword::new("p2".into())));
+        app.finalize_opened_document_password(doc2);
+        app.clear_all_document_passwords();
+        assert!(app.pending_document_password(doc1).is_none());
+        assert!(app.document_password(doc2).is_none());
     }
 }

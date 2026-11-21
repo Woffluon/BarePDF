@@ -4,7 +4,7 @@ use barepdf_render::{RenderCommand, RenderKind, RenderScheduler};
 use barepdf_ui::AppWindow;
 use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ pub(super) fn connect_tab_callbacks(
         let Some(window) = weak.upgrade() else {
             return;
         };
-        let (path, already_ready) = {
+        let (path, tab_state) = {
             let mut app = state_activate.borrow_mut();
             let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
                 return;
@@ -46,71 +46,15 @@ pub(super) fn connect_tab_callbacks(
                 return;
             }
             restore_active_view(&mut app, &window);
-            let already_ready = matches!(
-                app.application
-                    .tabs
-                    .active()
-                    .and_then(|t| t.document.as_ref()),
-                Some(crate::application::DocumentState::Ready(_))
-            );
-            (
-                app.application.tabs.path(id).map(Path::to_path_buf),
-                already_ready,
-            )
+            switched_tab_state(&app)
         };
-        if already_ready {
-            let mut app = state_activate.borrow_mut();
-            if let Some(ref p) = path {
-                app.start_file_watcher(p);
-            } else {
-                app.stop_file_watcher();
-            }
-            window.set_has_document(true);
-            let title = app
-                .application
-                .tabs
-                .active()
-                .map(|tab| tab.title.clone())
-                .unwrap_or_default();
-            window.set_document_title(SharedString::from(title));
-            let page_count = app.page_count();
-            window.set_total_pages_str(SharedString::from(page_count.to_string()));
-            app.layout_key = None;
-            ensure_layout(&mut app);
-            refresh_thumbnail_model(&mut app, &window);
-            refresh_page_model(&mut app, &window);
-            refresh_tab_model(&app, &window);
-            refresh_generation_bound_views(&mut app, &scheduler_activate, &window);
-            refresh_bookmark_model(&app, &window);
-            if !app.outline.is_empty() {
-                refresh_outline_model(&mut app, &window);
-            }
-            let current_page = app.current_page;
-            let active_doc = app.active_document();
-            if let Some(image) = active_doc.and_then(|document| {
-                app.page_images
-                    .get(document, current_page, RenderKind::Page)
-            }) {
-                window.set_page_bitmap(image);
-            }
-            request_next_dimensions_batch(&mut app, &scheduler_activate);
-        } else if let Some(path) = path {
-            if path.is_file() {
-                begin_open(path, None, &state_activate, &scheduler_activate, &window);
-            } else {
-                let mut app = state_activate.borrow_mut();
-                if let Some(document) = app.active_document() {
-                    app.page_images.remove_document(document);
-                    app.thumbnail_images.remove_document(document);
-                    app.text_geometries.remove_document(document);
-                }
-                DocumentController::fail_active_path(&mut app.application, path);
-                reset_empty_document(&mut app, &window);
-                show_banner(&window, "This PDF no longer exists.", true);
-            }
-        } else {
-            reset_empty_document(&mut state_activate.borrow_mut(), &window);
-        }
+        activate_switched_tab(
+            path,
+            tab_state,
+            &state_activate,
+            &scheduler_activate,
+            &window,
+        );
         refresh_tab_model(&state_activate.borrow(), &window);
     });
 
@@ -191,6 +135,8 @@ pub(super) fn connect_tab_callbacks(
             drop(app);
             if let Some(raw_id) = raw_id {
                 close_tab_internal(raw_id, &window, &state_confirm, &scheduler_confirm);
+            } else {
+                state_confirm.borrow_mut().clear_document_passwords(doc_id);
             }
         }
         window.set_unsaved_drawings_dialog_open(false);
@@ -231,17 +177,175 @@ pub(super) fn connect_tab_callbacks(
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchedTabState {
+    Ready,
+    Opening,
+    NeedsOpen,
+}
+
+fn switched_tab_state(app: &AppState) -> (Option<PathBuf>, SwitchedTabState) {
+    let path = app
+        .application
+        .tabs
+        .active_id()
+        .and_then(|id| app.application.tabs.path(id))
+        .map(Path::to_path_buf);
+    let state = match app
+        .application
+        .tabs
+        .active()
+        .and_then(|t| t.document.as_ref())
+    {
+        Some(crate::application::DocumentState::Ready(_)) => SwitchedTabState::Ready,
+        Some(crate::application::DocumentState::Opening { .. }) => SwitchedTabState::Opening,
+        _ => SwitchedTabState::NeedsOpen,
+    };
+    (path, state)
+}
+
+fn push_unique_doc_id(ids: &mut Vec<DocumentId>, doc_id: DocumentId) {
+    if !ids.contains(&doc_id) {
+        ids.push(doc_id);
+    }
+}
+
+fn collect_tab_document_ids(app: &AppState, raw_tab_id: u64) -> Vec<DocumentId> {
+    let mut ids = vec![DocumentId::new(raw_tab_id)];
+    if let Some(tab) = app
+        .application
+        .tabs
+        .tabs()
+        .iter()
+        .find(|t| t.id.get() == raw_tab_id)
+    {
+        match &tab.document {
+            Some(crate::application::DocumentState::Ready(doc)) => {
+                push_unique_doc_id(&mut ids, doc.id);
+            }
+            Some(
+                crate::application::DocumentState::Opening { id, active, .. }
+                | crate::application::DocumentState::PasswordRequired { id, active, .. },
+            ) => {
+                push_unique_doc_id(&mut ids, *id);
+                if let Some(doc) = active {
+                    push_unique_doc_id(&mut ids, doc.id);
+                }
+            }
+            Some(crate::application::DocumentState::Failed {
+                active: Some(doc), ..
+            }) => {
+                push_unique_doc_id(&mut ids, doc.id);
+            }
+            Some(crate::application::DocumentState::Failed { active: None, .. }) | None => {}
+        }
+    }
+    ids
+}
+
+fn restore_ready_tab_ui(
+    path: Option<&Path>,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    window: &AppWindow,
+) {
+    let mut app = state.borrow_mut();
+    if let Some(p) = path {
+        app.start_file_watcher(p);
+    } else {
+        app.stop_file_watcher();
+    }
+    window.set_has_document(true);
+    let title = app
+        .application
+        .tabs
+        .active()
+        .map(|tab| tab.title.clone())
+        .unwrap_or_default();
+    window.set_document_title(SharedString::from(title));
+    let page_count = app.page_count();
+    window.set_total_pages_str(SharedString::from(page_count.to_string()));
+    app.layout_key = None;
+    ensure_layout(&mut app);
+    refresh_thumbnail_model(&mut app, window);
+    refresh_page_model(&mut app, window);
+    refresh_tab_model(&app, window);
+    refresh_generation_bound_views(&mut app, scheduler, window);
+    refresh_bookmark_model(&app, window);
+    if !app.outline.is_empty() {
+        refresh_outline_model(&mut app, window);
+    }
+    let current_page = app.current_page;
+    let active_doc = app.active_document();
+    if let Some(image) = active_doc.and_then(|document| {
+        app.page_images
+            .get(document, current_page, RenderKind::Page)
+    }) {
+        window.set_page_bitmap(image);
+    }
+    request_next_dimensions_batch(&mut app, scheduler);
+}
+
+fn activate_switched_tab(
+    path: Option<PathBuf>,
+    tab_state: SwitchedTabState,
+    state: &Rc<RefCell<AppState>>,
+    scheduler: &Rc<RenderScheduler>,
+    window: &AppWindow,
+) {
+    match tab_state {
+        SwitchedTabState::Ready => {
+            restore_ready_tab_ui(path.as_deref(), state, scheduler, window);
+        }
+        SwitchedTabState::Opening => {
+            let has_ready = state.borrow().active_document().is_some();
+            if has_ready {
+                restore_ready_tab_ui(path.as_deref(), state, scheduler, window);
+            } else {
+                reset_empty_document(&mut state.borrow_mut(), window);
+            }
+            window.set_status_text(SharedString::from("Opening document…"));
+        }
+        SwitchedTabState::NeedsOpen => {
+            if let Some(path) = path {
+                if path.is_file() {
+                    begin_open(path, None, state, scheduler, window);
+                } else {
+                    let mut app = state.borrow_mut();
+                    if let Some(document) = app.active_document() {
+                        app.page_images.remove_document(document);
+                        app.thumbnail_images.remove_document(document);
+                        app.text_geometries.remove_document(document);
+                        app.clear_document_passwords(document);
+                    }
+                    if let Some(tab_id) = app.application.tabs.active_id() {
+                        for doc_id in collect_tab_document_ids(&app, tab_id.get()) {
+                            app.clear_document_passwords(doc_id);
+                        }
+                    }
+                    DocumentController::fail_active_path(&mut app.application, path);
+                    reset_empty_document(&mut app, window);
+                    show_banner(window, "This PDF no longer exists.", true);
+                }
+            } else {
+                reset_empty_document(&mut state.borrow_mut(), window);
+            }
+        }
+    }
+}
+
 fn close_tab_internal(
     raw_id: i32,
     window: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     scheduler: &Rc<RenderScheduler>,
 ) {
-    let path = {
+    let next_tab = {
         let mut app = state.borrow_mut();
         let Some(id) = app.application.tabs.find_slint_id(raw_id) else {
             return;
         };
+        let closing_doc_ids = collect_tab_document_ids(&app, id.get());
         let was_active = app.application.tabs.active_id() == Some(id);
         if was_active {
             snapshot_active_view(&mut app, window);
@@ -253,19 +357,18 @@ fn close_tab_internal(
         if !app.application.tabs.close(id) {
             return;
         }
+        for doc_id in closing_doc_ids {
+            app.clear_document_passwords(doc_id);
+        }
         if was_active {
             restore_active_view(&mut app, window);
+            Some(switched_tab_state(&app))
+        } else {
+            None
         }
-        app.application
-            .tabs
-            .active()
-            .and_then(|tab| tab.path.clone())
-            .filter(|_| was_active)
     };
-    if let Some(path) = path {
-        begin_open(path, None, state, scheduler, window);
-    } else if state.borrow().application.tabs.active_id().is_none() {
-        reset_empty_document(&mut state.borrow_mut(), window);
+    if let Some((path, tab_state)) = next_tab {
+        activate_switched_tab(path, tab_state, state, scheduler, window);
     }
     refresh_tab_model(&state.borrow(), window);
 }
@@ -331,4 +434,227 @@ pub(crate) fn clear_document_transients(app: &mut AppState, window: &AppWindow) 
     window.set_password_error(SharedString::default());
     window.set_outline_items(ModelRc::new(VecModel::default()));
     window.set_visible_pages(ModelRc::new(VecModel::default()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::{DocumentState, OpenTab, ReadyDocument};
+    use barepdf_core::{
+        PageCount, PageIndex, PageTextGeometry, PdfError, RawBitmap, Rotation, SecretPassword,
+        UserPreferences,
+    };
+    use barepdf_pdf::{OutlineNode, PdfBackend, PdfDocument, TextSpan};
+    use std::time::Instant;
+
+    struct MockPdfDoc;
+    impl PdfDocument for MockPdfDoc {
+        fn page_count(&self) -> Result<PageCount, PdfError> {
+            Ok(PageCount::ONE)
+        }
+        fn page_dimensions(&self, _page_index: PageIndex) -> Result<(f32, f32), PdfError> {
+            Ok((600.0, 800.0))
+        }
+        fn render_page(
+            &self,
+            _page_index: PageIndex,
+            _target_width: u32,
+            _target_height: u32,
+            _rotation: Rotation,
+        ) -> Result<RawBitmap, PdfError> {
+            RawBitmap::new(1, 1, vec![0, 0, 0, 255])
+                .map_err(|e| PdfError::InvalidPdfReason(e.to_string()))
+        }
+        fn extract_text(&self, _page_index: PageIndex) -> Result<String, PdfError> {
+            Ok(String::new())
+        }
+        fn extract_text_spans(&self, _page_index: PageIndex) -> Result<Vec<TextSpan>, PdfError> {
+            Ok(Vec::new())
+        }
+        fn get_page_text_geometry(
+            &self,
+            page_index: PageIndex,
+        ) -> Result<PageTextGeometry, PdfError> {
+            Ok(PageTextGeometry {
+                page_index,
+                glyphs: Vec::new(),
+                links: Vec::new(),
+            })
+        }
+        fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct MockBackend;
+    impl PdfBackend for MockBackend {
+        fn open_path(
+            &self,
+            _path: &Path,
+            _password: Option<&str>,
+        ) -> Result<Box<dyn PdfDocument>, PdfError> {
+            Ok(Box::new(MockPdfDoc))
+        }
+        fn open_bytes(
+            &self,
+            _bytes: Vec<u8>,
+            _password: Option<&str>,
+        ) -> Result<Box<dyn PdfDocument>, PdfError> {
+            Ok(Box::new(MockPdfDoc))
+        }
+    }
+
+    #[test]
+    fn tab_close_and_switch_clears_only_closed_document_passwords() {
+        crate::presentation::test_support::run_on_ui_thread(|| {
+            let state = Rc::new(RefCell::new(AppState::new(UserPreferences::default())));
+            let window = AppWindow::new().expect("slint window");
+            let scheduler = Rc::new(RenderScheduler::spawn(
+                MockBackend,
+                barepdf_core::MemoryBudget::new(1024 * 1024),
+            ));
+            connect_tab_callbacks(&window, &state, &scheduler);
+
+            let OpenTab::Created(tab1) = state
+                .borrow_mut()
+                .application
+                .tabs
+                .open(PathBuf::from("enc1.pdf"), "enc1".into())
+            else {
+                panic!("expected tab1");
+            };
+            let doc1 = DocumentId::new(tab1.get());
+            {
+                let mut app = state.borrow_mut();
+                if let Some(tab) = app.application.tabs.active_mut() {
+                    tab.document = Some(DocumentState::Ready(ReadyDocument {
+                        id: doc1,
+                        path: PathBuf::from("enc1.pdf"),
+                        page_count: PageCount::ONE,
+                        started_at: Instant::now(),
+                    }));
+                }
+                app.set_pending_document_password(doc1, Some(SecretPassword::new("pass-1".into())));
+                app.finalize_opened_document_password(doc1);
+            }
+
+            let OpenTab::Created(tab2) = state
+                .borrow_mut()
+                .application
+                .tabs
+                .open(PathBuf::from("enc2.pdf"), "enc2".into())
+            else {
+                panic!("expected tab2");
+            };
+            let doc2 = DocumentId::new(tab2.get());
+            {
+                let mut app = state.borrow_mut();
+                if let Some(tab) = app.application.tabs.active_mut() {
+                    tab.document = Some(DocumentState::Ready(ReadyDocument {
+                        id: doc2,
+                        path: PathBuf::from("enc2.pdf"),
+                        page_count: PageCount::ONE,
+                        started_at: Instant::now(),
+                    }));
+                }
+                app.set_pending_document_password(doc2, Some(SecretPassword::new("pass-2".into())));
+                app.finalize_opened_document_password(doc2);
+            }
+
+            let OpenTab::Created(tab3) = state
+                .borrow_mut()
+                .application
+                .tabs
+                .open(PathBuf::from("pending3.pdf"), "pending3".into())
+            else {
+                panic!("expected tab3");
+            };
+            let doc3 = DocumentId::new(tab3.get());
+            {
+                let mut app = state.borrow_mut();
+                if let Some(tab) = app.application.tabs.active_mut() {
+                    tab.document = Some(DocumentState::PasswordRequired {
+                        id: doc3,
+                        path: PathBuf::from("pending3.pdf"),
+                        started_at: Instant::now(),
+                        active: None,
+                    });
+                }
+                app.set_pending_document_password(
+                    doc3,
+                    Some(SecretPassword::new("pending-3".into())),
+                );
+            }
+
+            // Switching to tab1 preserves passwords of all open tabs.
+            window.invoke_request_activate_tab(tab1.to_slint_id());
+            assert!(!window.get_password_required());
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("pass-1")
+            );
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc2)
+                    .map(SecretPassword::expose),
+                Some("pass-2")
+            );
+            assert_eq!(
+                state
+                    .borrow()
+                    .pending_document_password(doc3)
+                    .map(SecretPassword::expose),
+                Some("pending-3")
+            );
+
+            // Closing background tab3 clears doc3's pending password while keeping doc1 and doc2.
+            close_tab_internal(tab3.to_slint_id(), &window, &state, &scheduler);
+            assert!(state.borrow().pending_document_password(doc3).is_none());
+            assert!(state.borrow().document_password(doc3).is_none());
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("pass-1")
+            );
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc2)
+                    .map(SecretPassword::expose),
+                Some("pass-2")
+            );
+
+            // Activate tab2 then close it -> switches back to ready tab1 without losing doc1's password.
+            window.invoke_request_activate_tab(tab2.to_slint_id());
+            close_tab_internal(tab2.to_slint_id(), &window, &state, &scheduler);
+            assert!(state.borrow().document_password(doc2).is_none());
+            assert_eq!(
+                state.borrow().application.tabs.active_id(),
+                Some(tab1),
+                "closing tab2 should activate tab1"
+            );
+            assert!(window.get_has_document());
+            assert!(!window.get_password_required());
+            assert_eq!(
+                state
+                    .borrow()
+                    .document_password(doc1)
+                    .map(SecretPassword::expose),
+                Some("pass-1")
+            );
+
+            // Closing the last tab clears doc1's password too.
+            close_tab_internal(tab1.to_slint_id(), &window, &state, &scheduler);
+            assert!(state.borrow().document_password(doc1).is_none());
+            assert!(!window.get_has_document());
+
+            let _ = scheduler.shutdown();
+        });
+    }
 }
