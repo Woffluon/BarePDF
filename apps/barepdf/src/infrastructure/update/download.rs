@@ -8,14 +8,19 @@ use barepdf_platform_windows::executable_file_version;
 #[cfg(windows)]
 use semver::Version;
 use sha2::{Digest, Sha256};
+#[cfg(any(not(windows), test))]
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+use tempfile::{Builder, NamedTempFile, TempPath};
 use ureq::Agent;
 
 const INSTALLER_TIMEOUT: Duration = Duration::from_mins(30);
@@ -58,17 +63,67 @@ fn update_directory() -> Result<PathBuf, UpdateFailure> {
         .join("Updates"))
 }
 
-#[cfg(not(windows))]
-fn update_directory() -> Result<PathBuf, UpdateFailure> {
-    if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
-        Ok(PathBuf::from(cache_home).join("barepdf").join("updates"))
-    } else if let Some(home) = std::env::var_os("HOME") {
-        Ok(PathBuf::from(home)
+#[cfg(any(not(windows), test))]
+fn resolve_unix_update_directory(
+    xdg_cache_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Result<PathBuf, UpdateFailure> {
+    if let Some(cache_home) = xdg_cache_home.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(cache_home).join("barepdf").join("updates"));
+    }
+    if let Some(home) = home.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home)
             .join(".cache")
             .join("barepdf")
-            .join("updates"))
-    } else {
-        Ok(std::env::temp_dir().join("barepdf-updates"))
+            .join("updates"));
+    }
+    Err(UpdateFailure::Rejected(
+        "Update cache directory is unavailable",
+    ))
+}
+
+#[cfg(not(windows))]
+fn update_directory() -> Result<PathBuf, UpdateFailure> {
+    resolve_unix_update_directory(
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+fn create_update_directory(directory: &Path) -> Result<(), UpdateFailure> {
+    #[cfg(unix)]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder
+            .create(directory)
+            .map_err(|source| UpdateFailure::Io {
+                operation: "Could not create update directory",
+                source,
+            })?;
+        let metadata = fs::symlink_metadata(directory).map_err(|source| UpdateFailure::Io {
+            operation: "Could not inspect update directory",
+            source,
+        })?;
+        if !metadata.is_dir() {
+            return Err(UpdateFailure::Rejected(
+                "Update directory must not be a symlink",
+            ));
+        }
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(|source| {
+            UpdateFailure::Io {
+                operation: "Could not secure update directory permissions",
+                source,
+            }
+        })?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(directory).map_err(|source| UpdateFailure::Io {
+            operation: "Could not create update directory",
+            source,
+        })
     }
 }
 
@@ -215,43 +270,54 @@ where
 {
     validate_installer_url(&update.installer_url, update.version())?;
     let directory = update_directory()?;
-    fs::create_dir_all(&directory).map_err(|source| UpdateFailure::Io {
-        operation: "Could not create update directory",
-        source,
-    })?;
+    create_update_directory(&directory)?;
     #[cfg(target_os = "linux")]
     let final_path = directory.join(format!("barepdf_{}_amd64.deb", update.version()));
     #[cfg(not(target_os = "linux"))]
     let final_path = directory.join(format!("BarePDF-Setup-x64-v{}.exe", update.version()));
-    let (partial_path, partial_file) = create_unique_partial(&directory, update.version())?;
-    let result =
-        download_to_partial(agent, update, partial_file, cancelled, on_progress).and_then(|()| {
-            check_cancelled(cancelled)?;
-            on_progress(update.installer_size, update.installer_size, true);
-            verify_download(&partial_path, update)?;
-            release_verified_installer_lock(&partial_path);
-            release_verified_installer_lock(&final_path);
-            check_cancelled(cancelled)?;
-            if final_path.is_file() {
-                fs::remove_file(&final_path).map_err(|source| UpdateFailure::Io {
-                    operation: "Could not replace previous update",
-                    source,
-                })?;
-            }
-            fs::rename(&partial_path, &final_path).map_err(|source| UpdateFailure::Io {
-                operation: "Could not finalize update",
-                source,
-            })?;
-            tracing::info!(
-                event = "update_atomic_rename_succeeded",
-                version = %update.version(),
-                file = safe_file_label(&final_path),
-                "Atomic update file rename succeeded"
-            );
-            verify_download(&final_path, update)?;
-            Ok(final_path.clone())
-        });
-    finish_download(result, &partial_path)
+    let mut partial = create_unique_partial(&directory, update.version())?;
+    download_to_partial(agent, update, partial.as_file_mut(), cancelled, on_progress)?;
+    check_cancelled(cancelled)?;
+    on_progress(update.installer_size, update.installer_size, true);
+    finalize_partial_download(partial, update, &final_path, cancelled)
+}
+
+fn persist_verified_partial(
+    temp_path: TempPath,
+    final_path: &Path,
+    version: &str,
+) -> Result<(), UpdateFailure> {
+    let partial_to_persist = NamedTempFile::from_parts((), temp_path);
+    partial_to_persist
+        .persist(final_path)
+        .map_err(|error| UpdateFailure::Io {
+            operation: "Could not finalize update",
+            source: error.error,
+        })?;
+    tracing::info!(
+        event = "update_atomic_rename_succeeded",
+        version = %version,
+        file = safe_file_label(final_path),
+        "Atomic update file rename succeeded"
+    );
+    Ok(())
+}
+
+fn finalize_partial_download(
+    partial: NamedTempFile,
+    update: &VerifiedUpdate,
+    final_path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<PathBuf, UpdateFailure> {
+    let (partial_file, temp_path) = partial.into_parts();
+    drop(partial_file);
+    verify_download(&temp_path, update)?;
+    release_verified_installer_lock(&temp_path);
+    release_verified_installer_lock(final_path);
+    check_cancelled(cancelled)?;
+    persist_verified_partial(temp_path, final_path, update.version())?;
+    verify_download(final_path, update)?;
+    Ok(final_path.to_path_buf())
 }
 
 pub(super) fn verify_download(path: &Path, update: &VerifiedUpdate) -> Result<(), UpdateFailure> {
@@ -385,65 +451,27 @@ fn reject_oversized_download(actual: u64, expected: u64) -> Result<(), UpdateFai
     Ok(())
 }
 
-fn discard_partial(path: &Path) {
-    release_verified_installer_lock(path);
-    let _ = fs::remove_file(path);
-}
-
-fn finish_download(
-    result: Result<PathBuf, UpdateFailure>,
-    partial_path: &Path,
-) -> Result<PathBuf, UpdateFailure> {
-    if result.is_err() {
-        discard_partial(partial_path);
-    }
-    result
-}
-
-fn create_unique_partial(
-    directory: &Path,
-    version: &str,
-) -> Result<(PathBuf, File), UpdateFailure> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| UpdateFailure::Rejected("System clock is before the Unix epoch"))?
-        .as_nanos();
-    for attempt in 0..16_u8 {
-        #[cfg(target_os = "linux")]
-        let filename = format!(
-            ".barepdf_{version}_amd64-{}-{nonce}-{attempt}.partial",
-            std::process::id()
-        );
-        #[cfg(not(target_os = "linux"))]
-        let filename = format!(
-            ".BarePDF-Setup-x64-v{version}-{}-{nonce}-{attempt}.partial",
-            std::process::id()
-        );
-        let path = directory.join(filename);
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(windows)]
-        options.share_mode(0);
-        match options.open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(source) => {
-                return Err(UpdateFailure::Io {
-                    operation: "Could not create update file",
-                    source,
-                });
-            }
-        }
-    }
-    Err(UpdateFailure::Rejected(
-        "Could not allocate a unique update file",
-    ))
+fn create_unique_partial(directory: &Path, version: &str) -> Result<NamedTempFile, UpdateFailure> {
+    #[cfg(target_os = "linux")]
+    let prefix = format!(".barepdf_{version}_amd64-{}-", std::process::id());
+    #[cfg(not(target_os = "linux"))]
+    let prefix = format!(".BarePDF-Setup-x64-v{version}-{}-", std::process::id());
+    let mut builder = Builder::new();
+    builder.prefix(&prefix).suffix(".partial");
+    #[cfg(unix)]
+    builder.permissions(fs::Permissions::from_mode(0o600));
+    builder
+        .tempfile_in(directory)
+        .map_err(|source| UpdateFailure::Io {
+            operation: "Could not create update file",
+            source,
+        })
 }
 
 fn download_to_partial<F>(
     agent: &Agent,
     update: &VerifiedUpdate,
-    mut file: File,
+    file: &mut File,
     cancelled: &AtomicBool,
     on_progress: &mut F,
 ) -> Result<(), UpdateFailure>
@@ -462,7 +490,7 @@ where
         .with_config()
         .limit(update.installer_size.saturating_add(1))
         .reader();
-    stream_reader_to_partial(&mut reader, update, &mut file, cancelled, on_progress)
+    stream_reader_to_partial(&mut reader, update, file, cancelled, on_progress)
 }
 
 fn stream_reader_to_partial<R, F>(
@@ -554,6 +582,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_directory() -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -593,9 +622,13 @@ mod tests {
         assert!(fs::create_dir_all(&directory).is_ok());
         let first = create_unique_partial(&directory, "1.2.0");
         let second = create_unique_partial(&directory, "1.2.0");
-        assert!(
-            matches!((&first, &second), (Ok((first_path, _)), Ok((second_path, _))) if first_path != second_path)
-        );
+        assert!(matches!(
+            (&first, &second),
+            (Ok(first_file), Ok(second_file))
+                if first_file.path() != second_file.path()
+                    && first_file.path().is_file()
+                    && second_file.path().is_file()
+        ));
         drop((first, second));
         let _ = fs::remove_dir_all(directory);
     }
@@ -644,16 +677,120 @@ mod tests {
     fn failed_download_cleanup_removes_partial_file() {
         let directory = temporary_directory();
         assert!(fs::create_dir_all(&directory).is_ok());
-        let partial = create_unique_partial(&directory, "1.2.3");
-        assert!(matches!(&partial, Ok((path, _)) if path.is_file()));
-        let (path, file) = partial.expect("partial file can be created");
+        let final_path = directory.join("installer.exe");
+        assert!(fs::write(&final_path, b"existing-installer").is_ok());
+
+        let mut partial = create_unique_partial(&directory, "1.2.3").expect("partial file");
+        let partial_path = partial.path().to_path_buf();
+        assert!(partial_path.is_file());
+        assert!(partial.as_file_mut().write_all(b"tampered").is_ok());
+
+        let update = VerifiedUpdate::for_test("1.2.3", sha256_hex(b"expected"), 8);
+        let cancelled = AtomicBool::new(false);
+        assert!(finalize_partial_download(partial, &update, &final_path, &cancelled).is_err());
+
+        assert!(!partial_path.exists());
+        assert_eq!(
+            fs::read(&final_path).expect("existing installer remains intact"),
+            b"existing-installer"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn persist_verified_partial_atomically_replaces_existing_file() {
+        let directory = temporary_directory();
+        assert!(fs::create_dir_all(&directory).is_ok());
+        let final_path = directory.join("installer.exe");
+        assert!(fs::write(&final_path, b"old-installer").is_ok());
+
+        let mut partial = create_unique_partial(&directory, "1.2.4").expect("partial file");
+        let partial_path = partial.path().to_path_buf();
+        assert!(partial.as_file_mut().write_all(b"new-installer").is_ok());
+        let (file, temp_path) = partial.into_parts();
         drop(file);
 
-        let error = UpdateFailure::Rejected("download test failure");
-        assert!(finish_download(Err(error), &path).is_err());
-
-        assert!(!path.exists());
+        assert!(persist_verified_partial(temp_path, &final_path, "1.2.4").is_ok());
+        assert!(!partial_path.exists());
+        assert_eq!(
+            fs::read(&final_path).expect("updated installer persisted"),
+            b"new-installer"
+        );
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn finalize_partial_download_replaces_existing_file_on_unix() {
+        let directory = temporary_directory();
+        assert!(create_update_directory(&directory).is_ok());
+        let final_path = directory.join("barepdf_1.2.5_amd64.deb");
+        assert!(fs::write(&final_path, b"stale-deb").is_ok());
+
+        let payload = b"verified-deb-payload";
+        let mut partial = create_unique_partial(&directory, "1.2.5").expect("partial file");
+        let partial_path = partial.path().to_path_buf();
+        assert!(partial.as_file_mut().write_all(payload).is_ok());
+
+        let update = VerifiedUpdate::for_test("1.2.5", sha256_hex(payload), payload.len() as u64);
+        let cancelled = AtomicBool::new(false);
+        let persisted = finalize_partial_download(partial, &update, &final_path, &cancelled)
+            .expect("finalized");
+        assert_eq!(persisted, final_path);
+        assert!(!partial_path.exists());
+        assert_eq!(fs::read(&final_path).expect("deb contents"), payload);
+        release_verified_installer_lock(&final_path);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unix_update_directory_fails_closed_without_xdg_or_home() {
+        assert!(matches!(
+            resolve_unix_update_directory(None, None),
+            Err(UpdateFailure::Rejected(
+                "Update cache directory is unavailable"
+            ))
+        ));
+        assert!(matches!(
+            resolve_unix_update_directory(Some(OsStr::new("")), Some(OsStr::new(""))),
+            Err(UpdateFailure::Rejected(
+                "Update cache directory is unavailable"
+            ))
+        ));
+        assert_eq!(
+            resolve_unix_update_directory(
+                Some(OsStr::new("/xdg-cache")),
+                Some(OsStr::new("/home"))
+            )
+            .expect("XDG_CACHE_HOME resolves"),
+            PathBuf::from("/xdg-cache").join("barepdf").join("updates")
+        );
+        assert_eq!(
+            resolve_unix_update_directory(None, Some(OsStr::new("/home/user")))
+                .expect("HOME resolves"),
+            PathBuf::from("/home/user")
+                .join(".cache")
+                .join("barepdf")
+                .join("updates")
+        );
+    }
+
+    #[test]
+    fn create_update_directory_creates_directory_and_secures_unix_permissions() {
+        let root = temporary_directory();
+        let nested = root.join("barepdf").join("updates");
+        assert!(create_update_directory(&nested).is_ok());
+        assert!(nested.is_dir());
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&nested)
+                .expect("directory metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(windows)]
@@ -745,7 +882,7 @@ mod tests {
             sha256_hex(&payload),
             u64::try_from(payload.len()).expect("payload len"),
         );
-        let (partial_path, mut partial_file) =
+        let mut partial =
             create_unique_partial(&directory, update.version()).expect("create partial");
         let cancelled = AtomicBool::new(false);
         let mut reader = ChunkedReader {
@@ -764,7 +901,7 @@ mod tests {
             stream_reader_to_partial(
                 &mut reader,
                 &update,
-                &mut partial_file,
+                partial.as_file_mut(),
                 &cancelled,
                 &mut |downloaded, total, verifying| {
                     progress_events.push((downloaded, total, verifying));
@@ -772,7 +909,7 @@ mod tests {
             )
             .expect("stream download succeeds");
         });
-        drop(partial_file);
+        drop(partial);
 
         assert!(!progress_events.is_empty());
         assert_eq!(
@@ -792,7 +929,6 @@ mod tests {
         assert!(logs.contains("speed_mb_s="));
         assert!(logs.contains("update_sha256_verified"));
 
-        let _ = fs::remove_file(&partial_path);
         let _ = fs::remove_dir_all(directory);
     }
 }

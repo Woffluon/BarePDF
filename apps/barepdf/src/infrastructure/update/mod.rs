@@ -6,9 +6,9 @@ mod transport;
 use barepdf_platform_linux::launch_package_installer as launch_installer;
 #[cfg(not(target_os = "linux"))]
 use barepdf_platform_windows::launch_installer;
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -18,6 +18,7 @@ pub(crate) use manifest::VerifiedUpdate;
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const AUTO_CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
+const COMMAND_CAPACITY: usize = 16;
 const EVENT_CAPACITY: usize = 16;
 const COMPLETION_CAPACITY: usize = 1;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -99,6 +100,7 @@ pub(crate) struct UpdateWorker {
     commands: Sender<UpdateCommand>,
     cancelled: Arc<AtomicBool>,
     check_canceller: UpdateCheckCanceller,
+    shutdown_tx: Option<Sender<()>>,
     completed: Receiver<()>,
     worker: Option<JoinHandle<()>>,
     shutdown_timed_out: bool,
@@ -112,7 +114,7 @@ pub(crate) enum UpdateShutdownError {
     Panicked,
 }
 
-struct CompletionSignal(Option<SyncSender<()>>);
+struct CompletionSignal(Option<Sender<()>>);
 
 #[derive(Clone, Default)]
 pub(crate) struct UpdateCheckCanceller {
@@ -160,7 +162,8 @@ impl UpdateWorker {
     pub(crate) fn shutdown(&mut self) -> Result<(), UpdateShutdownError> {
         self.cancelled.store(true, Ordering::Release);
         self.check_canceller.cancel_pending_check();
-        let _ = self.commands.send(UpdateCommand::Shutdown);
+        drop(self.shutdown_tx.take());
+        let _ = self.commands.try_send(UpdateCommand::Shutdown);
         if self.worker.is_none() {
             return Ok(());
         }
@@ -196,21 +199,28 @@ impl Drop for UpdateWorker {
 }
 
 pub(crate) fn start_worker() -> (UpdateWorker, Receiver<UpdateEvent>) {
-    let (command_sender, command_receiver) = mpsc::channel();
-    let (event_sender, event_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
-    let (completed_sender, completed_receiver) = mpsc::sync_channel(COMPLETION_CAPACITY);
+    let (command_sender, command_receiver) = bounded(COMMAND_CAPACITY);
+    let (event_sender, event_receiver) = bounded(EVENT_CAPACITY);
+    let (completed_sender, completed_receiver) = bounded(COMPLETION_CAPACITY);
+    let (shutdown_tx, shutdown_rx) = bounded(1);
     let cancelled = Arc::new(AtomicBool::new(false));
     let check_canceller = UpdateCheckCanceller::default();
     let worker_cancelled = cancelled.clone();
     let worker = std::thread::spawn(move || {
         let _completion = CompletionSignal(Some(completed_sender));
-        run_worker(&command_receiver, &event_sender, &worker_cancelled);
+        run_worker(
+            &command_receiver,
+            &event_sender,
+            &worker_cancelled,
+            &shutdown_rx,
+        );
     });
     (
         UpdateWorker {
             commands: command_sender,
             cancelled,
             check_canceller,
+            shutdown_tx: Some(shutdown_tx),
             completed: completed_receiver,
             worker: Some(worker),
             shutdown_timed_out: false,
@@ -229,6 +239,7 @@ fn sleep_with_cancellation(
     duration: Duration,
     worker_cancelled: &AtomicBool,
     check_cancelled: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < duration {
@@ -237,7 +248,10 @@ fn sleep_with_cancellation(
         }
         let remaining = duration.saturating_sub(start.elapsed());
         let step = remaining.min(Duration::from_millis(25));
-        std::thread::sleep(step);
+        crossbeam_channel::select! {
+            recv(shutdown_rx) -> _ => return false,
+            default(step) => {}
+        }
     }
     !worker_cancelled.load(Ordering::Acquire) && !check_cancelled.load(Ordering::Acquire)
 }
@@ -246,6 +260,7 @@ fn check_with_retry<F>(
     mut check: F,
     check_cancelled: &AtomicBool,
     worker_cancelled: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
     backoff_schedule: &[Duration],
 ) -> Result<Option<VerifiedUpdate>, UpdateFailure>
 where
@@ -271,7 +286,12 @@ where
                     );
                     let backoff = backoff_schedule[attempt];
                     attempt += 1;
-                    if !sleep_with_cancellation(backoff, worker_cancelled, check_cancelled) {
+                    if !sleep_with_cancellation(
+                        backoff,
+                        worker_cancelled,
+                        check_cancelled,
+                        shutdown_rx,
+                    ) {
                         return Err(UpdateFailure::Cancelled);
                     }
                 } else {
@@ -284,11 +304,19 @@ where
 
 fn run_worker(
     commands: &Receiver<UpdateCommand>,
-    events: &SyncSender<UpdateEvent>,
+    events: &Sender<UpdateEvent>,
     cancelled: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) {
     let agent = transport::new_agent();
-    while let Ok(command) = commands.recv() {
+    while !cancelled.load(Ordering::Acquire) {
+        let command = crossbeam_channel::select! {
+            recv(commands) -> msg => match msg {
+                Ok(cmd) => cmd,
+                Err(_) => break,
+            },
+            recv(shutdown_rx) -> _ => break,
+        };
         if cancelled.load(Ordering::Acquire) {
             break;
         }
@@ -301,6 +329,7 @@ fn run_worker(
                     || manifest::check_for_update(&agent, &check_cancelled),
                     &check_cancelled,
                     cancelled,
+                    shutdown_rx,
                     &CHECK_BACKOFF_SCHEDULE,
                 ) {
                     Ok(Some(update)) => UpdateEvent::Available(update),
@@ -344,41 +373,32 @@ fn run_worker(
         if cancelled.load(Ordering::Acquire) {
             break;
         }
-        if send_event_with_backpressure(events, event, cancelled).is_err() {
+        if send_event_with_backpressure(events, event, cancelled, shutdown_rx).is_err() {
             break;
         }
     }
 }
 
 fn send_event_with_backpressure(
-    events: &SyncSender<UpdateEvent>,
-    mut event: UpdateEvent,
+    events: &Sender<UpdateEvent>,
+    event: UpdateEvent,
     cancelled: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) -> Result<(), ()> {
-    if cancelled.load(Ordering::Acquire) {
+    if cancelled.load(Ordering::Acquire)
+        || !matches!(shutdown_rx.try_recv(), Err(TryRecvError::Empty))
+    {
         let _ = events.try_send(event);
-        return Ok(());
+        return Err(());
     }
     match events.try_send(event) {
         Ok(()) => Ok(()),
         Err(TrySendError::Disconnected(_)) => Err(()),
-        Err(TrySendError::Full(returned)) => {
-            event = returned;
-            loop {
-                if cancelled.load(Ordering::Acquire) {
-                    let _ = events.try_send(event);
-                    return Ok(());
-                }
-                match events.try_send(event) {
-                    Ok(()) => return Ok(()),
-                    Err(TrySendError::Disconnected(_)) => return Err(()),
-                    Err(TrySendError::Full(returned)) => {
-                        event = returned;
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
-            }
-        }
+        Err(TrySendError::Full(event)) => crossbeam_channel::select! {
+            send(events, event) -> res => res.map_err(|_| ()),
+            recv(shutdown_rx) -> _ => Err(()),
+            default(Duration::from_millis(500)) => Ok(()),
+        },
     }
 }
 
@@ -424,10 +444,11 @@ mod tests {
 
     #[test]
     fn worker_shutdown_retains_active_work_and_joins_on_retry() {
-        let (commands, _command_receiver) = mpsc::channel();
+        let (commands, _command_receiver) = bounded(1);
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (completed_sender, completed) = mpsc::sync_channel(COMPLETION_CAPACITY);
-        let (release_sender, release_receiver) = mpsc::channel();
+        let (completed_sender, completed) = bounded(COMPLETION_CAPACITY);
+        let (release_sender, release_receiver) = bounded(1);
+        let (shutdown_tx, _shutdown_rx) = bounded(1);
         let worker_thread = std::thread::spawn(move || {
             let _completion = CompletionSignal(Some(completed_sender));
             let _ = release_receiver.recv();
@@ -436,6 +457,7 @@ mod tests {
             commands,
             cancelled,
             check_canceller: UpdateCheckCanceller::default(),
+            shutdown_tx: Some(shutdown_tx),
             completed,
             worker: Some(worker_thread),
             shutdown_timed_out: false,
@@ -455,10 +477,11 @@ mod tests {
 
     #[test]
     fn worker_panic_after_timeout_is_reported_on_retry() {
-        let (commands, _command_receiver) = mpsc::channel();
+        let (commands, _command_receiver) = bounded(1);
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (completed_sender, completed) = mpsc::sync_channel(COMPLETION_CAPACITY);
-        let (release_sender, release_receiver) = mpsc::channel();
+        let (completed_sender, completed) = bounded(COMPLETION_CAPACITY);
+        let (release_sender, release_receiver) = bounded(1);
+        let (shutdown_tx, _shutdown_rx) = bounded(1);
         let worker_thread = std::thread::spawn(move || {
             let _completion = CompletionSignal(Some(completed_sender));
             let _ = release_receiver.recv();
@@ -468,6 +491,7 @@ mod tests {
             commands,
             cancelled,
             check_canceller: UpdateCheckCanceller::default(),
+            shutdown_tx: Some(shutdown_tx),
             completed,
             worker: Some(worker_thread),
             shutdown_timed_out: false,
@@ -482,7 +506,7 @@ mod tests {
             worker.shutdown(),
             Err(UpdateShutdownError::Panicked)
         ));
-        assert!(worker.shutdown().is_ok());
+        assert!(worker.worker.is_none());
     }
 
     #[test]
@@ -502,8 +526,9 @@ mod tests {
 
     #[test]
     fn queued_cancelled_check_is_reported_without_starting_a_request() {
-        let (command_sender, command_receiver) = mpsc::channel();
-        let (event_sender, event_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
+        let (command_sender, command_receiver) = bounded(COMMAND_CAPACITY);
+        let (event_sender, event_receiver) = bounded(EVENT_CAPACITY);
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let check_cancelled = Arc::new(AtomicBool::new(true));
         assert!(command_sender
@@ -512,7 +537,7 @@ mod tests {
         assert!(command_sender.send(UpdateCommand::Shutdown).is_ok());
 
         let worker = std::thread::spawn(move || {
-            run_worker(&command_receiver, &event_sender, &cancelled);
+            run_worker(&command_receiver, &event_sender, &cancelled, &shutdown_rx);
         });
         assert!(matches!(
             event_receiver.recv_timeout(Duration::from_secs(1)),
@@ -530,7 +555,8 @@ mod tests {
 
     #[test]
     fn bounded_channel_backpressure_does_not_deadlock_on_cancel() {
-        let (event_sender, _event_receiver) = mpsc::sync_channel(1);
+        let (event_sender, _event_receiver) = bounded(1);
+        let (shutdown_tx, shutdown_rx) = bounded(1);
         let cancelled = Arc::new(AtomicBool::new(false));
 
         // Fill channel to capacity
@@ -538,16 +564,71 @@ mod tests {
 
         // Worker attempts to send next event in thread while channel is full
         let sender_cancelled = cancelled.clone();
+        let started = Instant::now();
         let handle = std::thread::spawn(move || {
-            send_event_with_backpressure(&event_sender, UpdateEvent::UpToDate, &sender_cancelled)
+            send_event_with_backpressure(
+                &event_sender,
+                UpdateEvent::UpToDate,
+                &sender_cancelled,
+                &shutdown_rx,
+            )
         });
 
         // Cancel while sender is waiting on full channel
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(5));
         cancelled.store(true, Ordering::Release);
+        drop(shutdown_tx);
 
-        // Sender must unblock due to cancellation without deadlocking
-        assert!(handle.join().is_ok());
+        // Sender must unblock promptly due to cancellation without deadlocking
+        assert!(matches!(handle.join(), Ok(Err(()))));
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "send_event_with_backpressure took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn shutdown_unblocks_worker_when_event_channel_is_full() {
+        let (command_sender, command_receiver) = bounded(COMMAND_CAPACITY);
+        let (event_sender, event_receiver) = bounded(1);
+        let (completed_sender, completed_receiver) = bounded(COMPLETION_CAPACITY);
+        let (shutdown_tx, shutdown_rx) = bounded(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        assert!(event_sender.try_send(UpdateEvent::UpToDate).is_ok());
+
+        let worker_cancelled = cancelled.clone();
+        let worker_thread = std::thread::spawn(move || {
+            let _completion = CompletionSignal(Some(completed_sender));
+            run_worker(
+                &command_receiver,
+                &event_sender,
+                &worker_cancelled,
+                &shutdown_rx,
+            );
+        });
+        let mut worker = UpdateWorker {
+            commands: command_sender.clone(),
+            cancelled,
+            check_canceller: UpdateCheckCanceller::default(),
+            shutdown_tx: Some(shutdown_tx),
+            completed: completed_receiver,
+            worker: Some(worker_thread),
+            shutdown_timed_out: false,
+        };
+        assert!(command_sender
+            .send(UpdateCommand::Check(Arc::new(AtomicBool::new(true))))
+            .is_ok());
+        std::thread::sleep(Duration::from_millis(10));
+
+        let started = Instant::now();
+        assert!(worker.shutdown().is_ok());
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "UpdateWorker::shutdown took {:?} when event channel was full",
+            started.elapsed()
+        );
+        drop(event_receiver);
     }
 
     #[test]
@@ -561,6 +642,7 @@ mod tests {
     fn check_with_retry_succeeds_without_retries_on_first_try() {
         let check_cancelled = AtomicBool::new(false);
         let worker_cancelled = AtomicBool::new(false);
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let mut attempts = 0;
         let schedule = [
             Duration::from_millis(1),
@@ -579,6 +661,7 @@ mod tests {
             },
             &check_cancelled,
             &worker_cancelled,
+            &shutdown_rx,
             &schedule,
         );
 
@@ -590,6 +673,7 @@ mod tests {
     fn check_with_retry_retries_on_transient_network_error_and_succeeds() {
         let check_cancelled = AtomicBool::new(false);
         let worker_cancelled = AtomicBool::new(false);
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let mut attempts = 0;
         let schedule = [
             Duration::from_millis(1),
@@ -611,6 +695,7 @@ mod tests {
             },
             &check_cancelled,
             &worker_cancelled,
+            &shutdown_rx,
             &schedule,
         );
 
@@ -622,6 +707,7 @@ mod tests {
     fn check_with_retry_exhausts_retries_on_persistent_network_error() {
         let check_cancelled = AtomicBool::new(false);
         let worker_cancelled = AtomicBool::new(false);
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let mut attempts = 0;
         let schedule = [
             Duration::from_millis(1),
@@ -639,6 +725,7 @@ mod tests {
             },
             &check_cancelled,
             &worker_cancelled,
+            &shutdown_rx,
             &schedule,
         );
 
@@ -651,6 +738,7 @@ mod tests {
     fn check_with_retry_does_not_retry_on_non_network_error() {
         let check_cancelled = AtomicBool::new(false);
         let worker_cancelled = AtomicBool::new(false);
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let mut attempts = 0;
         let schedule = [
             Duration::from_millis(1),
@@ -665,6 +753,7 @@ mod tests {
             },
             &check_cancelled,
             &worker_cancelled,
+            &shutdown_rx,
             &schedule,
         );
 
@@ -676,6 +765,7 @@ mod tests {
     fn check_with_retry_aborts_promptly_when_cancelled_during_backoff() {
         let check_cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::new(AtomicBool::new(false));
+        let (_shutdown_tx, shutdown_rx) = bounded(1);
         let schedule = [Duration::from_millis(500)];
 
         let canceller = check_cancelled.clone();
@@ -694,6 +784,7 @@ mod tests {
             },
             &check_cancelled,
             &worker_cancelled,
+            &shutdown_rx,
             &schedule,
         );
 

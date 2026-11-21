@@ -8,9 +8,9 @@ use barepdf_pdf::conversion::{
 };
 use barepdf_pdf::{PdfBackend, PdfOperationInput, PdfOperations, PdfiumEngine};
 use barepdf_platform_windows::WindowsImageEncoder;
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -258,11 +258,12 @@ pub(crate) enum ToolWorkerError {
 type ToolExecutor = Box<dyn FnMut(&mut ToolRequest) -> ExecutionResult + Send + 'static>;
 
 pub(crate) struct ToolWorker {
-    command_sender: Option<SyncSender<ToolCommand>>,
+    command_sender: Option<Sender<ToolCommand>>,
     event_receiver: Receiver<ToolEvent>,
     active: Arc<AtomicBool>,
     current_cancellation: Arc<Mutex<Option<CancellationToken>>>,
     shutdown: Arc<AtomicBool>,
+    shutdown_tx: Option<Sender<()>>,
     done_receiver: Receiver<()>,
     handle: Option<JoinHandle<()>>,
     shutdown_timed_out: bool,
@@ -276,9 +277,10 @@ impl ToolWorker {
     fn spawn_with_executor(
         executor: impl FnMut(&mut ToolRequest) -> ExecutionResult + Send + 'static,
     ) -> Result<Self, ToolWorkerError> {
-        let (command_sender, command_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
-        let (event_sender, event_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
-        let (done_sender, done_receiver) = mpsc::sync_channel(1);
+        let (command_sender, command_receiver) = bounded(COMMAND_CAPACITY);
+        let (event_sender, event_receiver) = bounded(EVENT_CAPACITY);
+        let (done_sender, done_receiver) = bounded(1);
+        let (shutdown_tx, shutdown_rx) = bounded(1);
         let active = Arc::new(AtomicBool::new(false));
         let current_cancellation = Arc::new(Mutex::new(None));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -295,6 +297,7 @@ impl ToolWorker {
                     &worker_active,
                     &worker_cancellation,
                     &worker_shutdown,
+                    &shutdown_rx,
                 );
                 let _ = done_sender.try_send(());
             })
@@ -305,6 +308,7 @@ impl ToolWorker {
             active,
             current_cancellation,
             shutdown,
+            shutdown_tx: Some(shutdown_tx),
             done_receiver,
             handle: Some(handle),
             shutdown_timed_out: false,
@@ -395,6 +399,7 @@ impl ToolWorker {
             cancellation.cancel();
         }
         drop(guard);
+        drop(self.shutdown_tx.take());
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.try_send(ToolCommand::Shutdown);
         }
@@ -411,12 +416,12 @@ impl ToolWorker {
                 .ok_or(ToolWorkerError::Disconnected)?
                 .join()
                 .map_err(|_| ToolWorkerError::Panicked),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(RecvTimeoutError::Timeout) => {
                 while self.event_receiver.try_recv().is_ok() {}
                 self.shutdown_timed_out = true;
                 Err(ToolWorkerError::ShutdownTimeout)
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => self
+            Err(RecvTimeoutError::Disconnected) => self
                 .handle
                 .take()
                 .ok_or(ToolWorkerError::Disconnected)?
@@ -458,54 +463,49 @@ impl Drop for ToolWorker {
 }
 
 fn send_event(
-    events: &SyncSender<ToolEvent>,
-    mut event: ToolEvent,
+    events: &Sender<ToolEvent>,
+    event: ToolEvent,
     shutdown: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) -> Result<(), ()> {
-    if shutdown.load(Ordering::Acquire) {
+    if shutdown.load(Ordering::Acquire)
+        || !matches!(shutdown_rx.try_recv(), Err(TryRecvError::Empty))
+    {
         let _ = events.try_send(event);
-        return Ok(());
+        return Err(());
     }
     match events.try_send(event) {
         Ok(()) => Ok(()),
         Err(TrySendError::Disconnected(_)) => Err(()),
-        Err(TrySendError::Full(returned)) => {
-            event = returned;
-            let start = std::time::Instant::now();
-            loop {
-                if shutdown.load(Ordering::Acquire) {
-                    let _ = events.try_send(event);
-                    return Ok(());
-                }
-                match events.try_send(event) {
-                    Ok(()) => return Ok(()),
-                    Err(TrySendError::Disconnected(_)) => return Err(()),
-                    Err(TrySendError::Full(returned)) => {
-                        event = returned;
-                        if start.elapsed() > Duration::from_millis(500) {
-                            return Ok(());
-                        }
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
-            }
-        }
+        Err(TrySendError::Full(event)) => crossbeam_channel::select! {
+            send(events, event) -> res => res.map_err(|_| ()),
+            recv(shutdown_rx) -> _ => Err(()),
+            default(Duration::from_millis(500)) => Ok(()),
+        },
     }
 }
 
 fn worker_loop(
     commands: &Receiver<ToolCommand>,
-    events: &SyncSender<ToolEvent>,
+    events: &Sender<ToolEvent>,
     mut executor: ToolExecutor,
     active: &AtomicBool,
     current_cancellation: &Mutex<Option<CancellationToken>>,
     shutdown: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) {
     let mut pending: Option<(ToolRequest, PathBuf, bool)> = None;
     while !shutdown.load(Ordering::Acquire) {
-        let Ok(command) = commands.recv() else {
-            break;
+        let command = crossbeam_channel::select! {
+            recv(commands) -> msg => match msg {
+                Ok(cmd) => cmd,
+                Err(_) => break,
+            },
+            recv(shutdown_rx) -> _ => break,
         };
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
         match command {
             ToolCommand::Start(request) => run_and_emit(
                 request,
@@ -515,6 +515,7 @@ fn worker_loop(
                 current_cancellation,
                 &mut pending,
                 shutdown,
+                shutdown_rx,
             ),
             ToolCommand::ProvidePassword {
                 key,
@@ -533,7 +534,7 @@ fn worker_loop(
                         wrong_password,
                     };
                     pending = Some((request, awaited_source, wrong_password));
-                    if send_event(events, event, shutdown).is_err() {
+                    if send_event(events, event, shutdown, shutdown_rx).is_err() {
                         break;
                     }
                     continue;
@@ -547,6 +548,7 @@ fn worker_loop(
                     current_cancellation,
                     &mut pending,
                     shutdown,
+                    shutdown_rx,
                 );
             }
             ToolCommand::Cancel(key) => {
@@ -557,7 +559,9 @@ fn worker_loop(
                     pending = None;
                     active.store(false, Ordering::Release);
                     clear_current_cancellation(current_cancellation);
-                    if send_event(events, ToolEvent::Cancelled { key }, shutdown).is_err() {
+                    if send_event(events, ToolEvent::Cancelled { key }, shutdown, shutdown_rx)
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -571,14 +575,16 @@ fn worker_loop(
     clear_current_cancellation(current_cancellation);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_and_emit(
     mut request: ToolRequest,
-    events: &SyncSender<ToolEvent>,
+    events: &Sender<ToolEvent>,
     executor: &mut ToolExecutor,
     active: &AtomicBool,
     current_cancellation: &Mutex<Option<CancellationToken>>,
     pending: &mut Option<(ToolRequest, PathBuf, bool)>,
     shutdown: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) {
     let mut guard = current_cancellation
         .lock()
@@ -602,6 +608,7 @@ fn run_and_emit(
                     message: "PDF tool worker panicked during execution".to_string(),
                 },
                 shutdown,
+                shutdown_rx,
             );
             return;
         }
@@ -624,7 +631,7 @@ fn run_and_emit(
                 wrong_password,
             };
             *pending = Some((request, source, wrong_password));
-            if send_event(events, event, shutdown).is_err() {
+            if send_event(events, event, shutdown, shutdown_rx).is_err() {
                 *pending = None;
             }
             return;
@@ -640,7 +647,7 @@ fn run_and_emit(
     };
     active.store(false, Ordering::Release);
     clear_current_cancellation(current_cancellation);
-    let _ = send_event(events, event, shutdown);
+    let _ = send_event(events, event, shutdown, shutdown_rx);
 }
 
 fn clear_current_cancellation(current: &Mutex<Option<CancellationToken>>) {
@@ -1183,6 +1190,71 @@ mod tests {
         // We do NOT drain the event here; immediately shut down
         let mut worker = worker;
         assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
+    fn send_event_unblocks_immediately_on_shutdown_when_channel_is_full() {
+        let (event_tx, _event_rx) = super::bounded(1);
+        let (shutdown_tx, shutdown_rx) = super::bounded(1);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let key = ToolJobKey::new(202, 1, 1);
+        event_tx
+            .try_send(ToolEvent::Cancelled { key })
+            .expect("channel fills to capacity");
+
+        let sender_shutdown = shutdown.clone();
+        let started = std::time::Instant::now();
+        let handle = std::thread::spawn(move || {
+            super::send_event(
+                &event_tx,
+                ToolEvent::Cancelled { key },
+                &sender_shutdown,
+                &shutdown_rx,
+            )
+        });
+        std::thread::sleep(Duration::from_millis(5));
+        shutdown.store(true, Ordering::Release);
+        drop(shutdown_tx);
+        let result = handle.join().expect("sender thread joins cleanly");
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "send_event took {:?} on full channel shutdown",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn shutdown_unblocks_worker_when_event_channel_is_full() {
+        use std::sync::atomic::AtomicUsize;
+
+        let executed = Arc::new(AtomicUsize::new(0));
+        let worker_executed = executed.clone();
+        let mut worker = ToolWorker::spawn_with_executor(move |_request| {
+            worker_executed.fetch_add(1, Ordering::AcqRel);
+            ExecutionResult::Completed(super::ToolOutcome::Test)
+        })
+        .expect("test worker starts");
+
+        for seq in 1..=(super::EVENT_CAPACITY as u64 + 1) {
+            let key = ToolJobKey::new(300 + seq, 1, 1);
+            worker.submit_test_job(key).expect("job queues");
+            while worker.event_receiver.len() < (seq as usize).min(super::EVENT_CAPACITY) {
+                std::thread::yield_now();
+            }
+        }
+        while executed.load(Ordering::Acquire) <= super::EVENT_CAPACITY {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+
+        let started = std::time::Instant::now();
+        assert!(worker.shutdown().is_ok());
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "ToolWorker::shutdown took {:?} when event channel was full",
+            started.elapsed()
+        );
     }
 
     #[test]

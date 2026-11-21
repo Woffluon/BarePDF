@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn queue_update_check(
-    sender: &std::sync::mpsc::Sender<UpdateCommand>,
+    sender: &crossbeam_channel::Sender<UpdateCommand>,
     canceller: &UpdateCheckCanceller,
     state: &Rc<RefCell<AppState>>,
     window: &AppWindow,
@@ -337,7 +337,7 @@ mod tests {
     fn queue_update_check_does_not_record_timestamp() {
         crate::presentation::test_support::run_on_ui_thread(|| {
             let window = AppWindow::new().expect("slint app window");
-            let (sender, _receiver) = std::sync::mpsc::channel();
+            let (sender, _receiver) = crossbeam_channel::bounded(4);
             let canceller = UpdateCheckCanceller::default();
             let preferences = UserPreferences::default();
             let state = Rc::new(RefCell::new(AppState::new(preferences)));

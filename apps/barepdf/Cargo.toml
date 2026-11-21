@@ -16,6 +16,7 @@ barepdf-platform = { path = "../../crates/barepdf-platform" }
 barepdf-platform-windows = { path = "../../crates/barepdf-platform-windows" }
 barepdf-i18n = { path = "../../crates/barepdf-i18n" }
 barepdf-ui = { path = "../../crates/barepdf-ui" }
+crossbeam-channel.workspace = true
 slint = { workspace = true, features = ["raw-window-handle-06"] }
 lru.workspace = true
 tracing-subscriber.workspace = true

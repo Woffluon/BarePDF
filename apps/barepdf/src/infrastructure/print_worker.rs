@@ -1,11 +1,11 @@
-use barepdf_core::{PdfError, Rotation};
+use barepdf_core::{PdfError, Rotation, SecretPassword};
 use barepdf_pdf::{PdfBackend, PdfiumEngine};
 use barepdf_platform::printing::{
     Copies, PrintError, PrintJobId, PrintPage, PrintRange, PrinterSink,
 };
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -21,12 +21,20 @@ const MAX_PRINT_BITMAP_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) struct PrintRequest {
     pub(crate) id: PrintJobId,
     pub(crate) path: PathBuf,
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<SecretPassword>,
     pub(crate) title: String,
     pub(crate) range: PrintRange,
     pub(crate) copies: Copies,
     pub(crate) sink: Option<Box<dyn PrinterSink>>,
     pub(crate) cancel: Arc<AtomicBool>,
+}
+
+impl Drop for PrintRequest {
+    fn drop(&mut self) {
+        if let Some(password) = self.password.as_mut() {
+            password.clear();
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,10 +95,11 @@ pub(crate) enum PrintWorkerError {
 type BackendFactory = Box<dyn FnOnce() -> Result<Box<dyn PdfBackend>, String> + Send + 'static>;
 
 pub(crate) struct PrintWorker {
-    command_sender: Option<SyncSender<PrintCommand>>,
+    command_sender: Option<Sender<PrintCommand>>,
     progress_receiver: Receiver<PrintEvent>,
     terminal_receiver: Receiver<PrintEvent>,
     shutdown: Arc<AtomicBool>,
+    shutdown_tx: Option<Sender<()>>,
     done_receiver: Receiver<()>,
     handle: Option<JoinHandle<()>>,
     shutdown_timed_out: bool,
@@ -106,10 +115,11 @@ impl PrintWorker {
     }
 
     fn spawn_with_factory(factory: BackendFactory) -> Result<Self, PrintWorkerError> {
-        let (command_sender, command_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
-        let (progress_sender, progress_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
-        let (terminal_sender, terminal_receiver) = mpsc::sync_channel(EVENT_CAPACITY);
-        let (done_sender, done_receiver) = mpsc::sync_channel(1);
+        let (command_sender, command_receiver) = bounded(COMMAND_CAPACITY);
+        let (progress_sender, progress_receiver) = bounded(EVENT_CAPACITY);
+        let (terminal_sender, terminal_receiver) = bounded(EVENT_CAPACITY);
+        let (done_sender, done_receiver) = bounded(1);
+        let (shutdown_tx, shutdown_rx) = bounded(1);
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = shutdown.clone();
         let handle = std::thread::Builder::new()
@@ -121,6 +131,7 @@ impl PrintWorker {
                     &progress_sender,
                     &terminal_sender,
                     &worker_shutdown,
+                    &shutdown_rx,
                 );
                 let _ = done_sender.try_send(());
             })
@@ -130,6 +141,7 @@ impl PrintWorker {
             progress_receiver,
             terminal_receiver,
             shutdown,
+            shutdown_tx: Some(shutdown_tx),
             done_receiver,
             handle: Some(handle),
             shutdown_timed_out: false,
@@ -162,6 +174,7 @@ impl PrintWorker {
             return Ok(());
         };
         self.shutdown.store(true, Ordering::Release);
+        drop(self.shutdown_tx.take());
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.try_send(PrintCommand::Shutdown);
         }
@@ -179,13 +192,13 @@ impl PrintWorker {
                 .ok_or(PrintWorkerError::Disconnected)?
                 .join()
                 .map_err(|_| PrintWorkerError::Panicked),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(RecvTimeoutError::Timeout) => {
                 while self.terminal_receiver.try_recv().is_ok() {}
                 while self.progress_receiver.try_recv().is_ok() {}
                 self.shutdown_timed_out = true;
                 Err(PrintWorkerError::ShutdownTimeout)
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(RecvTimeoutError::Disconnected) => {
                 let Some(handle) = self.handle.take() else {
                     return Ok(());
                 };
@@ -207,36 +220,24 @@ impl Drop for PrintWorker {
 }
 
 fn send_terminal_event(
-    terminal: &SyncSender<PrintEvent>,
-    mut event: PrintEvent,
+    terminal: &Sender<PrintEvent>,
+    event: PrintEvent,
     shutdown: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) {
-    if shutdown.load(Ordering::Acquire) {
+    if shutdown.load(Ordering::Acquire)
+        || !matches!(shutdown_rx.try_recv(), Err(TryRecvError::Empty))
+    {
         let _ = terminal.try_send(event);
         return;
     }
     match terminal.try_send(event) {
-        Ok(()) => {}
-        Err(TrySendError::Disconnected(_)) => {}
-        Err(TrySendError::Full(returned)) => {
-            event = returned;
-            let start = std::time::Instant::now();
-            loop {
-                if shutdown.load(Ordering::Acquire) {
-                    let _ = terminal.try_send(event);
-                    return;
-                }
-                match terminal.try_send(event) {
-                    Ok(()) => return,
-                    Err(TrySendError::Disconnected(_)) => return,
-                    Err(TrySendError::Full(returned)) => {
-                        event = returned;
-                        if start.elapsed() > Duration::from_millis(500) {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
+        Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+        Err(TrySendError::Full(event)) => {
+            crossbeam_channel::select! {
+                send(terminal, event) -> _ => {}
+                recv(shutdown_rx) -> _ => {}
+                default(Duration::from_millis(500)) => {}
             }
         }
     }
@@ -245,16 +246,24 @@ fn send_terminal_event(
 fn worker_loop(
     factory: BackendFactory,
     commands: &Receiver<PrintCommand>,
-    progress: &SyncSender<PrintEvent>,
-    terminal: &SyncSender<PrintEvent>,
+    progress: &Sender<PrintEvent>,
+    terminal: &Sender<PrintEvent>,
     shutdown: &AtomicBool,
+    shutdown_rx: &Receiver<()>,
 ) {
     let mut factory = Some(factory);
     let mut backend: Option<Box<dyn PdfBackend>> = None;
     while !shutdown.load(Ordering::Acquire) {
-        let Ok(command) = commands.recv() else {
-            break;
+        let command = crossbeam_channel::select! {
+            recv(commands) -> msg => match msg {
+                Ok(cmd) => cmd,
+                Err(_) => break,
+            },
+            recv(shutdown_rx) -> _ => break,
         };
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
         match command {
             PrintCommand::Start(request) => {
                 let job_id = request.id;
@@ -318,7 +327,7 @@ fn worker_loop(
                         PrintEvent::Failed { job_id, message }
                     }
                 };
-                send_terminal_event(terminal, event, shutdown);
+                send_terminal_event(terminal, event, shutdown, shutdown_rx);
             }
             PrintCommand::Shutdown => break,
         }
@@ -333,7 +342,7 @@ enum JobFailure {
 fn run_job(
     backend: &dyn PdfBackend,
     mut request: PrintRequest,
-    progress: &SyncSender<PrintEvent>,
+    progress: &Sender<PrintEvent>,
     shutdown: &AtomicBool,
 ) -> PrintEvent {
     let job_id = request.id;
@@ -356,13 +365,18 @@ fn run_job(
 fn execute_job(
     backend: &dyn PdfBackend,
     request: &mut PrintRequest,
-    progress: &SyncSender<PrintEvent>,
+    progress: &Sender<PrintEvent>,
     shutdown: &AtomicBool,
 ) -> Result<(), JobFailure> {
     check_cancel(request, shutdown)?;
-    let document = backend
-        .open_path(&request.path, request.password.as_deref())
-        .map_err(|error| pdf_failure(&error))?;
+    let open_result = backend.open_path(
+        &request.path,
+        request.password.as_ref().map(SecretPassword::expose),
+    );
+    if let Some(mut password) = request.password.take() {
+        password.clear();
+    }
+    let document = open_result.map_err(|error| pdf_failure(&error))?;
     let page_count = document.page_count().map_err(|error| pdf_failure(&error))?;
     if request.range.is_empty()
         || request
@@ -723,7 +737,7 @@ mod tests {
             Copies::new(2).expect("valid copies"),
             Arc::new(AtomicBool::new(false)),
         );
-        let (progress_sender, progress_receiver) = mpsc::sync_channel(8);
+        let (progress_sender, progress_receiver) = bounded(8);
 
         assert!(execute_job(
             &backend,
@@ -761,7 +775,7 @@ mod tests {
         };
         let range = PrintRange::all(count(1));
         let cancel = Arc::new(AtomicBool::new(false));
-        let (progress_sender, _progress_receiver) = mpsc::sync_channel(1);
+        let (progress_sender, _progress_receiver) = bounded(1);
         let mut invalid = request(
             state.clone(),
             range.clone(),
@@ -830,7 +844,7 @@ mod tests {
             fail_begin: false,
             cancel_after_write: Some(cancel),
         }));
-        let (progress_sender, _progress_receiver) = mpsc::sync_channel(2);
+        let (progress_sender, _progress_receiver) = bounded(2);
 
         assert!(matches!(
             execute_job(
@@ -851,7 +865,7 @@ mod tests {
 
     struct BlockingSink {
         id: PrintJobId,
-        entered: Option<SyncSender<()>>,
+        entered: Option<Sender<()>>,
     }
 
     impl PrinterSink for BlockingSink {
@@ -891,7 +905,7 @@ mod tests {
             }))
         }))
         .expect("test worker should start");
-        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (entered_sender, entered_receiver) = bounded(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let request = PrintRequest {
             id: id(),
@@ -1054,7 +1068,7 @@ mod tests {
         let request = PrintRequest {
             id: job_id,
             path: PathBuf::from("protected.pdf"),
-            password: Some("secret123".to_string()),
+            password: Some(SecretPassword::new("secret123".to_string())),
             title: "protected".into(),
             range: PrintRange::all(count(1)),
             copies: Copies::default(),
@@ -1119,5 +1133,124 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         // Do NOT read terminal_receiver; immediately shut down
         assert!(worker.shutdown().is_ok());
+    }
+
+    #[test]
+    fn send_terminal_event_unblocks_immediately_on_shutdown_when_channel_is_full() {
+        let (terminal_tx, _terminal_rx) = bounded(1);
+        let (shutdown_tx, shutdown_rx) = bounded(1);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        terminal_tx
+            .try_send(PrintEvent::Finished { job_id: id() })
+            .expect("channel fills to capacity");
+
+        let sender_shutdown = shutdown.clone();
+        let started = Instant::now();
+        let handle = std::thread::spawn(move || {
+            send_terminal_event(
+                &terminal_tx,
+                PrintEvent::Finished { job_id: id() },
+                &sender_shutdown,
+                &shutdown_rx,
+            );
+        });
+        std::thread::sleep(Duration::from_millis(5));
+        shutdown.store(true, Ordering::Release);
+        drop(shutdown_tx);
+        assert!(handle.join().is_ok());
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "send_terminal_event took {:?} on full channel shutdown",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn shutdown_unblocks_worker_when_event_channel_is_full() {
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let backend_state = state.clone();
+        let mut worker = PrintWorker::spawn_with_factory(Box::new(move || {
+            Ok(Box::new(FakeBackend {
+                state: backend_state,
+                page_count: count(1),
+            }))
+        }))
+        .expect("test worker starts");
+
+        for seq in 1..=(EVENT_CAPACITY as u64 + 1) {
+            let job_id = PrintJobId::new(100 + seq).expect("job id");
+            let req = PrintRequest {
+                id: job_id,
+                path: PathBuf::from("full.pdf"),
+                password: None,
+                title: "full".into(),
+                range: PrintRange::all(count(1)),
+                copies: Copies::default(),
+                sink: Some(Box::new(FakeSink {
+                    id: job_id,
+                    dpi: 300,
+                    state: state.clone(),
+                    fail_begin: false,
+                    cancel_after_write: None,
+                })),
+                cancel: Arc::new(AtomicBool::new(false)),
+            };
+            worker.submit(req).expect("job queues");
+            while worker.terminal_receiver.len() < (seq as usize).min(EVENT_CAPACITY) {
+                std::thread::yield_now();
+            }
+        }
+        // Let the 17th job enter send_terminal_event on the full channel
+        while state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finished
+            <= EVENT_CAPACITY
+        {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+
+        let started = Instant::now();
+        assert!(worker.shutdown().is_ok());
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "PrintWorker::shutdown took {:?} when terminal channel was full",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn execute_job_clears_secret_password_after_open() {
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let backend = FakeBackend {
+            state: state.clone(),
+            page_count: count(1),
+        };
+        let mut req = request(
+            state.clone(),
+            PrintRange::all(count(1)),
+            Copies::default(),
+            Arc::new(AtomicBool::new(false)),
+        );
+        req.password = Some(SecretPassword::new("print-secret".into()));
+        let (progress_sender, _progress_receiver) = bounded(4);
+
+        assert!(execute_job(
+            &backend,
+            &mut req,
+            &progress_sender,
+            &AtomicBool::new(false)
+        )
+        .is_ok());
+        assert!(req.password.is_none());
+        assert_eq!(
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .opened_password
+                .as_deref(),
+            Some("print-secret")
+        );
     }
 }

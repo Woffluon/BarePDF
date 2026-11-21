@@ -1,4 +1,5 @@
 use crate::infrastructure::{PrintEvent, PrintRequest, PrintWorker, PrintWorkerError};
+use barepdf_core::SecretPassword;
 use barepdf_platform::printing::{Copies, PrintJobId, PrintRange, PrinterSink};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,7 +76,7 @@ impl PrintController {
         &mut self,
         id: PrintJobId,
         path: PathBuf,
-        password: Option<String>,
+        password: Option<SecretPassword>,
         title: String,
         range: PrintRange,
         copies: Copies,
@@ -162,6 +163,50 @@ mod tests {
         controller.release_reservation(first);
         assert!(controller.reserve_job().is_ok());
         assert!(controller.shutdown().is_ok());
+        assert!(controller.shutdown().is_ok());
+    }
+
+    #[test]
+    fn submit_with_password_accepts_secret_password() {
+        use barepdf_platform::printing::{PrintError, PrintPage};
+
+        struct DummySink(PrintJobId);
+        impl PrinterSink for DummySink {
+            fn job_id(&self) -> PrintJobId {
+                self.0
+            }
+            fn target_dpi(&self) -> u16 {
+                300
+            }
+            fn begin(&mut self, _title: &str) -> Result<(), PrintError> {
+                Ok(())
+            }
+            fn write_page(&mut self, _page: PrintPage<'_>) -> Result<(), PrintError> {
+                Ok(())
+            }
+            fn finish(self: Box<Self>) -> Result<(), PrintError> {
+                Ok(())
+            }
+        }
+
+        let worker = PrintWorker::spawn_fake_idle().expect("test worker should start");
+        let mut controller = PrintController {
+            worker,
+            active: None,
+            next_id: 0,
+        };
+        let id = controller.reserve_job().expect("job should reserve");
+        let range = PrintRange::all(barepdf_core::PageCount::ONE);
+        let result = controller.submit_with_password(
+            id,
+            PathBuf::from("secret.pdf"),
+            Some(SecretPassword::new("top-secret".into())),
+            "secret".into(),
+            range,
+            Copies::default(),
+            Box::new(DummySink(id)),
+        );
+        assert!(result.is_ok());
         assert!(controller.shutdown().is_ok());
     }
 }

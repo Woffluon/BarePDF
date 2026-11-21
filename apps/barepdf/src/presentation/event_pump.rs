@@ -87,7 +87,7 @@ pub(super) fn start(
     preferences_path: &Path,
     mut native_drop_receiver: Option<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
     updates: (
-        std::sync::mpsc::Receiver<UpdateEvent>,
+        crossbeam_channel::Receiver<UpdateEvent>,
         Option<Rc<RefCell<PrintController>>>,
     ),
 ) {

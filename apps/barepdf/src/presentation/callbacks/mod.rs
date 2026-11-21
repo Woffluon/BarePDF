@@ -78,7 +78,7 @@ pub(super) fn wire_callbacks(
     clipboard: Arc<WindowsClipboard>,
     preferences_path: &Path,
     background: (
-        std::sync::mpsc::Sender<UpdateCommand>,
+        crossbeam_channel::Sender<UpdateCommand>,
         UpdateCheckCanceller,
         Option<Rc<RefCell<PrintController>>>,
     ),

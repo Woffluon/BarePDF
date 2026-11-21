@@ -276,6 +276,25 @@ fn decode_hex(value: u8) -> Result<u8, UpdateFailure> {
     }
 }
 
+fn validate_manifest_expiration(
+    expires_at: Option<u64>,
+    now: std::time::SystemTime,
+) -> Result<(), UpdateFailure> {
+    let Some(expires_at) = expires_at else {
+        return Err(UpdateFailure::Rejected(
+            "Update manifest is missing expiration timestamp",
+        ));
+    };
+    let now_secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| UpdateFailure::Rejected("System clock is before the Unix epoch"))?
+        .as_secs();
+    if now_secs > expires_at {
+        return Err(UpdateFailure::Rejected("Update manifest has expired"));
+    }
+    Ok(())
+}
+
 pub(super) fn parse_manifest(
     json: &str,
     current_version: &str,
@@ -290,15 +309,7 @@ pub(super) fn parse_manifest(
             "Unsupported update metadata version",
         ));
     }
-    if let Some(expires_at) = manifest.expires_at {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        if now > expires_at {
-            return Err(UpdateFailure::Rejected("Update manifest has expired"));
-        }
-    }
+    validate_manifest_expiration(manifest.expires_at, std::time::SystemTime::now())?;
     let current = Version::parse(current_version).map_err(|source| UpdateFailure::Version {
         operation: "Invalid application version",
         source,
@@ -461,7 +472,7 @@ mod tests {
 
     fn manifest(version: &str, url_version: &str, hash: &str, size: u64) -> String {
         format!(
-            r#"{{"schemaVersion":1,"version":"{version}","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v{url_version}","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/BarePDF-Setup-x64-v{url_version}.exe","sha256":"{hash}","size":{size}}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/barepdf_{url_version}_amd64.deb","sha256":"{hash}","size":{size}}}}}"#
+            r#"{{"schemaVersion":1,"version":"{version}","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v{url_version}","expiresAt":9999999999,"installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/BarePDF-Setup-x64-v{url_version}.exe","sha256":"{hash}","size":{size}}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v{url_version}/barepdf_{url_version}_amd64.deb","sha256":"{hash}","size":{size}}}}}"#
         )
     }
 
@@ -671,7 +682,7 @@ mod tests {
     fn linux_parse_rejects_a_manifest_without_deb_entry_end_to_end() {
         let hash = "a".repeat(64);
         let json = format!(
-            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}}}}"#
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","expiresAt":9999999999,"installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}}}}"#
         );
         assert!(matches!(
             parse_manifest(&json, "1.1.0"),
@@ -687,6 +698,7 @@ mod tests {
                 "schemaVersion": 1,
                 "version": "1.2.0",
                 "releaseUrl": "https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0",
+                "expiresAt": 9999999999,
                 "installer": {{
                     "url": "https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe",
                     "sha256": "{hash}",
@@ -701,5 +713,40 @@ mod tests {
         );
         let result = parse_manifest(&json, "1.1.0").expect("valid manifest");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn missing_or_null_expires_at_is_rejected() {
+        let hash = "a".repeat(64);
+        let missing_json = format!(
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb","sha256":"{hash}","size":2048}}}}"#
+        );
+        assert!(matches!(
+            parse_manifest(&missing_json, "1.1.0"),
+            Err(UpdateFailure::Rejected(
+                "Update manifest is missing expiration timestamp"
+            ))
+        ));
+
+        let null_json = format!(
+            r#"{{"schemaVersion":1,"version":"1.2.0","releaseUrl":"https://github.com/Woffluon/BarePDF/releases/tag/v1.2.0","expiresAt":null,"installer":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/BarePDF-Setup-x64-v1.2.0.exe","sha256":"{hash}","size":1024}},"deb":{{"url":"https://github.com/Woffluon/BarePDF/releases/download/v1.2.0/barepdf_1.2.0_amd64.deb","sha256":"{hash}","size":2048}}}}"#
+        );
+        assert!(matches!(
+            parse_manifest(&null_json, "1.1.0"),
+            Err(UpdateFailure::Rejected(
+                "Update manifest is missing expiration timestamp"
+            ))
+        ));
+    }
+
+    #[test]
+    fn pre_epoch_system_clock_fails_closed() {
+        let pre_epoch = std::time::UNIX_EPOCH - Duration::from_secs(1);
+        assert!(matches!(
+            validate_manifest_expiration(Some(9_999_999_999), pre_epoch),
+            Err(UpdateFailure::Rejected(
+                "System clock is before the Unix epoch"
+            ))
+        ));
     }
 }
