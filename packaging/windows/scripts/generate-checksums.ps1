@@ -35,10 +35,13 @@ $Repository = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { "Wof
 $InstallerSize = (Get-Item -LiteralPath $InstallerPath).Length
 $ReleaseNotes = ((& git -C $RepoRoot log -1 --format=%B) -join "`n").Trim()
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) { $ReleaseNotes = "BarePDF v$Version" }
+$NowUtc = [DateTimeOffset]::UtcNow
+$ExpiresAt = [uint64]$NowUtc.AddDays(90).ToUnixTimeSeconds()
 $Manifest = [ordered]@{
     schemaVersion = 1
     version = $Version
-    publishedAt = [DateTimeOffset]::UtcNow.ToString("o")
+    publishedAt = $NowUtc.ToString("o")
+    expiresAt = $ExpiresAt
     releaseUrl = "https://github.com/$Repository/releases/tag/v$Version"
     releaseNotes = $ReleaseNotes
     installer = [ordered]@{

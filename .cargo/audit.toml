@@ -61,4 +61,11 @@ ignore = [
     #   Used only within Slint proc-macro expansion at build time.
     # - Re-evaluate when: Upgrading `slint` to a version that removes `spin_on` / `pin-utils`.
     "RUSTSEC-2026-0441",
+
+    # RUSTSEC-2026-0543 (Informational: unmaintained): `chrono` 0.4.45
+    # - Dependency path: Transitive via `pdfium-render` 0.9.5 and `i-slint-core` 1.18.1.
+    # - Impact analysis: Informational maintenance notice only; no known CVE. BarePDF does not
+    #   depend on `chrono` directly or parse untrusted network/PDF timestamps through it.
+    # - Re-evaluate when: Upgrading `pdfium-render` / `slint` to releases that drop or replace `chrono`.
+    "RUSTSEC-2026-0543",
 ]

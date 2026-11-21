@@ -20,6 +20,10 @@ $Manifest = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json
 if ($Manifest.schemaVersion -ne 1 -or $Manifest.version -notmatch '^\d+\.\d+\.\d+$') {
     throw "latest.json has an invalid schema or product version"
 }
+$NowUnixSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+if ($null -eq $Manifest.PSObject.Properties["expiresAt"] -or $Manifest.expiresAt -isnot [ValueType] -or [int64]$Manifest.expiresAt -le $NowUnixSeconds) {
+    throw "latest.json must include a future expiresAt Unix timestamp"
+}
 $ArtifactsDirectory = Split-Path -Parent $ManifestPath
 $ExpectedAssets = @(
     "BarePDF-Setup-x64-v$($Manifest.version).exe",
