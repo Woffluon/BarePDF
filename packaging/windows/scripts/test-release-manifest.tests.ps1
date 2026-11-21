@@ -12,7 +12,7 @@ $ReleaseUrl = "https://github.com/Woffluon/BarePDF/releases/tag/v$Version"
 $MaxMetadataBytes = 64 * 1024
 $MaxInstallerBytes = 256 * 1024 * 1024
 
-function Write-Fixture([string]$Url, [string]$Hash, [long]$Size, [string]$FixtureReleaseUrl = $ReleaseUrl, [int]$Padding = 0) {
+function Write-Fixture([string]$Url, [string]$Hash, [long]$Size, [string]$FixtureReleaseUrl = $ReleaseUrl, [int]$Padding = 0, [Nullable[long]]$ExpiresAt = ([long][DateTimeOffset]::UtcNow.AddDays(90).ToUnixTimeSeconds())) {
     New-Item -ItemType Directory -Path $FixtureDirectory -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $FixtureDirectory $InstallerName), $InstallerBytes)
     [IO.File]::WriteAllBytes((Join-Path $FixtureDirectory "BarePDF-Portable-x64-v$Version.zip"), [byte[]](5))
@@ -24,6 +24,7 @@ function Write-Fixture([string]$Url, [string]$Hash, [long]$Size, [string]$Fixtur
         releaseNotes = "Fixture"
         installer = [ordered]@{ url = $Url; sha256 = $Hash; size = $Size }
     }
+    if ($null -ne $ExpiresAt) { $Manifest.expiresAt = $ExpiresAt }
     if ($Padding -gt 0) { $Manifest.padding = "x" * $Padding }
     $Manifest = $Manifest | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText((Join-Path $FixtureDirectory "latest.json"), "$Manifest`n", [Text.UTF8Encoding]::new($false))
@@ -53,6 +54,9 @@ function Assert-Rejected([string]$ExpectedMessage) {
 try {
     Write-Fixture $InstallerUrl $InstallerHash $InstallerBytes.Length
     & $ManifestValidator -ManifestPath (Join-Path $FixtureDirectory "latest.json")
+
+    Write-Fixture $InstallerUrl $InstallerHash $InstallerBytes.Length $ReleaseUrl 0 ([long]1)
+    Assert-Rejected "expiresAt"
 
     Write-Fixture "https://example.com/releases/download/v$Version/$InstallerName" $InstallerHash $InstallerBytes.Length
     Assert-Rejected "installer URL"
