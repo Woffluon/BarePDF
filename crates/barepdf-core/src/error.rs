@@ -65,4 +65,23 @@ pub enum PdfError {
 
     #[error("Document worker terminated unexpectedly")]
     WorkerTerminated,
+
+    #[error("PDF backend does not support capability '{capability}'")]
+    UnsupportedCapability { capability: &'static str },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PdfError;
+
+    #[test]
+    fn unsupported_capability_displays_capability_name() {
+        let err = PdfError::UnsupportedCapability {
+            capability: "save_to_bytes",
+        };
+        assert_eq!(
+            err.to_string(),
+            "PDF backend does not support capability 'save_to_bytes'"
+        );
+    }
 }

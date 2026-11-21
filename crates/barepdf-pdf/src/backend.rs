@@ -18,8 +18,33 @@ pub struct OutlineNode {
     pub children: Vec<OutlineNode>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DocumentCapabilities(u8);
+
+impl DocumentCapabilities {
+    pub const NONE: Self = Self(0);
+    pub const READ_ANNOTATIONS: u8 = 1 << 0;
+    pub const WRITE_ANNOTATIONS: u8 = 1 << 1;
+    pub const READ_FORM_FIELDS: u8 = 1 << 2;
+    pub const WRITE_FORM_FIELDS: u8 = 1 << 3;
+    pub const SAVE_BYTES: u8 = 1 << 4;
+
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn supports(self, flag: u8) -> bool {
+        (self.0 & flag) == flag
+    }
+}
+
 #[allow(clippy::missing_errors_doc)] // Each implementation maps backend-specific failures to PdfError.
 pub trait PdfDocument: Send {
+    fn capabilities(&self) -> DocumentCapabilities {
+        DocumentCapabilities::NONE
+    }
     fn page_count(&self) -> Result<PageCount, PdfError>;
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError>;
     fn all_page_dimensions(&self) -> Result<Vec<(f32, f32)>, PdfError> {
@@ -43,16 +68,24 @@ pub trait PdfDocument: Send {
     fn get_page_text_geometry(&self, page_index: PageIndex) -> Result<PageTextGeometry, PdfError>;
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError>;
     fn annotations(&self, _page: PageIndex) -> Result<Vec<AnnotationRecord>, PdfError> {
-        Ok(Vec::new())
+        Err(PdfError::UnsupportedCapability {
+            capability: "annotations",
+        })
     }
     fn form_fields(&self) -> Result<Vec<FormFieldRecord>, PdfError> {
-        Ok(Vec::new())
+        Err(PdfError::UnsupportedCapability {
+            capability: "form_fields",
+        })
     }
     fn set_form_field_value(&mut self, _name: &str, _value: &str) -> Result<(), PdfError> {
-        Ok(())
+        Err(PdfError::UnsupportedCapability {
+            capability: "set_form_field_value",
+        })
     }
     fn save_to_bytes(&self) -> Result<Vec<u8>, PdfError> {
-        Ok(Vec::new())
+        Err(PdfError::UnsupportedCapability {
+            capability: "save_to_bytes",
+        })
     }
 }
 
@@ -72,7 +105,7 @@ pub trait PdfBackend: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{PdfDocument, RawBitmap};
+    use super::{DocumentCapabilities, PdfDocument, RawBitmap};
     use barepdf_core::{PageCount, PageIndex, PdfError, Rotation};
 
     struct MinimalStubDoc;
@@ -117,13 +150,50 @@ mod tests {
     }
 
     #[test]
-    fn pdf_document_default_form_methods() {
+    fn pdf_document_default_methods_return_unsupported_capability() {
         let mut doc = MinimalStubDoc;
-        let fields = doc.form_fields().expect("default form_fields");
-        assert!(fields.is_empty());
-        assert!(doc.set_form_field_value("any", "val").is_ok());
-        let bytes = doc.save_to_bytes().expect("default save_to_bytes");
-        assert!(bytes.is_empty());
+        assert_eq!(doc.capabilities(), DocumentCapabilities::NONE);
+        assert!(matches!(
+            doc.annotations(PageIndex::zero()),
+            Err(PdfError::UnsupportedCapability {
+                capability: "annotations"
+            })
+        ));
+        assert!(matches!(
+            doc.form_fields(),
+            Err(PdfError::UnsupportedCapability {
+                capability: "form_fields"
+            })
+        ));
+        assert!(matches!(
+            doc.set_form_field_value("any", "val"),
+            Err(PdfError::UnsupportedCapability {
+                capability: "set_form_field_value"
+            })
+        ));
+        assert!(matches!(
+            doc.save_to_bytes(),
+            Err(PdfError::UnsupportedCapability {
+                capability: "save_to_bytes"
+            })
+        ));
+    }
+
+    #[test]
+    fn document_capabilities_bitmask_checks_flags() {
+        assert_eq!(DocumentCapabilities::NONE, DocumentCapabilities::default());
+        assert!(!DocumentCapabilities::NONE.supports(DocumentCapabilities::READ_ANNOTATIONS));
+
+        let caps = DocumentCapabilities::from_bits(
+            DocumentCapabilities::READ_ANNOTATIONS | DocumentCapabilities::SAVE_BYTES,
+        );
+        assert!(caps.supports(DocumentCapabilities::READ_ANNOTATIONS));
+        assert!(caps.supports(DocumentCapabilities::SAVE_BYTES));
+        assert!(caps
+            .supports(DocumentCapabilities::READ_ANNOTATIONS | DocumentCapabilities::SAVE_BYTES));
+        assert!(!caps.supports(DocumentCapabilities::WRITE_ANNOTATIONS));
+        assert!(!caps.supports(DocumentCapabilities::READ_FORM_FIELDS));
+        assert!(!caps.supports(DocumentCapabilities::WRITE_FORM_FIELDS));
     }
 
     #[test]

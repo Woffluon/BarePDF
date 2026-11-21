@@ -1,28 +1,17 @@
 use crate::backend::{
-    OutlineNode, PdfBackend, PdfDocument as CorePdfDocument, RawBitmap, TextSpan,
+    DocumentCapabilities, OutlineNode, PdfBackend, PdfDocument as CorePdfDocument, RawBitmap,
+    TextSpan,
 };
 use crate::pdfium_lifetime::process_pdfium;
 use barepdf_core::{
     AnnotationRecord, FormFieldRecord, FormFieldType, HighlightQuad, PageCount, PageCropRect,
-    PageIndex, PdfError, Rotation, SecretPassword, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
+    PageIndex, PdfError, Rotation, SecretPassword, MAX_ANNOTATIONS_PER_PAGE, MAX_ANNOTATION_QUADS,
+    MAX_FORM_FIELDS_PER_DOCUMENT, MAX_FORM_FIELD_VALUE_BYTES, MAX_LINKS_PER_PAGE,
+    MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, MAX_PASSWORD_BYTES, MAX_TEXT_GLYPHS_PER_PAGE,
 };
 use pdfium_render::prelude::*;
-use std::ffi::CString;
 use std::path::Path;
 use std::sync::Arc;
-
-mod glyph_limit_scope {
-    const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
-
-    pub const fn get() -> usize {
-        #[allow(unused_imports)]
-        use barepdf_core::limits::*;
-        MAX_TEXT_GLYPHS_PER_PAGE
-    }
-}
-
-pub const MAX_TEXT_GLYPHS_PER_PAGE: usize = glyph_limit_scope::get();
-const MAX_LINKS_PER_PAGE: usize = 2_000;
 
 struct ZeroizingFfiPassword {
     secret: SecretPassword,
@@ -33,15 +22,11 @@ impl ZeroizingFfiPassword {
         let Some(password) = password else {
             return Ok(None);
         };
-        if password.as_bytes().contains(&0) {
+        if password.len() > MAX_PASSWORD_BYTES || password.as_bytes().contains(&0) {
             return Err(PdfError::IncorrectPassword);
         }
-        let c_string = CString::new(password).map_err(|_| PdfError::IncorrectPassword)?;
-        let owned = c_string
-            .into_string()
-            .map_err(|_| PdfError::IncorrectPassword)?;
         Ok(Some(Self {
-            secret: SecretPassword::new(owned),
+            secret: SecretPassword::new(password.to_owned()),
         }))
     }
 
@@ -139,6 +124,15 @@ impl PdfBackend for PdfiumEngine {
 }
 
 impl CorePdfDocument for PdfiumDocumentOwned {
+    fn capabilities(&self) -> DocumentCapabilities {
+        DocumentCapabilities::from_bits(
+            DocumentCapabilities::READ_ANNOTATIONS
+                | DocumentCapabilities::READ_FORM_FIELDS
+                | DocumentCapabilities::WRITE_FORM_FIELDS
+                | DocumentCapabilities::SAVE_BYTES,
+        )
+    }
+
     fn page_count(&self) -> Result<PageCount, PdfError> {
         validate_loaded_page_count(self.doc.pages().len())
     }
@@ -345,8 +339,23 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             }
         }
 
+        let page_links = page.links();
+        let link_reserve = page_links.len().min(MAX_LINKS_PER_PAGE);
         let mut links = Vec::new();
-        for link in page.links().iter().take(MAX_LINKS_PER_PAGE) {
+        links.try_reserve(link_reserve).map_err(|_| {
+            PdfError::OutOfMemoryBudget(
+                link_reserve.saturating_mul(std::mem::size_of::<barepdf_core::PageLink>()),
+            )
+        })?;
+        if page_links.len() > MAX_LINKS_PER_PAGE {
+            tracing::warn!(
+                page_index = page_index.as_u32(),
+                total_links = page_links.len(),
+                limit = MAX_LINKS_PER_PAGE,
+                "Truncating page links to safety limit"
+            );
+        }
+        for link in page_links.iter().take(MAX_LINKS_PER_PAGE) {
             let Ok(rect) = link.rect() else {
                 continue;
             };
@@ -426,12 +435,27 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         let page_w = page.width().value;
         let page_h = page.height().value;
         let annots = page.annotations();
-        let mut records = Vec::with_capacity(annots.len());
+        let total_annots = annots.len();
+        let reserve_len = total_annots.min(MAX_ANNOTATIONS_PER_PAGE);
+        let mut records = Vec::new();
+        records.try_reserve(reserve_len).map_err(|_| {
+            PdfError::OutOfMemoryBudget(
+                reserve_len.saturating_mul(std::mem::size_of::<AnnotationRecord>()),
+            )
+        })?;
+        if total_annots > MAX_ANNOTATIONS_PER_PAGE {
+            tracing::warn!(
+                page_index = page_index.as_u32(),
+                total_annotations = total_annots,
+                limit = MAX_ANNOTATIONS_PER_PAGE,
+                "Truncating page annotations to safety limit"
+            );
+        }
 
-        for annot in annots.iter() {
+        for annot in annots.iter().take(MAX_ANNOTATIONS_PER_PAGE) {
             match annot.annotation_type() {
                 PdfPageAnnotationType::Highlight => {
-                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h);
+                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h)?;
                     let contents = annot.contents();
                     records.push(AnnotationRecord::Highlight {
                         page: page_index,
@@ -440,7 +464,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                     });
                 }
                 PdfPageAnnotationType::Underline => {
-                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h);
+                    let quads = extract_quads_from_annotation(&annot, page_index, page_w, page_h)?;
                     let contents = annot.contents();
                     records.push(AnnotationRecord::Underline {
                         page: page_index,
@@ -482,7 +506,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         let page_count = pages.len();
         let mut records = Vec::new();
 
-        for page_idx in 0..page_count {
+        'pages: for page_idx in 0..page_count {
             let page = match pages.get(page_idx) {
                 Ok(p) => p,
                 Err(e) => {
@@ -490,10 +514,25 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                     continue;
                 }
             };
-            let core_page_index = PageIndex::from_raw(page_idx as u32);
+            let raw_page_idx = u32::try_from(page_idx).map_err(|_| {
+                PdfError::InvalidPdfReason("Page index exceeds supported document range".into())
+            })?;
+            let core_page_index = PageIndex::try_from_raw(raw_page_idx).map_err(|_| {
+                PdfError::InvalidPdfReason(
+                    "Page index exceeds supported document page limit".into(),
+                )
+            })?;
             let annotations = page.annotations();
+            let remaining = MAX_FORM_FIELDS_PER_DOCUMENT.saturating_sub(records.len());
+            let page_reserve = annotations.len().min(remaining).min(256);
+            records.try_reserve(page_reserve).map_err(|_| {
+                PdfError::OutOfMemoryBudget(
+                    page_reserve.saturating_mul(std::mem::size_of::<FormFieldRecord>()),
+                )
+            })?;
 
-            for annot in annotations.iter() {
+            let scan_limit = MAX_ANNOTATIONS_PER_PAGE.saturating_add(remaining);
+            for annot in annotations.iter().take(scan_limit) {
                 let is_widget = annot.annotation_type() == PdfPageAnnotationType::Widget
                     || annot.annotation_type() == PdfPageAnnotationType::XfaWidget;
                 let form_field_opt = annot.as_form_field();
@@ -502,14 +541,24 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                     continue;
                 }
 
+                if records.len() >= MAX_FORM_FIELDS_PER_DOCUMENT {
+                    tracing::warn!(
+                        limit = MAX_FORM_FIELDS_PER_DOCUMENT,
+                        "Truncating document form fields to safety limit"
+                    );
+                    break 'pages;
+                }
+
                 let bounds = extract_crop_rect(&annot, core_page_index);
 
-                if let Some(field) = form_field_opt {
-                    let name = field.name().unwrap_or_default();
+                let record = if let Some(field) = form_field_opt {
+                    let name = validated_field_string("name", field.name().unwrap_or_default())?;
                     let is_read_only = field.is_read_only();
                     let (field_type, value) = match field.field_type() {
                         PdfFormFieldType::Text => {
-                            let val = field.as_text_field().and_then(|t| t.value());
+                            let val = validated_optional_field_value(
+                                field.as_text_field().and_then(|t| t.value()),
+                            )?;
                             (FormFieldType::Text, val)
                         }
                         PdfFormFieldType::Checkbox => {
@@ -523,21 +572,29 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                             (FormFieldType::Checkbox, val)
                         }
                         PdfFormFieldType::RadioButton => {
-                            let val = field.as_radio_button_field().map(|rb| {
+                            let val = if let Some(rb) = field.as_radio_button_field() {
                                 if rb.is_checked().unwrap_or(false) {
-                                    rb.group_value().unwrap_or_else(|| "true".to_string())
+                                    let group_val =
+                                        validated_optional_field_value(rb.group_value())?;
+                                    Some(group_val.unwrap_or_else(|| "true".to_string()))
                                 } else {
-                                    "false".to_string()
+                                    Some("false".to_string())
                                 }
-                            });
+                            } else {
+                                None
+                            };
                             (FormFieldType::RadioButton, val)
                         }
                         PdfFormFieldType::ComboBox => {
-                            let val = field.as_combo_box_field().and_then(|cb| cb.value());
+                            let val = validated_optional_field_value(
+                                field.as_combo_box_field().and_then(|cb| cb.value()),
+                            )?;
                             (FormFieldType::ComboBox, val)
                         }
                         PdfFormFieldType::ListBox => {
-                            let val = field.as_list_box_field().and_then(|lb| lb.value());
+                            let val = validated_optional_field_value(
+                                field.as_list_box_field().and_then(|lb| lb.value()),
+                            )?;
                             (FormFieldType::ListBox, val)
                         }
                         PdfFormFieldType::Signature => (FormFieldType::Signature, None),
@@ -549,26 +606,33 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                         }
                     };
 
-                    records.push(FormFieldRecord {
+                    FormFieldRecord {
                         name,
                         field_type,
                         page_index: core_page_index,
                         bounds,
                         value,
                         is_read_only,
-                    });
+                    }
                 } else {
-                    let name = annot.name().unwrap_or_default();
+                    let name = validated_field_string("name", annot.name().unwrap_or_default())?;
                     let raw_type = format!("{:?}", annot.annotation_type());
-                    records.push(FormFieldRecord {
+                    FormFieldRecord {
                         name,
                         field_type: FormFieldType::Unknown(raw_type),
                         page_index: core_page_index,
                         bounds,
                         value: None,
                         is_read_only: false,
-                    });
+                    }
+                };
+
+                if records.len() == records.capacity() {
+                    records.try_reserve(1).map_err(|_| {
+                        PdfError::OutOfMemoryBudget(std::mem::size_of::<FormFieldRecord>())
+                    })?;
                 }
+                records.push(record);
             }
         }
 
@@ -576,6 +640,8 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn set_form_field_value(&mut self, name: &str, value: &str) -> Result<(), PdfError> {
+        validate_form_field_text_bytes("name", name)?;
+        validate_form_field_text_bytes("value", value)?;
         let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
         let pages = self.doc.pages();
         let page_count = pages.len();
@@ -877,62 +943,99 @@ fn bookmark_page_index(bookmark: &PdfBookmark<'_>) -> Option<u32> {
         .and_then(|index| u32::try_from(index).ok())
 }
 
+fn validate_form_field_text_bytes(kind: &str, text: &str) -> Result<(), PdfError> {
+    if text.len() > MAX_FORM_FIELD_VALUE_BYTES {
+        return Err(PdfError::InvalidPdfReason(format!(
+            "Form field {kind} exceeds maximum allowed length of {MAX_FORM_FIELD_VALUE_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validated_field_string(kind: &str, text: String) -> Result<String, PdfError> {
+    validate_form_field_text_bytes(kind, &text)?;
+    Ok(text)
+}
+
+fn validated_optional_field_value(value: Option<String>) -> Result<Option<String>, PdfError> {
+    value
+        .map(|text| validated_field_string("value", text))
+        .transpose()
+}
+
+fn normalized_quad(
+    page: PageIndex,
+    page_w: f32,
+    page_h: f32,
+    x_min: f32,
+    x_max: f32,
+    y_min: f32,
+    y_max: f32,
+) -> HighlightQuad {
+    let x_norm = (x_min / page_w).clamp(0.0, 1.0);
+    let y_norm = ((page_h - y_max) / page_h).clamp(0.0, 1.0);
+    let w_norm = ((x_max - x_min) / page_w).clamp(0.0001, 1.0 - x_norm);
+    let h_norm = ((y_max - y_min) / page_h).clamp(0.0001, 1.0 - y_norm);
+
+    HighlightQuad {
+        page,
+        x_norm,
+        y_norm,
+        w_norm,
+        h_norm,
+    }
+}
+
 fn extract_quads_from_annotation(
     annot: &PdfPageAnnotation<'_>,
     page: PageIndex,
     page_w: f32,
     page_h: f32,
-) -> Vec<HighlightQuad> {
+) -> Result<Vec<HighlightQuad>, PdfError> {
     let pw = page_w.max(1.0);
     let ph = page_h.max(1.0);
-    let mut quads = Vec::new();
-
     let points = annot.attachment_points();
-    for i in 0..points.len() {
+    let total_points = points.len();
+    let reserve_len = total_points.min(MAX_ANNOTATION_QUADS);
+    let mut quads = Vec::new();
+    quads.try_reserve(reserve_len).map_err(|_| {
+        PdfError::OutOfMemoryBudget(
+            reserve_len.saturating_mul(std::mem::size_of::<HighlightQuad>()),
+        )
+    })?;
+    if total_points > MAX_ANNOTATION_QUADS {
+        tracing::warn!(
+            page_index = page.as_u32(),
+            total_quads = total_points,
+            limit = MAX_ANNOTATION_QUADS,
+            "Truncating annotation quads to safety limit"
+        );
+    }
+
+    for i in (0..total_points).take(MAX_ANNOTATION_QUADS) {
         if let Ok(qp) = points.get(i) {
             let left = qp.left().value.min(qp.right().value);
             let right = qp.left().value.max(qp.right().value);
             let bottom = qp.bottom().value.min(qp.top().value);
             let top = qp.bottom().value.max(qp.top().value);
-
-            let x_norm = (left / pw).clamp(0.0, 1.0);
-            let y_norm = ((ph - top) / ph).clamp(0.0, 1.0);
-            let w_norm = ((right - left) / pw).clamp(0.0001, 1.0 - x_norm);
-            let h_norm = ((top - bottom) / ph).clamp(0.0001, 1.0 - y_norm);
-
-            quads.push(HighlightQuad {
-                page,
-                x_norm,
-                y_norm,
-                w_norm,
-                h_norm,
-            });
+            quads.push(normalized_quad(page, pw, ph, left, right, bottom, top));
         }
     }
 
     if quads.is_empty() {
         if let Ok(bounds) = annot.bounds() {
+            quads
+                .try_reserve(1)
+                .map_err(|_| PdfError::OutOfMemoryBudget(std::mem::size_of::<HighlightQuad>()))?;
             let left = bounds.left().value.min(bounds.right().value);
             let right = bounds.left().value.max(bounds.right().value);
             let bottom = bounds.bottom().value.min(bounds.top().value);
             let top = bounds.bottom().value.max(bounds.top().value);
-
-            let x_norm = (left / pw).clamp(0.0, 1.0);
-            let y_norm = ((ph - top) / ph).clamp(0.0, 1.0);
-            let w_norm = ((right - left) / pw).clamp(0.0001, 1.0 - x_norm);
-            let h_norm = ((top - bottom) / ph).clamp(0.0001, 1.0 - y_norm);
-
-            quads.push(HighlightQuad {
-                page,
-                x_norm,
-                y_norm,
-                w_norm,
-                h_norm,
-            });
+            quads.push(normalized_quad(page, pw, ph, left, right, bottom, top));
         }
     }
 
-    quads
+    Ok(quads)
 }
 
 fn extract_crop_rect(annot: &PdfPageAnnotation<'_>, page: PageIndex) -> PageCropRect {
@@ -959,10 +1062,13 @@ fn extract_crop_rect(annot: &PdfPageAnnotation<'_>, page: PageIndex) -> PageCrop
 #[cfg(test)]
 mod tests {
     use super::{
-        coalesce_glyphs_into_spans, validate_glyph_count, validate_loaded_page_count,
-        validate_outline_limits, RawGlyph, ZeroizingFfiPassword, MAX_TEXT_GLYPHS_PER_PAGE,
+        coalesce_glyphs_into_spans, validate_form_field_text_bytes, validate_glyph_count,
+        validate_loaded_page_count, validate_outline_limits, RawGlyph, ZeroizingFfiPassword,
     };
-    use barepdf_core::limits::{sanitize_render_dimensions, MAX_DOCUMENT_PAGES};
+    use barepdf_core::limits::{
+        sanitize_render_dimensions, MAX_DOCUMENT_PAGES, MAX_FORM_FIELD_VALUE_BYTES,
+        MAX_PASSWORD_BYTES, MAX_TEXT_GLYPHS_PER_PAGE,
+    };
     use barepdf_core::{PageIndex, PdfError, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS};
     use pdfium_render::prelude::PdfPageIndex;
 
@@ -1076,6 +1182,17 @@ mod tests {
             Err(PdfError::IncorrectPassword)
         ));
 
+        let at_limit = "a".repeat(MAX_PASSWORD_BYTES);
+        let over_limit = "a".repeat(MAX_PASSWORD_BYTES + 1);
+        let boundary = ZeroizingFfiPassword::new(Some(&at_limit))
+            .expect("boundary password")
+            .expect("some boundary password");
+        assert_eq!(boundary.expose().len(), MAX_PASSWORD_BYTES);
+        assert!(matches!(
+            ZeroizingFfiPassword::new(Some(&over_limit)),
+            Err(PdfError::IncorrectPassword)
+        ));
+
         let mut ffi_password = ZeroizingFfiPassword::new(Some("top-secret-pass"))
             .expect("valid password")
             .expect("some password");
@@ -1084,5 +1201,17 @@ mod tests {
         ffi_password.clear();
         assert!(ffi_password.bytes_for_test().is_empty());
         assert_eq!(ffi_password.expose(), "");
+    }
+
+    #[test]
+    fn form_field_text_byte_limit_accepts_boundary_and_rejects_excess() {
+        let at_limit = "x".repeat(MAX_FORM_FIELD_VALUE_BYTES);
+        let over_limit = "x".repeat(MAX_FORM_FIELD_VALUE_BYTES + 1);
+
+        assert!(validate_form_field_text_bytes("value", &at_limit).is_ok());
+        assert!(matches!(
+            validate_form_field_text_bytes("value", &over_limit),
+            Err(PdfError::InvalidPdfReason(_))
+        ));
     }
 }

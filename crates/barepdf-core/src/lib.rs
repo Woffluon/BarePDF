@@ -19,8 +19,10 @@ pub use layout::{
 };
 pub use limits::{
     sanitize_render_dimensions, validate_document_page_count, validate_tab_count,
-    ResourceLimitError, MAX_DOCUMENT_PAGES, MAX_OPEN_TABS, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS,
-    MAX_PASSWORD_BYTES, MAX_RECENT_FILES, MAX_SAFE_RENDER_DIMENSION,
+    ResourceLimitError, MAX_ANNOTATIONS_PER_PAGE, MAX_ANNOTATION_QUADS, MAX_DOCUMENT_PAGES,
+    MAX_FORM_FIELDS_PER_DOCUMENT, MAX_FORM_FIELD_VALUE_BYTES, MAX_LINKS_PER_PAGE, MAX_OPEN_TABS,
+    MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, MAX_PASSWORD_BYTES, MAX_RECENT_FILES,
+    MAX_SAFE_RENDER_DIMENSION, MAX_TEXT_GLYPHS_PER_PAGE,
 };
 pub use page_range::{
     pages_to_remove_to_retained_pages, validate_page_selection, PageRangeError, PageRangeSelection,

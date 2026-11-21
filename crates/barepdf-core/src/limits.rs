@@ -6,6 +6,12 @@ pub const MAX_OUTLINE_DEPTH: usize = 128;
 pub const MAX_OUTLINE_ITEMS: usize = 4_096;
 pub const MAX_PASSWORD_BYTES: usize = 1_024;
 pub const MAX_RECENT_FILES: usize = 10;
+pub const MAX_TEXT_GLYPHS_PER_PAGE: usize = 250_000;
+pub const MAX_LINKS_PER_PAGE: usize = 2_000;
+pub const MAX_ANNOTATIONS_PER_PAGE: usize = 2_000;
+pub const MAX_FORM_FIELDS_PER_DOCUMENT: usize = 4_096;
+pub const MAX_FORM_FIELD_VALUE_BYTES: usize = 64 * 1024;
+pub const MAX_ANNOTATION_QUADS: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ResourceLimitError {
@@ -104,6 +110,12 @@ mod tests {
         assert_eq!(MAX_PASSWORD_BYTES, 1_024);
         assert_eq!(MAX_OUTLINE_DEPTH, 128);
         assert_eq!(MAX_OUTLINE_ITEMS, 4_096);
+        assert_eq!(crate::MAX_TEXT_GLYPHS_PER_PAGE, 250_000);
+        assert_eq!(crate::MAX_LINKS_PER_PAGE, 2_000);
+        assert_eq!(crate::MAX_ANNOTATIONS_PER_PAGE, 2_000);
+        assert_eq!(crate::MAX_FORM_FIELDS_PER_DOCUMENT, 4_096);
+        assert_eq!(crate::MAX_FORM_FIELD_VALUE_BYTES, 64 * 1024);
+        assert_eq!(crate::MAX_ANNOTATION_QUADS, 512);
     }
 
     #[test]

@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
 use barepdf_core::{
-    PageIndex, PdfError, Rotation, MAX_OUTLINE_DEPTH, MAX_PASSWORD_BYTES, MAX_SAFE_RENDER_DIMENSION,
+    AnnotationRecord, PageIndex, PdfError, Rotation, MAX_ANNOTATIONS_PER_PAGE,
+    MAX_ANNOTATION_QUADS, MAX_FORM_FIELDS_PER_DOCUMENT, MAX_FORM_FIELD_VALUE_BYTES,
+    MAX_OUTLINE_DEPTH, MAX_PASSWORD_BYTES, MAX_SAFE_RENDER_DIMENSION,
 };
+use barepdf_pdf::backend::DocumentCapabilities;
 use barepdf_pdf::{PdfBackend, PdfDocument, PdfiumEngine};
 
 fn build_pdf(objects: &[&str], root_id: usize) -> Vec<u8> {
@@ -414,4 +417,218 @@ fn deep_and_cyclic_outlines_respect_bounds_without_panic() {
             "sibling cyclic outline must terminate safely: {res:?}"
         );
     }
+}
+
+#[test]
+fn pdfium_document_reports_expected_capabilities() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let pdf = minimal_single_page_pdf("[0 0 200 200]");
+    let doc = engine.open_bytes(pdf, None).expect("opens minimal PDF");
+    let caps = doc.capabilities();
+
+    assert!(caps.supports(DocumentCapabilities::READ_ANNOTATIONS));
+    assert!(caps.supports(DocumentCapabilities::READ_FORM_FIELDS));
+    assert!(caps.supports(DocumentCapabilities::WRITE_FORM_FIELDS));
+    assert!(caps.supports(DocumentCapabilities::SAVE_BYTES));
+    assert!(!caps.supports(DocumentCapabilities::WRITE_ANNOTATIONS));
+}
+
+#[test]
+fn annotations_exceeding_page_limit_are_safely_bounded() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let total = MAX_ANNOTATIONS_PER_PAGE + 50;
+
+    let mut annot_refs = String::new();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        String::new(),
+    ];
+
+    for i in 0..total {
+        let obj_id = 4 + i;
+        if !annot_refs.is_empty() {
+            annot_refs.push(' ');
+        }
+        annot_refs.push_str(&format!("{obj_id} 0 R"));
+        objects.push("<< /Type /Annot /Subtype /Stamp /Rect [10 10 20 20] >>".to_string());
+    }
+    objects[2] = format!(
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [{annot_refs}] >>"
+    );
+
+    let obj_refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let pdf = build_pdf(&obj_refs, 1);
+    let doc = engine.open_bytes(pdf, None).expect("opens annotated PDF");
+
+    let annots = doc
+        .annotations(PageIndex::zero())
+        .expect("reads bounded page annotations");
+    assert_eq!(annots.len(), MAX_ANNOTATIONS_PER_PAGE);
+}
+
+#[test]
+fn annotation_with_excessive_quads_is_bounded_to_max_annotation_quads() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let total_quads = MAX_ANNOTATION_QUADS + 64;
+    let mut quad_points = String::with_capacity(total_quads * 24);
+    for i in 0..total_quads {
+        if i > 0 {
+            quad_points.push(' ');
+        }
+        quad_points.push_str("10 10 50 10 50 20 10 20");
+    }
+
+    let annot = format!(
+        "<< /Type /Annot /Subtype /Highlight /Rect [10 10 50 20] /QuadPoints [{quad_points}] >>"
+    );
+    let pdf = build_pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+            &annot,
+        ],
+        1,
+    );
+
+    let doc = engine.open_bytes(pdf, None).expect("opens highlight PDF");
+    let annots = doc
+        .annotations(PageIndex::zero())
+        .expect("reads bounded highlight quads");
+    assert_eq!(annots.len(), 1);
+    match &annots[0] {
+        AnnotationRecord::Highlight { quads, .. } => {
+            assert_eq!(quads.len(), MAX_ANNOTATION_QUADS);
+        }
+        other => panic!("expected highlight annotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn form_fields_exceeding_document_limit_are_safely_bounded() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let p1_count = 2_100;
+    let p2_count = (MAX_FORM_FIELDS_PER_DOCUMENT + 50) - p1_count;
+
+    let mut all_field_refs = String::new();
+    let mut p1_annots = String::new();
+    let mut p2_annots = String::new();
+    let mut objects = vec![
+        String::new(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_string(),
+        String::new(),
+        String::new(),
+    ];
+
+    for i in 0..p1_count {
+        let obj_id = 5 + i;
+        if !all_field_refs.is_empty() {
+            all_field_refs.push(' ');
+        }
+        all_field_refs.push_str(&format!("{obj_id} 0 R"));
+        if !p1_annots.is_empty() {
+            p1_annots.push(' ');
+        }
+        p1_annots.push_str(&format!("{obj_id} 0 R"));
+        objects.push(format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f_{i}) /V (v) /Rect [10 10 50 30] /P 3 0 R /F 4 >>"
+        ));
+    }
+
+    for j in 0..p2_count {
+        let idx = p1_count + j;
+        let obj_id = 5 + idx;
+        all_field_refs.push_str(&format!(" {obj_id} 0 R"));
+        if !p2_annots.is_empty() {
+            p2_annots.push(' ');
+        }
+        p2_annots.push_str(&format!("{obj_id} 0 R"));
+        objects.push(format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f_{idx}) /V (v) /Rect [10 10 50 30] /P 4 0 R /F 4 >>"
+        ));
+    }
+
+    objects[0] =
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{all_field_refs}] >> >>");
+    objects[2] = format!(
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [{p1_annots}] >>"
+    );
+    objects[3] = format!(
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [{p2_annots}] >>"
+    );
+
+    let obj_refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let pdf = build_pdf(&obj_refs, 1);
+    let doc = engine
+        .open_bytes(pdf, None)
+        .expect("opens multi-page form PDF");
+
+    let fields = doc.form_fields().expect("reads bounded form fields");
+    assert_eq!(fields.len(), MAX_FORM_FIELDS_PER_DOCUMENT);
+}
+
+#[test]
+fn oversized_form_field_value_is_rejected_on_read_and_write() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let oversized = "a".repeat(MAX_FORM_FIELD_VALUE_BYTES + 1);
+    let oversized_widget = format!(
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /V ({oversized}) /Rect [10 10 100 30] /P 3 0 R /F 4 >>"
+    );
+    let oversized_pdf = build_pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+            &oversized_widget,
+        ],
+        1,
+    );
+    let oversized_doc = engine
+        .open_bytes(oversized_pdf, None)
+        .expect("opens oversized form value PDF");
+    assert!(
+        matches!(
+            oversized_doc.form_fields(),
+            Err(PdfError::InvalidPdfReason(_))
+        ),
+        "form_fields must reject field values exceeding MAX_FORM_FIELD_VALUE_BYTES"
+    );
+
+    let small_pdf = build_pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (field) /V (ok) /Rect [10 10 100 30] /P 3 0 R /F 4 >>",
+        ],
+        1,
+    );
+    let mut doc = engine
+        .open_bytes(small_pdf, None)
+        .expect("opens small form PDF");
+    assert!(
+        matches!(
+            doc.set_form_field_value("field", &oversized),
+            Err(PdfError::InvalidPdfReason(_))
+        ),
+        "set_form_field_value must reject values exceeding MAX_FORM_FIELD_VALUE_BYTES"
+    );
+}
+
+#[test]
+fn oversized_password_is_rejected_at_max_password_bytes_boundary() {
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let unencrypted = minimal_single_page_pdf("[0 0 200 200]");
+    let encrypted = encrypted_single_page_pdf_bytes();
+    let over_limit = "x".repeat(MAX_PASSWORD_BYTES + 1);
+
+    assert!(matches!(
+        engine.open_bytes(unencrypted, Some(&over_limit)),
+        Err(PdfError::IncorrectPassword)
+    ));
+    assert!(matches!(
+        engine.open_bytes(encrypted, Some(&over_limit)),
+        Err(PdfError::IncorrectPassword)
+    ));
 }
