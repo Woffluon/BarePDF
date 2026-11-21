@@ -1,3 +1,8 @@
+#[cfg(panic = "abort")]
+compile_error!(
+    "barepdf-platform-windows FFI callbacks require panic = \"unwind\" across Win32 ABI boundaries"
+);
+
 use barepdf_platform::PlatformError;
 use raw_window_handle::{RawWindowHandle, WindowHandle};
 use std::collections::HashMap;
@@ -341,6 +346,30 @@ fn take_previous_window_proc(hwnd: HWND) -> Option<isize> {
         })
 }
 
+/// Converts a stored `GWLP_WNDPROC` integer into a `WNDPROC`.
+///
+/// # Safety
+/// If `raw != 0`, `raw` must be a valid window procedure pointer returned by `SetWindowLongPtrW`
+/// for the target window with `"system"` ABI and process lifetime.
+unsafe fn as_wndproc(raw: isize) -> WNDPROC {
+    const {
+        assert!(std::mem::size_of::<isize>() == std::mem::size_of::<WNDPROC>());
+    }
+    if raw == 0 {
+        return None;
+    }
+    let ptr = raw as *const ();
+    // SAFETY: Caller guarantees non-zero `raw` is a valid `WNDPROC` function pointer from
+    // `SetWindowLongPtrW`; size parity with `WNDPROC` is verified above and `WNDPROC` is
+    // `Option<unsafe extern "system" fn(...)>` with null-pointer representation for `None`.
+    Some(unsafe {
+        std::mem::transmute::<
+            *const (),
+            unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+        >(ptr)
+    })
+}
+
 unsafe fn forward_previous_or_default(
     previous_window_proc: Option<isize>,
     hwnd: HWND,
@@ -348,15 +377,16 @@ unsafe fn forward_previous_or_default(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match previous_window_proc {
+    let previous = previous_window_proc.and_then(|raw| {
+        // SAFETY: `raw` came directly from `SetWindowLongPtrW` for this live HWND and remains
+        // valid on the window's dispatch thread.
+        unsafe { as_wndproc(raw) }
+    });
+    match previous {
         Some(previous) => {
-            // SAFETY: `previous` came directly from SetWindowLongPtrW for this HWND and therefore
-            // has WNDPROC representation, system ABI, and process lifetime. Caller is handling the
-            // same live HWND and message on its Windows dispatch thread.
-            let previous: WNDPROC = unsafe { std::mem::transmute(previous) };
             // SAFETY: Procedure identity and HWND/message/thread invariants are established above;
             // all arguments are forwarded unchanged from Windows.
-            unsafe { CallWindowProcW(previous, hwnd, message, wparam, lparam) }
+            unsafe { CallWindowProcW(Some(previous), hwnd, message, wparam, lparam) }
         }
         None => {
             // SAFETY: Windows supplied this live HWND and message tuple to its callback on the
@@ -436,5 +466,15 @@ mod tests {
             super::drop_window_proc(std::ptr::null_mut(), 0x0233 /* WM_DROPFILES */, 0, 0)
         };
         assert_eq!(res, 0);
+    }
+
+    #[test]
+    fn as_wndproc_rejects_zero_and_converts_valid_proc_pointer() {
+        // SAFETY: Zero never represents a function pointer and returns `None` before conversion.
+        assert!(unsafe { super::as_wndproc(0) }.is_none());
+
+        let proc_raw = super::drop_window_proc as *const () as isize;
+        // SAFETY: `drop_window_proc` is a static `"system"` ABI function pointer with `WNDPROC` signature.
+        assert!(unsafe { super::as_wndproc(proc_raw) }.is_some());
     }
 }

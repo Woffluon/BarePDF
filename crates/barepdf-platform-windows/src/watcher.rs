@@ -23,13 +23,94 @@ use windows_sys::Win32::System::Threading::{
 
 const WAIT_OBJECT_0: u32 = 0;
 
-#[derive(Clone, Copy)]
-struct SyncHandle(HANDLE);
+struct OwnedEventHandle(HANDLE);
 
-// SAFETY: Windows kernel event handles are thread-safe and can be signaled or closed from any thread.
-unsafe impl Send for SyncHandle {}
-// SAFETY: Access to Windows kernel handle operations is thread-safe.
-unsafe impl Sync for SyncHandle {}
+// SAFETY: Windows manual-reset event handles are thread-safe to signal, wait on, and close.
+unsafe impl Send for OwnedEventHandle {}
+// SAFETY: Access to Windows kernel event operations is thread-safe.
+unsafe impl Sync for OwnedEventHandle {}
+
+impl OwnedEventHandle {
+    fn new_manual_reset() -> Result<Self, PlatformError> {
+        // SAFETY: `CreateEventW` creates an anonymous manual-reset event initially nonsignaled.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if handle.is_null() {
+            // SAFETY: `GetLastError` has no preconditions and is called immediately upon failure.
+            let code = unsafe { GetLastError() };
+            return Err(PlatformError::Windows {
+                operation: "Could not create watcher stop event",
+                code,
+            });
+        }
+        Ok(Self(handle))
+    }
+
+    fn as_raw(&self) -> HANDLE {
+        self.0
+    }
+
+    fn signal(&self) {
+        // SAFETY: `self.0` is a live Win32 event handle kept open until all owners drop.
+        unsafe {
+            SetEvent(self.0);
+        }
+    }
+}
+
+impl Drop for OwnedEventHandle {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was created by `CreateEventW` and is closed once after all owners drop.
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+struct OwnedChangeNotificationHandle(HANDLE);
+
+// SAFETY: Change notification handles can be moved to the watcher thread that waits on and
+// closes them exclusively.
+unsafe impl Send for OwnedChangeNotificationHandle {}
+
+impl OwnedChangeNotificationHandle {
+    fn open(dir_wide: &[u16], notify_filter: u32) -> Result<Self, PlatformError> {
+        // SAFETY: `dir_wide` is a valid null-terminated UTF-16 string buffer.
+        let handle = unsafe {
+            FindFirstChangeNotificationW(
+                dir_wide.as_ptr(),
+                0, // watch only immediate directory, not recursive subtree
+                notify_filter,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            // SAFETY: `GetLastError` has no preconditions and is called immediately upon failure.
+            let code = unsafe { GetLastError() };
+            return Err(PlatformError::Windows {
+                operation: "Could not create directory change notification handle",
+                code,
+            });
+        }
+        Ok(Self(handle))
+    }
+
+    fn as_raw(&self) -> HANDLE {
+        self.0
+    }
+
+    fn reset(&self) -> bool {
+        // SAFETY: `self.0` is a valid notification handle owned by this wrapper.
+        unsafe { FindNextChangeNotification(self.0) != 0 }
+    }
+}
+
+impl Drop for OwnedChangeNotificationHandle {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was created by `FindFirstChangeNotificationW` and is closed once on Drop.
+        unsafe {
+            FindCloseChangeNotification(self.0);
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileSnapshot {
@@ -76,7 +157,7 @@ fn wide_null(value: &OsStr) -> Vec<u16> {
 pub struct WindowsDocumentFileWatcher {
     watched_path: Arc<Mutex<Option<PathBuf>>>,
     debounce: Duration,
-    stop_event: Mutex<Option<SyncHandle>>,
+    stop_event: Mutex<Option<Arc<OwnedEventHandle>>>,
     thread_handle: Mutex<Option<JoinHandle<()>>>,
     notify_callback: Arc<dyn Fn(FileChangeEvent) + Send + Sync + 'static>,
 }
@@ -173,43 +254,12 @@ impl WindowsDocumentFileWatcher {
             | FILE_NOTIFY_CHANGE_SIZE
             | FILE_NOTIFY_CHANGE_CREATION;
 
-        // SAFETY: `dir_wide` is a valid null-terminated UTF-16 string buffer.
-        let change_handle = unsafe {
-            FindFirstChangeNotificationW(
-                dir_wide.as_ptr(),
-                0, // watch only immediate directory, not recursive subtree
-                notify_filter,
-            )
-        };
-
-        if change_handle == INVALID_HANDLE_VALUE || change_handle.is_null() {
-            // SAFETY: GetLastError has no preconditions and is called immediately upon failure.
-            let code = unsafe { GetLastError() };
-            return Err(PlatformError::Windows {
-                operation: "Could not create directory change notification handle",
-                code,
-            });
-        }
-
-        // SAFETY: CreateEventW creates an anonymous manual-reset event initially nonsignaled.
-        let stop_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-        if stop_event.is_null() {
-            // SAFETY: change_handle is closed immediately on error.
-            unsafe {
-                FindCloseChangeNotification(change_handle);
-            }
-            // SAFETY: GetLastError called immediately upon CreateEventW failure.
-            let code = unsafe { GetLastError() };
-            return Err(PlatformError::Windows {
-                operation: "Could not create watcher stop event",
-                code,
-            });
-        }
+        let change_handle = OwnedChangeNotificationHandle::open(&dir_wide, notify_filter)?;
+        let stop_event = Arc::new(OwnedEventHandle::new_manual_reset()?);
 
         let debounce = self.debounce;
         let thread_target = target_path.clone();
-        let thread_stop = SyncHandle(stop_event);
-        let thread_change = SyncHandle(change_handle);
+        let thread_stop = Arc::clone(&stop_event);
         let thread_callback = Arc::clone(&self.notify_callback);
         let initial_snapshot = FileSnapshot::capture(&target_path);
 
@@ -218,30 +268,23 @@ impl WindowsDocumentFileWatcher {
             .spawn(move || {
                 run_watcher_loop(
                     thread_target,
-                    thread_stop,
-                    thread_change,
+                    &thread_stop,
+                    &change_handle,
                     debounce,
                     thread_callback,
                     initial_snapshot,
                 );
             })
-            .map_err(|source| {
-                // SAFETY: stop_event and change_handle are cleaned up if thread spawning fails.
-                unsafe {
-                    CloseHandle(stop_event);
-                    FindCloseChangeNotification(change_handle);
-                }
-                PlatformError::Io {
-                    operation: "Could not spawn file watcher thread",
-                    source,
-                }
+            .map_err(|source| PlatformError::Io {
+                operation: "Could not spawn file watcher thread",
+                source,
             })?;
 
         if let Ok(mut wp) = self.watched_path.lock() {
             *wp = Some(target_path);
         }
         if let Ok(mut se) = self.stop_event.lock() {
-            *se = Some(SyncHandle(stop_event));
+            *se = Some(stop_event);
         }
         if let Ok(mut th) = self.thread_handle.lock() {
             *th = Some(handle);
@@ -278,32 +321,24 @@ impl WindowsDocumentFileWatcher {
             .and_then(|mut guard| guard.take());
 
         if let Some(event) = stop_handle {
-            // SAFETY: event.0 is a valid Win32 event handle.
-            unsafe {
-                SetEvent(event.0);
-            }
+            event.signal();
             if let Some(th) = thread {
                 let _ = th.join();
             }
-            // SAFETY: Worker thread has terminated and will not access event.0 again.
-            unsafe {
-                CloseHandle(event.0);
-            }
+            drop(event);
         }
     }
 }
 
 fn run_watcher_loop(
     target_path: PathBuf,
-    stop_event: SyncHandle,
-    change_handle: SyncHandle,
+    stop_event: &OwnedEventHandle,
+    change_handle: &OwnedChangeNotificationHandle,
     debounce_duration: Duration,
     callback: Arc<dyn Fn(FileChangeEvent) + Send + Sync + 'static>,
     mut last_snapshot: FileSnapshot,
 ) {
-    let stop_event = stop_event.0;
-    let change_handle = change_handle.0;
-    let handles = [stop_event, change_handle];
+    let handles = [stop_event.as_raw(), change_handle.as_raw()];
 
     loop {
         // SAFETY: `handles` contains 2 valid kernel handles. INFINITE wait sleeps with 0% CPU.
@@ -318,9 +353,7 @@ fn run_watcher_loop(
             break;
         }
 
-        // SAFETY: change_handle is a valid notification handle being reset for subsequent events.
-        let next_ok = unsafe { FindNextChangeNotification(change_handle) };
-        if next_ok == 0 {
+        if !change_handle.reset() {
             break;
         }
 
@@ -342,8 +375,7 @@ fn run_watcher_loop(
                 break;
             } else if debounce_res == WAIT_OBJECT_0 + 1 {
                 // Additional change during quiet window; reset quiet window
-                // SAFETY: change_handle is a valid notification handle.
-                let _ = unsafe { FindNextChangeNotification(change_handle) };
+                let _ = change_handle.reset();
                 quiet_deadline = Instant::now() + debounce_duration;
             } else if debounce_res == WAIT_TIMEOUT {
                 // Quiet window elapsed without further changes
@@ -374,11 +406,6 @@ fn run_watcher_loop(
             last_snapshot = current_snapshot;
             callback(FileChangeEvent::Modified(target_path.clone()));
         }
-    }
-
-    // SAFETY: change_handle is owned solely by this background thread and is closed on exit.
-    unsafe {
-        FindCloseChangeNotification(change_handle);
     }
 }
 

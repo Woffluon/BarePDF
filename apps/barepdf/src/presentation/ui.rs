@@ -31,7 +31,7 @@ use barepdf_i18n::{Language, ResolvedLanguage};
 use barepdf_pdf::{OutlineNode, PdfiumEngine};
 use barepdf_platform_windows::{
     ask_yes_no, detect_total_ram_mb, install_file_drop, reduce_visual_effects, show_fatal_error,
-    WindowsClipboard, WindowsFileDialogs,
+    system_ui_lcid, WindowsClipboard, WindowsFileDialogs,
 };
 use barepdf_render::{
     Priority, RenderCommand, RenderError, RenderEvent, RenderJob, RenderKind, RenderScheduler,
@@ -88,6 +88,12 @@ pub(crate) fn run() -> Result<(), AppError> {
             return Err(error.into());
         }
     };
+
+    if cfg!(windows) {
+        barepdf_i18n::set_system_language(barepdf_i18n::detect_system_language_from_lcid(
+            system_ui_lcid(),
+        ));
+    }
 
     let preferences_path = default_config_path();
     let mut preferences = load(&preferences_path);

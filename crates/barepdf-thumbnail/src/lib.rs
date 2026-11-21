@@ -1,5 +1,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-#![warn(clippy::undocumented_unsafe_blocks)]
+#![deny(clippy::undocumented_unsafe_blocks)]
+
+#[cfg(panic = "abort")]
+compile_error!(
+    "barepdf-thumbnail requires panic = \"unwind\" because COM ABI boundaries catch panics"
+);
 
 pub mod bitmap;
 pub mod pdfium_loader;

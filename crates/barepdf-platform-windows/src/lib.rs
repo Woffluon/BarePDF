@@ -89,44 +89,39 @@ pub fn reduce_visual_effects() -> bool {
 
 #[cfg(windows)]
 #[must_use]
+pub fn system_ui_lcid() -> u16 {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+
+    // SAFETY: `GetUserDefaultUILanguage` takes no pointers, has no thread-affinity requirement,
+    // and returns the caller's UI `LANGID` by value.
+    unsafe { GetUserDefaultUILanguage() }
+}
+
+#[cfg(windows)]
+#[must_use]
 pub fn detect_total_ram_mb() -> Option<u64> {
-    #[repr(C)]
-    struct MemoryStatusEx {
-        dw_length: u32,
-        dw_memory_load: u32,
-        ull_total_phys: u64,
-        ull_avail_phys: u64,
-        ull_total_page_file: u64,
-        ull_avail_page_file: u64,
-        ull_total_virtual: u64,
-        ull_avail_virtual: u64,
-        ull_avail_extended_virtual: u64,
-    }
+    use std::mem::size_of;
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GlobalMemoryStatusEx(lp_buffer: *mut MemoryStatusEx) -> i32;
-    }
-
-    let mut status = MemoryStatusEx {
-        dw_length: u32::try_from(std::mem::size_of::<MemoryStatusEx>()).ok()?,
-        dw_memory_load: 0,
-        ull_total_phys: 0,
-        ull_avail_phys: 0,
-        ull_total_page_file: 0,
-        ull_avail_page_file: 0,
-        ull_total_virtual: 0,
-        ull_avail_virtual: 0,
-        ull_avail_extended_virtual: 0,
+    let mut status = MEMORYSTATUSEX {
+        dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).ok()?,
+        dwMemoryLoad: 0,
+        ullTotalPhys: 0,
+        ullAvailPhys: 0,
+        ullTotalPageFile: 0,
+        ullAvailPageFile: 0,
+        ullTotalVirtual: 0,
+        ullAvailVirtual: 0,
+        ullAvailExtendedVirtual: 0,
     };
     // SAFETY: `status` is a valid, stack-allocated, properly aligned `MEMORYSTATUSEX` buffer
-    // with `dw_length` initialized to its exact byte size; `GlobalMemoryStatusEx` writes only
+    // with `dwLength` initialized to its exact byte size; `GlobalMemoryStatusEx` writes only
     // within that buffer and does not retain the pointer after returning.
     let ok = unsafe { GlobalMemoryStatusEx(&raw mut status) };
-    if ok == 0 || status.ull_total_phys == 0 {
+    if ok == 0 || status.ullTotalPhys == 0 {
         return None;
     }
-    Some(status.ull_total_phys / (1024 * 1024))
+    Some(status.ullTotalPhys / (1024 * 1024))
 }
 
 #[cfg(any(windows, test))]
@@ -160,5 +155,12 @@ mod tests {
     fn detect_total_ram_mb_returns_positive_physical_ram() {
         let ram_mb = super::detect_total_ram_mb().expect("GlobalMemoryStatusEx should succeed");
         assert!(ram_mb >= 256);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_ui_lcid_returns_nonzero_language_identifier() {
+        let lcid = super::system_ui_lcid();
+        assert_ne!(lcid, 0);
     }
 }

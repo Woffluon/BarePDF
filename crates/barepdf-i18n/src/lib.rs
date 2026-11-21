@@ -1,4 +1,10 @@
+#![forbid(unsafe_code)]
+
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+// 0 = unset, 1 = English, 2 = Turkish
+static WINDOWS_SYSTEM_LANGUAGE: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Language {
@@ -890,11 +896,36 @@ pub fn t(lang: ResolvedLanguage, key: &str) -> &'static str {
         .unwrap_or("")
 }
 
+/// Maps a Win32 `LANGID` to the corresponding BarePDF UI [`Language`].
+#[must_use]
+pub const fn detect_system_language_from_lcid(lang_id: u16) -> Language {
+    let primary_lang = lang_id & 0x3FF; // LANGID primary language bits
+    if primary_lang == 0x1F {
+        // LANG_TURKISH
+        Language::Turkish
+    } else {
+        Language::English
+    }
+}
+
+/// Registers the detected Windows system UI language for `Language::System::resolve()`.
+pub fn set_system_language(language: Language) {
+    let encoded = match language {
+        Language::System => 0,
+        Language::English => 1,
+        Language::Turkish => 2,
+    };
+    WINDOWS_SYSTEM_LANGUAGE.store(encoded, Ordering::Release);
+}
+
 #[must_use]
 pub fn detect_system_language() -> ResolvedLanguage {
     #[cfg(target_os = "windows")]
     {
-        windows_ffi::detect_windows_system_language()
+        match WINDOWS_SYSTEM_LANGUAGE.load(Ordering::Acquire) {
+            2 => ResolvedLanguage::Turkish,
+            _ => ResolvedLanguage::English,
+        }
     }
     #[cfg(target_os = "linux")]
     {
@@ -935,25 +966,6 @@ fn locale_language(locale: &str) -> Option<ResolvedLanguage> {
     match primary.to_ascii_lowercase().as_str() {
         "tr" => Some(ResolvedLanguage::Turkish),
         _ => Some(ResolvedLanguage::English),
-    }
-}
-
-#[cfg(target_os = "windows")]
-mod windows_ffi {
-    use super::ResolvedLanguage;
-    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
-
-    pub(super) fn detect_windows_system_language() -> ResolvedLanguage {
-        // SAFETY: GetUserDefaultUILanguage takes no pointers and returns a LANGID by value. Windows
-        // imposes no thread-affinity or lifetime requirement, so no borrowed memory crosses FFI.
-        let lang_id = unsafe { GetUserDefaultUILanguage() };
-        let primary_lang = lang_id & 0x3FF; // LANGID primary language bits
-        if primary_lang == 0x1F {
-            // LANG_TURKISH
-            ResolvedLanguage::Turkish
-        } else {
-            ResolvedLanguage::English
-        }
     }
 }
 
@@ -1085,6 +1097,36 @@ mod tests {
         assert_eq!(Language::Turkish.display_name(), "Türkçe");
         assert_eq!(Language::English.resolve().code(), "en");
         assert_eq!(Language::Turkish.resolve().code(), "tr");
+    }
+
+    #[test]
+    fn detect_system_language_from_lcid_maps_turkish_and_defaults_to_english() {
+        assert_eq!(detect_system_language_from_lcid(0x041F), Language::Turkish);
+        assert_eq!(detect_system_language_from_lcid(0x001F), Language::Turkish);
+        assert_eq!(detect_system_language_from_lcid(0x0409), Language::English);
+        assert_eq!(detect_system_language_from_lcid(0x0407), Language::English);
+        assert_eq!(detect_system_language_from_lcid(0x0000), Language::English);
+        assert_eq!(
+            detect_system_language_from_lcid(0x041F).resolve(),
+            ResolvedLanguage::Turkish
+        );
+        assert_eq!(
+            detect_system_language_from_lcid(0x0409).resolve(),
+            ResolvedLanguage::English
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_system_language_override_resolves_system_language() {
+        set_system_language(detect_system_language_from_lcid(0x041F));
+        assert_eq!(Language::System.resolve(), ResolvedLanguage::Turkish);
+
+        set_system_language(detect_system_language_from_lcid(0x0409));
+        assert_eq!(Language::System.resolve(), ResolvedLanguage::English);
+
+        set_system_language(Language::System);
+        assert_eq!(Language::System.resolve(), ResolvedLanguage::English);
     }
 
     #[test]

@@ -388,3 +388,8 @@ pub fn reduce_visual_effects() -> bool {
 pub fn detect_total_ram_mb() -> Option<u64> {
     None
 }
+
+#[must_use]
+pub fn system_ui_lcid() -> u16 {
+    0
+}
