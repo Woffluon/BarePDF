@@ -18,4 +18,7 @@ pub use barepdf_core::{
 };
 pub use operations::{PdfOperationInput, PdfOperations};
 pub use pdfium_adapter::PdfiumEngine;
-pub use pdfium_lifetime::pdfium_ffi_lock;
+pub use pdfium_lifetime::{
+    acquire_pdfium_ffi, pdfium_ffi_gate, pdfium_ffi_lock, yield_ffi_between_pages, FfiPriority,
+    PriorityFfiGate, PriorityFfiGuard,
+};

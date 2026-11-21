@@ -298,12 +298,34 @@ impl<B: PdfBackend> RenderWorker<B> {
             self.observability.stale_work("document_replaced");
             return true;
         };
-        match document.render_page(
+        let render_started = std::time::Instant::now();
+        let render_result = document.render_page(
             job.page_index,
             job.target_width,
             job.target_height,
             job.rotation,
-        ) {
+        );
+        let render_elapsed = render_started.elapsed();
+        if render_elapsed >= std::time::Duration::from_millis(50)
+            && matches!(job.kind, RenderKind::Page)
+        {
+            tracing::warn!(
+                target: "barepdf_render::worker",
+                document_id = job.document_id.get(),
+                page = job.page_index.get(),
+                duration_ms = render_elapsed.as_millis(),
+                "visible page render exceeded 50 ms budget (including FFI gate wait)"
+            );
+        } else {
+            tracing::debug!(
+                target: "barepdf_render::worker",
+                document_id = job.document_id.get(),
+                page = job.page_index.get(),
+                duration_us = render_elapsed.as_micros(),
+                "completed page render via PDF backend"
+            );
+        }
+        match render_result {
             Ok(mut bitmap) => {
                 if self.shutdown_requested() {
                     return false;
@@ -460,24 +482,30 @@ impl<B: PdfBackend> RenderWorker<B> {
             self.observability.stale_work("document_replaced");
             return true;
         };
-        let dimensions = document.page_count().and_then(|page_count| {
-            let end = start.saturating_add(count).min(page_count.get());
-            (start..end)
-                .map(|index| document.page_dimensions(PageIndex::from_raw(index)))
-                .collect()
-        });
-        match dimensions {
-            Ok(dimensions) => emit_critical(
-                &self.shutdown_receiver,
-                &self.critical_event_sender,
-                RenderEvent::PageDimensionsFetched {
-                    document_id,
-                    start,
-                    dimensions,
-                },
-            ),
-            Err(error) => self.emit_error(None, document_id, None, error),
+        let page_count = match document.page_count() {
+            Ok(page_count) => page_count,
+            Err(error) => return self.emit_error(None, document_id, None, error),
+        };
+        let end = start.saturating_add(count).min(page_count.get());
+        let mut dimensions = Vec::with_capacity(end.saturating_sub(start) as usize);
+        for index in start..end {
+            if !matches!(self.shutdown_receiver.try_recv(), Err(TryRecvError::Empty)) {
+                return false;
+            }
+            match document.page_dimensions(PageIndex::from_raw(index)) {
+                Ok(dim) => dimensions.push(dim),
+                Err(error) => return self.emit_error(None, document_id, None, error),
+            }
         }
+        emit_critical(
+            &self.shutdown_receiver,
+            &self.critical_event_sender,
+            RenderEvent::PageDimensionsFetched {
+                document_id,
+                start,
+                dimensions,
+            },
+        )
     }
 
     #[tracing::instrument(

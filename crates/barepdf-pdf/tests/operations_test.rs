@@ -1531,3 +1531,129 @@ fn test_compress_pdf_handles_missing_and_encrypted_sources() {
     assert!(out.is_file());
     assert!(report.compressed_bytes <= report.original_bytes);
 }
+
+#[test]
+fn test_split_streaming_many_pages_produces_exact_outputs_without_temp_artifacts() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("many_pages.pdf");
+    let out_dir = dir.path().join("split_many");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    let page_count = 20_usize;
+    create_test_pdf(&src, page_count);
+
+    let files =
+        PdfOperations::split_into_single_pages_with_password(&src, &out_dir, "stream_doc", None)
+            .expect("streaming split succeeds");
+
+    assert_eq!(files.len(), page_count);
+    for (i, file_path) in files.iter().enumerate() {
+        assert!(file_path.is_file(), "missing split output {file_path:?}");
+        let (count, dims, _) = inspect_pdf(file_path);
+        assert_eq!(count, 1);
+        assert_eq!(dims[0].0, 100.0 * (i as f32 + 1.0));
+        assert_eq!(dims[0].1, 200.0 * (i as f32 + 1.0));
+    }
+
+    let entries: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("read out_dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries.len(), page_count);
+    assert!(
+        entries.iter().all(|name| !name.contains(".tmp-")),
+        "no staging temp files should remain: {entries:?}"
+    );
+}
+
+#[test]
+fn test_split_with_password_decrypts_encrypted_source_without_temp_artifacts() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("encrypted_split.pdf");
+    let out_dir = dir.path().join("split_encrypted_out");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    create_encrypted_test_pdf(&src);
+
+    let files = PdfOperations::split_into_single_pages_with_password(
+        &src,
+        &out_dir,
+        "unlocked",
+        Some("right-password"),
+    )
+    .expect("password-protected split succeeds");
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(inspect_pdf(&files[0]).0, 1);
+
+    let temp_leftovers: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("read out_dir")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+        .collect();
+    assert!(
+        temp_leftovers.is_empty(),
+        "no temp files should remain after split"
+    );
+}
+
+#[test]
+fn test_split_rollback_leaves_no_staging_temp_files() {
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("three_pages_cleanup.pdf");
+    let out_dir = dir.path().join("split_rollback_cleanup");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    create_test_pdf(&src, 3);
+
+    let blocking_dir = out_dir.join("doc_page_2.pdf");
+    std::fs::create_dir_all(&blocking_dir).expect("create blocking directory for page 2");
+
+    let result = PdfOperations::split_into_single_pages(&src, &out_dir, "doc");
+    assert!(result.is_err());
+
+    let leftover_names: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("read out_dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(leftover_names, vec!["doc_page_2.pdf".to_string()]);
+}
+
+#[test]
+fn test_split_concurrent_with_interactive_pdfium_render_and_reads() {
+    use barepdf_pdf::PdfBackend;
+
+    let dir = tempdir().expect("tempdir");
+    let src = dir.path().join("concurrent.pdf");
+    let out_dir = dir.path().join("concurrent_split");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    create_test_pdf(&src, 16);
+
+    let engine = PdfiumEngine::new().expect("PDFium engine initializes");
+    let interactive_doc = engine.open_path(&src, None).expect("open interactive doc");
+
+    let split_src = src.clone();
+    let split_out = out_dir.clone();
+    let bg_handle = std::thread::spawn(move || {
+        PdfOperations::split_into_single_pages_with_password(&split_src, &split_out, "bg", None)
+    });
+
+    for page in 0..16_u32 {
+        let page_idx = idx(page);
+        let dims = interactive_doc
+            .page_dimensions(page_idx)
+            .expect("interactive page dimensions");
+        assert_eq!(dims.0, 100.0 * (page as f32 + 1.0));
+        let bitmap = interactive_doc
+            .render_page(page_idx, 64, 64, Rotation::Degrees0)
+            .expect("interactive render succeeds concurrently");
+        assert_eq!(bitmap.width(), 64);
+        assert_eq!(bitmap.height(), 64);
+    }
+
+    let split_files = bg_handle
+        .join()
+        .expect("background split thread joined")
+        .expect("background split succeeded");
+    assert_eq!(split_files.len(), 16);
+}

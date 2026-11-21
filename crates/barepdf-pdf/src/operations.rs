@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::Cursor;
+use std::io::{BufWriter, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -11,7 +11,9 @@ use barepdf_core::{
 use pdfium_render::prelude::*;
 
 use crate::jpeg_encoder::{encode_gray_jpeg, encode_rgb_jpeg};
-use crate::pdfium_lifetime::process_pdfium;
+use crate::pdfium_lifetime::{
+    pdfium_ffi_gate, process_pdfium, yield_ffi_between_pages, FfiPriority, PriorityFfiGuard,
+};
 
 pub struct PdfOperationInput<'a> {
     path: &'a Path,
@@ -64,7 +66,8 @@ impl PdfOperations {
             }
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let mut new_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
         let mut total_merged_pages: u32 = 0;
@@ -97,15 +100,12 @@ impl PdfOperations {
                     .pages_mut()
                     .copy_page_from_document(&src_doc, src_idx, dest_idx)
                     .map_err(map_pdfium_error)?;
+                yield_ffi_between_pages(gate, &mut ffi_guard);
             }
+            drop(src_doc);
         }
 
-        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(new_doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(new_doc, output, &mut ffi_guard)
     }
 
     /// Extracts specific pages from source PDF into a new PDF file.
@@ -143,7 +143,8 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
@@ -172,15 +173,11 @@ impl PdfOperations {
                 .pages_mut()
                 .copy_page_from_document(&src_doc, p_idx, dest_idx)
                 .map_err(map_pdfium_error)?;
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(new_doc);
         drop(src_doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(new_doc, output, &mut ffi_guard)
     }
 
     /// Splits a PDF into single-page PDF files saved in output_dir.
@@ -225,46 +222,75 @@ impl PdfOperations {
             ));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
-        let src_doc = pdfium
-            .load_pdf_from_file(source, password)
-            .map_err(|error| map_pdfium_load_error(error, password.is_some()))?;
+        let mut src_doc = Some(
+            pdfium
+                .load_pdf_from_file(source, password)
+                .map_err(|error| map_pdfium_load_error(error, password.is_some()))?,
+        );
 
-        let total_pages = src_doc.pages().len();
+        let total_pages = src_doc
+            .as_ref()
+            .ok_or_else(|| PdfError::InvalidPdfReason("Source PDF unavailable".into()))?
+            .pages()
+            .len();
         let validated_total =
             validate_operation_page_count(total_pages, "Source PDF contains no pages")?;
 
-        let mut page_bytes_list = Vec::with_capacity(validated_total.get() as usize);
+        let mut output_paths = Vec::with_capacity(validated_total.get() as usize);
         for i in 0..total_pages {
+            if ffi_guard.is_none() {
+                ffi_guard = Some(gate.acquire(FfiPriority::Background));
+            }
             let file_name = format!("{trimmed_base}_page_{}.pdf", i + 1);
             let out_path = output_dir.join(file_name);
-            let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
-            page_doc
-                .pages_mut()
-                .copy_page_from_document(&src_doc, i, 0)
-                .map_err(map_pdfium_error)?;
-            let bytes = page_doc.save_to_bytes().map_err(map_pdfium_error)?;
-            page_bytes_list.push((out_path, bytes));
-        }
 
-        drop(src_doc);
-        drop(_ffi_guard);
+            let staged_result = (|| -> Result<StagedTempFile, PdfError> {
+                let doc_ref = src_doc
+                    .as_ref()
+                    .ok_or_else(|| PdfError::InvalidPdfReason("Source PDF unavailable".into()))?;
+                let mut page_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
+                page_doc
+                    .pages_mut()
+                    .copy_page_from_document(doc_ref, i, 0)
+                    .map_err(map_pdfium_error)?;
+                let mut staged = StagedTempFile::create(&out_path)?;
+                if let Err(error) = page_doc.save_to_writer(&mut staged) {
+                    return Err(staged.map_save_error(error));
+                }
+                drop(page_doc);
+                Ok(staged)
+            })();
 
-        let mut output_paths = Vec::with_capacity(page_bytes_list.len());
-        let write_result = (|| -> Result<(), PdfError> {
-            for (out_path, bytes) in page_bytes_list {
-                atomic_write_file(&out_path, &bytes)?;
-                output_paths.push(out_path);
+            let staged = match staged_result {
+                Ok(staged) => staged,
+                Err(error) => {
+                    drop(src_doc.take());
+                    drop(ffi_guard.take());
+                    rollback_created_files(&output_paths);
+                    return Err(error);
+                }
+            };
+
+            if i + 1 == total_pages {
+                drop(src_doc.take());
             }
-            Ok(())
-        })();
-
-        if let Err(error) = write_result {
-            for created_path in &output_paths {
-                let _ = std::fs::remove_file(created_path);
+            drop(ffi_guard.take());
+            if gate.has_interactive_waiters() {
+                std::thread::yield_now();
             }
-            return Err(error);
+
+            if let Err(error) = staged.commit(&out_path) {
+                if src_doc.is_some() {
+                    let _guard = gate.acquire(FfiPriority::Background);
+                    drop(src_doc.take());
+                }
+                rollback_created_files(&output_paths);
+                return Err(error);
+            }
+            output_paths.push(out_path);
         }
 
         Ok(output_paths)
@@ -301,7 +327,8 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
@@ -321,15 +348,11 @@ impl PdfOperations {
                 .pages_mut()
                 .copy_page_from_document(&src_doc, p_idx, dest_idx)
                 .map_err(map_pdfium_error)?;
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(new_doc);
         drop(src_doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(new_doc, output, &mut ffi_guard)
     }
 
     /// Rotates specified pages in source PDF by given rotation and writes to output.
@@ -362,7 +385,8 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
@@ -388,21 +412,19 @@ impl PdfOperations {
                 .pages_mut()
                 .copy_page_from_document(&src_doc, src_idx, src_idx)
                 .map_err(map_pdfium_error)?;
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
         for (page_idx, rotation) in rotations {
             let p_idx = to_pdfium_page_index(*page_idx)?;
             let mut page = new_doc.pages_mut().get(p_idx).map_err(map_pdfium_error)?;
             page.set_rotation(to_pdfium_rotation(*rotation));
+            drop(page);
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(new_doc);
         drop(src_doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(new_doc, output, &mut ffi_guard)
     }
 
     /// Reorders pages in source PDF according to new_order and writes to output.
@@ -441,7 +463,8 @@ impl PdfOperations {
             ));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
@@ -484,15 +507,11 @@ impl PdfOperations {
                 .pages_mut()
                 .copy_page_from_document(&src_doc, p_idx, dest_idx)
                 .map_err(map_pdfium_error)?;
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = new_doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(new_doc);
         drop(src_doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(new_doc, output, &mut ffi_guard)
     }
 
     /// Crops specified pages in source PDF according to crops and writes to output.
@@ -525,7 +544,8 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(source, password)
@@ -567,14 +587,11 @@ impl PdfOperations {
             page.boundaries_mut()
                 .set_media(rect)
                 .map_err(map_pdfium_error)?;
+            drop(page);
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(doc, output, &mut ffi_guard)
     }
 
     /// Flattens annotations into the PDF and writes to output. Alias for `save_with_annotations`.
@@ -633,7 +650,8 @@ impl PdfOperations {
             return Err(PdfError::FileNotFound(source.display().to_string()));
         }
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(source, password)
@@ -661,6 +679,7 @@ impl PdfOperations {
                 .iter()
                 .any(|ft| ft.page_index == p_idx as usize);
             if !has_highlights && !has_strokes && !has_signatures && !has_free_texts {
+                yield_ffi_between_pages(gate, &mut ffi_guard);
                 continue;
             }
 
@@ -820,14 +839,11 @@ impl PdfOperations {
             }
 
             page.regenerate_content().map_err(map_pdfium_error)?;
+            drop(page);
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
-        let bytes = doc.save_to_bytes().map_err(map_pdfium_error)?;
-        drop(doc);
-        drop(_ffi_guard);
-
-        atomic_write_file(output, &bytes)?;
-        Ok(())
+        save_pdf_doc_atomically(doc, output, &mut ffi_guard)
     }
 
     /// Compresses a PDF while keeping all text, fonts, and vector paths lossless.
@@ -871,7 +887,8 @@ impl PdfOperations {
             })?
             .len();
 
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
+        let gate = pdfium_ffi_gate();
+        let mut ffi_guard = Some(gate.acquire(FfiPriority::Background));
         let pdfium = process_pdfium()?;
         let src_doc = pdfium
             .load_pdf_from_file(source, password)
@@ -886,6 +903,7 @@ impl PdfOperations {
                 .pages_mut()
                 .copy_page_from_document(&src_doc, src_idx, src_idx)
                 .map_err(map_pdfium_error)?;
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
         drop(src_doc);
 
@@ -938,42 +956,45 @@ impl PdfOperations {
                 page.regenerate_content().map_err(map_pdfium_error)?;
                 any_page_modified = true;
             }
+            drop(page);
+            yield_ffi_between_pages(gate, &mut ffi_guard);
         }
 
         // Replacing page image objects leaves orphaned XObject streams in PDFium's indirect table;
         // copying pages into a fresh document retains only reachable objects.
-        let bytes = if any_page_modified {
+        let out_doc = if any_page_modified {
             let mut clean_doc = pdfium.create_new_pdf().map_err(map_pdfium_error)?;
             for p_idx in 0..total_pages {
                 clean_doc
                     .pages_mut()
                     .copy_page_from_document(&work_doc, p_idx, p_idx)
                     .map_err(map_pdfium_error)?;
+                yield_ffi_between_pages(gate, &mut ffi_guard);
             }
-            let out = clean_doc.save_to_bytes().map_err(map_pdfium_error)?;
-            drop(clean_doc);
             drop(work_doc);
-            out
+            clean_doc
         } else {
-            let out = work_doc.save_to_bytes().map_err(map_pdfium_error)?;
-            drop(work_doc);
-            out
+            work_doc
         };
-        drop(_ffi_guard);
 
-        let compressed_len = bytes.len() as u64;
+        let mut staged = StagedTempFile::create(output)?;
+        if let Err(error) = out_doc.save_to_writer(&mut staged) {
+            return Err(staged.map_save_error(error));
+        }
+        let compressed_len = staged.bytes_written();
+        drop(out_doc);
+        drop(ffi_guard.take());
+
         if compressed_len < original_bytes {
-            atomic_write_file(output, &bytes)?;
+            staged.commit(output)?;
             Ok(CompressionReport::from_sizes(
                 original_bytes,
                 compressed_len,
             ))
         } else {
+            drop(staged);
             if !paths_refer_to_same_file(source, output) {
-                let original_data = std::fs::read(source).map_err(|err| PdfError::FileAccess {
-                    source: Arc::new(err),
-                })?;
-                atomic_write_file(output, &original_data)?;
+                copy_file_atomically(source, output)?;
             }
             Ok(CompressionReport::from_sizes(
                 original_bytes,
@@ -1273,66 +1294,184 @@ fn validate_signature_image(width: u32, height: u32, rgba: &[u8]) -> Result<(i32
     Ok((w_i32, h_i32))
 }
 
+const STAGED_WRITE_BUFFER_BYTES: usize = 64 * 1024;
 static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn atomic_write_file(output: &Path, bytes: &[u8]) -> Result<(), PdfError> {
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = output
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("barepdf_save.pdf");
+struct StagedTempFile {
+    writer: Option<BufWriter<std::fs::File>>,
+    temp_path: PathBuf,
+    bytes_written: u64,
+    last_write_error: Option<std::io::Error>,
+    committed: bool,
+}
 
-    let mut last_error = None;
-    for _ in 0..100 {
-        let seq = ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let temp_name = format!(".{file_name}.tmp-{pid}-{seq}");
-        let temp_path = parent.join(temp_name);
+impl StagedTempFile {
+    fn create(output: &Path) -> Result<Self, PdfError> {
+        let parent = output.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = output
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("barepdf_save.pdf");
 
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                last_error = Some(err);
-                continue;
+        let mut last_error = None;
+        for _ in 0..100 {
+            let seq = ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+            let pid = std::process::id();
+            let temp_name = format!(".{file_name}.tmp-{pid}-{seq}");
+            let temp_path = parent.join(temp_name);
+
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        writer: Some(BufWriter::with_capacity(STAGED_WRITE_BUFFER_BYTES, file)),
+                        temp_path,
+                        bytes_written: 0,
+                        last_write_error: None,
+                        committed: false,
+                    });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_error = Some(err);
+                }
+                Err(err) => {
+                    return Err(PdfError::FileAccess {
+                        source: Arc::new(err),
+                    });
+                }
             }
-            Err(err) => {
-                return Err(PdfError::FileAccess {
-                    source: Arc::new(err),
-                })
-            }
-        };
-
-        let result = (|| -> Result<(), std::io::Error> {
-            use std::io::Write;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            drop(file);
-            std::fs::rename(&temp_path, output)?;
-            Ok(())
-        })();
-
-        if let Err(err) = result {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(PdfError::FileAccess {
-                source: Arc::new(err),
-            });
         }
 
-        return Ok(());
+        Err(PdfError::FileAccess {
+            source: Arc::new(last_error.unwrap_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "unable to allocate unique temporary file for atomic write",
+                )
+            })),
+        })
     }
 
-    Err(PdfError::FileAccess {
-        source: Arc::new(last_error.unwrap_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "unable to allocate unique temporary file for atomic write",
-            )
-        })),
-    })
+    const fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    fn map_save_error(&mut self, error: PdfiumError) -> PdfError {
+        if let Some(io_err) = self.last_write_error.take() {
+            return PdfError::FileAccess {
+                source: Arc::new(io_err),
+            };
+        }
+        match error {
+            PdfiumError::IoError(io_err) => PdfError::FileAccess {
+                source: Arc::new(io_err),
+            },
+            other => map_pdfium_error(other),
+        }
+    }
+
+    fn commit(mut self, output: &Path) -> Result<(), PdfError> {
+        let writer = self.writer.take().ok_or_else(|| PdfError::FileAccess {
+            source: Arc::new(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "staged output writer is closed",
+            )),
+        })?;
+        let file = writer.into_inner().map_err(|err| PdfError::FileAccess {
+            source: Arc::new(err.into_error()),
+        })?;
+        file.sync_all().map_err(|err| PdfError::FileAccess {
+            source: Arc::new(err),
+        })?;
+        drop(file);
+        std::fs::rename(&self.temp_path, output).map_err(|err| PdfError::FileAccess {
+            source: Arc::new(err),
+        })?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Write for StagedTempFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "staged output writer is closed",
+            ));
+        };
+        match writer.write(buf) {
+            Ok(written) => {
+                self.bytes_written = self
+                    .bytes_written
+                    .saturating_add(u64::try_from(written).unwrap_or(u64::MAX));
+                Ok(written)
+            }
+            Err(err) => {
+                if self.last_write_error.is_none() {
+                    self.last_write_error = Some(std::io::Error::new(err.kind(), err.to_string()));
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "staged output writer is closed",
+            ));
+        };
+        writer.flush().inspect_err(|err| {
+            if self.last_write_error.is_none() {
+                self.last_write_error = Some(std::io::Error::new(err.kind(), err.to_string()));
+            }
+        })
+    }
+}
+
+impl Drop for StagedTempFile {
+    fn drop(&mut self) {
+        drop(self.writer.take());
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+fn save_pdf_doc_atomically(
+    doc: PdfDocument<'_>,
+    output: &Path,
+    ffi_guard: &mut Option<PriorityFfiGuard<'_>>,
+) -> Result<(), PdfError> {
+    let mut staged = StagedTempFile::create(output)?;
+    if let Err(error) = doc.save_to_writer(&mut staged) {
+        return Err(staged.map_save_error(error));
+    }
+    drop(doc);
+    drop(ffi_guard.take());
+    staged.commit(output)
+}
+
+fn copy_file_atomically(source: &Path, output: &Path) -> Result<(), PdfError> {
+    let mut src_file = std::fs::File::open(source).map_err(|err| PdfError::FileAccess {
+        source: Arc::new(err),
+    })?;
+    let mut staged = StagedTempFile::create(output)?;
+    std::io::copy(&mut src_file, &mut staged).map_err(|err| PdfError::FileAccess {
+        source: Arc::new(err),
+    })?;
+    staged.commit(output)
+}
+
+fn rollback_created_files(paths: &[PathBuf]) {
+    for created_path in paths {
+        let _ = std::fs::remove_file(created_path);
+    }
 }
 
 fn to_pdfium_raw_page_index(raw: u32) -> Result<PdfPageIndex, PdfError> {

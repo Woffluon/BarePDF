@@ -2,7 +2,7 @@ use crate::backend::{
     DocumentCapabilities, OutlineNode, PdfBackend, PdfDocument as CorePdfDocument, RawBitmap,
     TextSpan,
 };
-use crate::pdfium_lifetime::process_pdfium;
+use crate::pdfium_lifetime::{acquire_pdfium_ffi, process_pdfium, FfiPriority};
 use barepdf_core::{
     AnnotationRecord, FormFieldRecord, FormFieldType, HighlightQuad, PageCount, PageCropRect,
     PageIndex, PdfError, Rotation, SecretPassword, MAX_ANNOTATIONS_PER_PAGE, MAX_ANNOTATION_QUADS,
@@ -68,20 +68,59 @@ impl PdfiumEngine {
 }
 
 pub struct PdfiumDocumentOwned {
-    doc: PdfDocument<'static>,
+    doc: Option<PdfDocument<'static>>,
 }
 
 impl PdfiumDocumentOwned {
+    fn doc(&self) -> Result<&PdfDocument<'static>, PdfError> {
+        self.doc
+            .as_ref()
+            .ok_or_else(|| PdfError::PlatformError("PDF document is closed".into()))
+    }
+
     /// Serializes and saves the loaded document into a byte vector.
     ///
     /// # Errors
     ///
     /// Returns `PdfError` if serialization fails within PDFium.
     pub fn save_to_bytes(&self) -> Result<Vec<u8>, PdfError> {
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
-        self.doc.save_to_bytes().map_err(|error| PdfError::Backend {
-            source: Arc::new(error),
-        })
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        self.doc()?
+            .save_to_bytes()
+            .map_err(|error| PdfError::Backend {
+                source: Arc::new(error),
+            })
+    }
+
+    /// Serializes and streams the loaded document directly into `writer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PdfError` if serialization or writing fails.
+    pub fn save_to_writer<W: std::io::Write + 'static>(
+        &self,
+        writer: &mut W,
+    ) -> Result<(), PdfError> {
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        self.doc()?
+            .save_to_writer(writer)
+            .map_err(|error| match error {
+                PdfiumError::IoError(source) => PdfError::FileAccess {
+                    source: Arc::new(source),
+                },
+                other => PdfError::Backend {
+                    source: Arc::new(other),
+                },
+            })
+    }
+}
+
+impl Drop for PdfiumDocumentOwned {
+    fn drop(&mut self) {
+        if let Some(doc) = self.doc.take() {
+            let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+            drop(doc);
+        }
     }
 }
 
@@ -92,6 +131,7 @@ impl PdfBackend for PdfiumEngine {
         password: Option<&str>,
     ) -> Result<Box<dyn CorePdfDocument>, PdfError> {
         let mut ffi_password = ZeroizingFfiPassword::new(password)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
         let load_result = self.pdfium.load_pdf_from_file(
             path,
             ffi_password.as_ref().map(ZeroizingFfiPassword::expose),
@@ -101,7 +141,8 @@ impl PdfBackend for PdfiumEngine {
         }
         let doc = load_result.map_err(|error| map_load_error(error, password.is_some()))?;
         let _ = validate_loaded_page_count(doc.pages().len())?;
-        Ok(Box::new(PdfiumDocumentOwned { doc }))
+        drop(_ffi_guard);
+        Ok(Box::new(PdfiumDocumentOwned { doc: Some(doc) }))
     }
 
     fn open_bytes(
@@ -110,6 +151,7 @@ impl PdfBackend for PdfiumEngine {
         password: Option<&str>,
     ) -> Result<Box<dyn CorePdfDocument>, PdfError> {
         let mut ffi_password = ZeroizingFfiPassword::new(password)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
         let load_result = self.pdfium.load_pdf_from_byte_vec(
             bytes,
             ffi_password.as_ref().map(ZeroizingFfiPassword::expose),
@@ -119,7 +161,8 @@ impl PdfBackend for PdfiumEngine {
         }
         let doc = load_result.map_err(|error| map_load_error(error, password.is_some()))?;
         let _ = validate_loaded_page_count(doc.pages().len())?;
-        Ok(Box::new(PdfiumDocumentOwned { doc }))
+        drop(_ffi_guard);
+        Ok(Box::new(PdfiumDocumentOwned { doc: Some(doc) }))
     }
 }
 
@@ -134,18 +177,18 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn page_count(&self) -> Result<PageCount, PdfError> {
-        validate_loaded_page_count(self.doc.pages().len())
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        validate_loaded_page_count(self.doc()?.pages().len())
     }
 
     fn page_dimensions(&self, page_index: PageIndex) -> Result<(f32, f32), PdfError> {
-        let pages = self.doc.pages();
-        let page =
-            pages
-                .get(to_pdfium_index(page_index)?)
-                .map_err(|e| PdfError::RenderingFailed {
-                    page_index: page_index.get(),
-                    reason: e.to_string(),
-                })?;
+        let p_idx = to_pdfium_index(page_index)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
+        let page = pages.get(p_idx).map_err(|e| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: e.to_string(),
+        })?;
 
         let width = page.width().value;
         let height = page.height().value;
@@ -189,15 +232,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
                 page_index: page_index.get(),
                 reason: "target height exceeds PDFium's supported range".into(),
             })?;
-        let pages = self.doc.pages();
-        let page =
-            pages
-                .get(to_pdfium_index(page_index)?)
-                .map_err(|e| PdfError::RenderingFailed {
-                    page_index: page_index.get(),
-                    reason: e.to_string(),
-                })?;
-
+        let p_idx = to_pdfium_index(page_index)?;
         let pdfium_rotation = match rotation {
             Rotation::Degrees0 => PdfPageRenderRotation::None,
             Rotation::Degrees90 => PdfPageRenderRotation::Degrees90,
@@ -210,28 +245,38 @@ impl CorePdfDocument for PdfiumDocumentOwned {
             .rotate(pdfium_rotation, true)
             .limit_render_image_cache_size(true);
 
-        let bitmap = page.render_with_config(&render_config).map_err(|e| {
-            tracing::warn!(
-                page_index = page_index.as_u32(),
-                target_width,
-                target_height,
-                "PDFium page render failed"
-            );
-            PdfError::RenderingFailed {
+        let (w, h, pixels) = {
+            let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+            let pages = self.doc()?.pages();
+            let page = pages.get(p_idx).map_err(|e| PdfError::RenderingFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let w = u32::try_from(bitmap.width()).map_err(|_| PdfError::RenderingFailed {
-            page_index: page_index.get(),
-            reason: "PDFium returned a negative bitmap width".into(),
-        })?;
-        let h = u32::try_from(bitmap.height()).map_err(|_| PdfError::RenderingFailed {
-            page_index: page_index.get(),
-            reason: "PDFium returned a negative bitmap height".into(),
-        })?;
-        let pixels = bitmap.as_rgba_bytes();
+            let bitmap = page.render_with_config(&render_config).map_err(|e| {
+                tracing::warn!(
+                    page_index = page_index.as_u32(),
+                    target_width,
+                    target_height,
+                    "PDFium page render failed"
+                );
+                PdfError::RenderingFailed {
+                    page_index: page_index.get(),
+                    reason: e.to_string(),
+                }
+            })?;
+
+            let w = u32::try_from(bitmap.width()).map_err(|_| PdfError::RenderingFailed {
+                page_index: page_index.get(),
+                reason: "PDFium returned a negative bitmap width".into(),
+            })?;
+            let h = u32::try_from(bitmap.height()).map_err(|_| PdfError::RenderingFailed {
+                page_index: page_index.get(),
+                reason: "PDFium returned a negative bitmap height".into(),
+            })?;
+            let pixels = bitmap.as_rgba_bytes();
+            (w, h, pixels)
+        };
 
         RawBitmap::new(w, h, pixels).map_err(|error| PdfError::RenderingFailed {
             page_index: page_index.get(),
@@ -240,13 +285,15 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn extract_text(&self, page_index: PageIndex) -> Result<String, PdfError> {
-        let pages = self.doc.pages();
-        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
-            PdfError::TextExtractionFailed {
+        let p_idx = to_pdfium_index(page_index)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
+        let page = pages
+            .get(p_idx)
+            .map_err(|e| PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let text_page = page.text().map_err(|e| PdfError::TextExtractionFailed {
             page_index: page_index.get(),
@@ -258,13 +305,15 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn extract_text_spans(&self, page_index: PageIndex) -> Result<Vec<TextSpan>, PdfError> {
-        let pages = self.doc.pages();
-        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
-            PdfError::TextExtractionFailed {
+        let p_idx = to_pdfium_index(page_index)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
+        let page = pages
+            .get(p_idx)
+            .map_err(|e| PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let text_page = page.text().map_err(|e| PdfError::TextExtractionFailed {
             page_index: page_index.get(),
@@ -292,13 +341,15 @@ impl CorePdfDocument for PdfiumDocumentOwned {
         &self,
         page_index: PageIndex,
     ) -> Result<barepdf_core::PageTextGeometry, PdfError> {
-        let pages = self.doc.pages();
-        let page = pages.get(to_pdfium_index(page_index)?).map_err(|e| {
-            PdfError::TextExtractionFailed {
+        let p_idx = to_pdfium_index(page_index)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
+        let page = pages
+            .get(p_idx)
+            .map_err(|e| PdfError::TextExtractionFailed {
                 page_index: page_index.get(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let text_page = page.text().map_err(|e| PdfError::TextExtractionFailed {
             page_index: page_index.get(),
@@ -411,8 +462,9 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn get_outline(&self) -> Result<Vec<OutlineNode>, PdfError> {
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
         let mut nodes = Vec::new();
-        let mut current = self.doc.bookmarks().root();
+        let mut current = self.doc()?.bookmarks().root();
         let mut visited = 0;
         while let Some(bookmark) = current {
             current = bookmark.next_sibling();
@@ -422,15 +474,13 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn annotations(&self, page_index: PageIndex) -> Result<Vec<AnnotationRecord>, PdfError> {
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
-        let pages = self.doc.pages();
-        let page =
-            pages
-                .get(to_pdfium_index(page_index)?)
-                .map_err(|e| PdfError::RenderingFailed {
-                    page_index: page_index.get(),
-                    reason: e.to_string(),
-                })?;
+        let p_idx = to_pdfium_index(page_index)?;
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
+        let page = pages.get(p_idx).map_err(|e| PdfError::RenderingFailed {
+            page_index: page_index.get(),
+            reason: e.to_string(),
+        })?;
 
         let page_w = page.width().value;
         let page_h = page.height().value;
@@ -501,8 +551,8 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn form_fields(&self) -> Result<Vec<FormFieldRecord>, PdfError> {
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
-        let pages = self.doc.pages();
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
         let page_count = pages.len();
         let mut records = Vec::new();
 
@@ -642,8 +692,8 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     fn set_form_field_value(&mut self, name: &str, value: &str) -> Result<(), PdfError> {
         validate_form_field_text_bytes("name", name)?;
         validate_form_field_text_bytes("value", value)?;
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
-        let pages = self.doc.pages();
+        let _ffi_guard = acquire_pdfium_ffi(FfiPriority::Interactive);
+        let pages = self.doc()?.pages();
         let page_count = pages.len();
         let mut matched = false;
 
@@ -730,10 +780,7 @@ impl CorePdfDocument for PdfiumDocumentOwned {
     }
 
     fn save_to_bytes(&self) -> Result<Vec<u8>, PdfError> {
-        let _ffi_guard = crate::pdfium_lifetime::pdfium_ffi_lock();
-        self.doc.save_to_bytes().map_err(|error| PdfError::Backend {
-            source: Arc::new(error),
-        })
+        Self::save_to_bytes(self)
     }
 }
 

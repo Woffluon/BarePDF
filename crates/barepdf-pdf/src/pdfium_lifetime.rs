@@ -1,20 +1,132 @@
 use barepdf_core::PdfError;
 use pdfium_render::prelude::Pdfium;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
 static PDFIUM: OnceLock<Pdfium> = OnceLock::new();
 static PDFIUM_INIT: Mutex<()> = Mutex::new(());
-static PDFIUM_FFI_LOCK: Mutex<()> = Mutex::new(());
+static PDFIUM_FFI_GATE: PriorityFfiGate = PriorityFfiGate::new();
 
-/// Acquires the global process-wide lock for thread-unsafe PDFium FFI interactions.
+/// Priority tier for acquiring the process-wide PDFium FFI gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiPriority {
+    /// Interactive UI-facing operations (document open, visible render, text/geometry, outline, form/annotation reads).
+    Interactive,
+    /// Batch background operations (`operations.rs` tools) that yield between pages when interactive work waits.
+    Background,
+}
+
+/// Process-wide FFI gate that gives waiting [`FfiPriority::Interactive`] tasks precedence over [`FfiPriority::Background`] batch work.
+pub struct PriorityFfiGate {
+    state: Mutex<bool>,
+    interactive_waiters: AtomicUsize,
+    cvar: Condvar,
+}
+
+/// RAII guard releasing [`PriorityFfiGate`] when dropped.
+pub struct PriorityFfiGuard<'a> {
+    gate: &'a PriorityFfiGate,
+}
+
+impl PriorityFfiGate {
+    /// Creates an unlocked priority gate.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: Mutex::new(false),
+            interactive_waiters: AtomicUsize::new(0),
+            cvar: Condvar::new(),
+        }
+    }
+
+    /// Acquires exclusive access to the FFI gate according to `priority`.
+    #[must_use]
+    pub fn acquire(&self, priority: FfiPriority) -> PriorityFfiGuard<'_> {
+        match priority {
+            FfiPriority::Interactive => {
+                self.interactive_waiters.fetch_add(1, Ordering::AcqRel);
+                let mut held = lock_unpoison(&self.state);
+                while *held {
+                    held = wait_unpoison(&self.cvar, held);
+                }
+                *held = true;
+                self.interactive_waiters.fetch_sub(1, Ordering::AcqRel);
+            }
+            FfiPriority::Background => {
+                let mut held = lock_unpoison(&self.state);
+                while *held || self.interactive_waiters.load(Ordering::Acquire) > 0 {
+                    held = wait_unpoison(&self.cvar, held);
+                }
+                *held = true;
+            }
+        }
+        PriorityFfiGuard { gate: self }
+    }
+
+    /// Returns `true` when at least one interactive caller is waiting to acquire the gate.
+    #[must_use]
+    pub fn has_interactive_waiters(&self) -> bool {
+        self.interactive_waiters.load(Ordering::Acquire) > 0
+    }
+}
+
+impl Default for PriorityFfiGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for PriorityFfiGuard<'_> {
+    fn drop(&mut self) {
+        let mut held = lock_unpoison(&self.gate.state);
+        *held = false;
+        self.gate.cvar.notify_all();
+    }
+}
+
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn wait_unpoison<'a, T>(cvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    cvar.wait(guard)
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Yields the FFI gate between pages when a background operation detects a waiting interactive task.
+pub fn yield_ffi_between_pages<'a>(
+    gate: &'a PriorityFfiGate,
+    guard: &mut Option<PriorityFfiGuard<'a>>,
+) {
+    if gate.has_interactive_waiters() {
+        drop(guard.take());
+        std::thread::yield_now();
+        *guard = Some(gate.acquire(FfiPriority::Background));
+    }
+}
+
+/// Returns the global process-wide PDFium priority FFI gate.
+#[must_use]
+pub fn pdfium_ffi_gate() -> &'static PriorityFfiGate {
+    &PDFIUM_FFI_GATE
+}
+
+/// Acquires the global PDFium FFI gate with the specified priority.
+#[must_use]
+pub fn acquire_pdfium_ffi(priority: FfiPriority) -> PriorityFfiGuard<'static> {
+    PDFIUM_FFI_GATE.acquire(priority)
+}
+
+/// Acquires the global process-wide lock for thread-unsafe PDFium FFI interactions at [`FfiPriority::Background`] priority.
 ///
 /// Automatically recovers from mutex poisoning if a previous thread panicked while
 /// holding the lock.
-pub fn pdfium_ffi_lock() -> MutexGuard<'static, ()> {
-    PDFIUM_FFI_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+#[must_use]
+pub fn pdfium_ffi_lock() -> PriorityFfiGuard<'static> {
+    acquire_pdfium_ffi(FfiPriority::Background)
 }
 
 #[doc(hidden)]
