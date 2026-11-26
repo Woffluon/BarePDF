@@ -11,34 +11,34 @@ interface RefusalItem {
 const refusals: readonly RefusalItem[] = [
   {
     number: '01',
-    refusal: 'No Background Telemetry or Tracking Beacons',
-    trRefusal: 'Arka Plan Telemetrisi ve Takip İşaretçisi Yok',
-    explanation: 'BarePDF contains 0 analytics SDKs, 0 user activity pings, and 0 identifier cookies. Reading activity stays entirely on your personal processor.',
-    trExplanation: 'BarePDF içinde sıfır analitik kütüphanesi, sıfır etkinlik sinyali ve sıfır cihaz kimliği bulunur. Okuma hareketleriniz tamamen kişisel bilgisayarınızda kalır.',
+    refusal: 'No Telemetry or Analytics SDKs',
+    trRefusal: "Telemetri ve Analitik SDK'sı Yok",
+    explanation: 'Zero analytics libraries, zero usage pings, and zero tracking identifiers. Reading state and file paths remain on your local machine.',
+    trExplanation: 'Sıfır analitik kütüphanesi, sıfır kullanım sinyali ve sıfır takip kimliği. Okuma durumu ve dosya yolları yalnızca yerel makinenizde kalır.',
     codeSource: 'crates/barepdf-platform-windows',
   },
   {
     number: '02',
-    refusal: 'No Mandatory User Accounts or Cloud Sign-Ins',
-    trRefusal: 'Zorunlu Kullanıcı Hesabı ve Bulut Girişi Yok',
-    explanation: 'No email forms, subscription countdowns, paywalls, or cloud dependencies. When you launch BarePDF, you immediately open documents.',
-    trExplanation: 'E-posta kaydı, abonelik sayacı, ödeme duvarı veya bulut zorunluluğu yok. BarePDF açıldığında doğrudan belgelerinizi görüntülersiniz.',
+    refusal: 'No Accounts or Login Gates',
+    trRefusal: 'Hesap veya Oturum Engeli Yok',
+    explanation: 'No registration prompts, license servers, or subscription timers. Launching BarePDF opens local files directly.',
+    trExplanation: 'Kayıt ekranları, lisans sunucuları veya abonelik sayaçları bulunmaz. BarePDF açıldığında doğrudan yerel dosyaları görüntüler.',
     codeSource: 'apps/barepdf/src/presentation/state.rs',
   },
   {
     number: '03',
-    refusal: 'No In-App Advertisements or AI Summarization Upsells',
-    trRefusal: 'Uygulama İçi Reklam ve Yapay Zekâ Pazarlaması Yok',
-    explanation: 'The interface remains uncluttered. There are no sponsored banners, marketing sidebars, or intrusive modal dialogs urging you to upgrade to AI tiers.',
-    trExplanation: 'Arayüz yalın kalır. Sponsorlu afişler, pazarlama kenar çubukları veya sizi ücretli yapay zekâ katmanlarına zorlayan pencereler yer almaz.',
+    refusal: 'No Ads or AI Upsell Prompts',
+    trRefusal: 'Reklam ve Yapay Zekâ Satış İstemi Yok',
+    explanation: 'No promotional banners, sidebar upsells, or modal upgrade dialogs. Every pixel of interface space serves document reading and page tools.',
+    trExplanation: 'Tanıtım afişleri, kenar çubuğu reklamları veya sürüm yükseltme pencereleri yer almaz. Arayüzün tamamı belge okumaya ve sayfa araçlarına ayrılır.',
     codeSource: 'crates/barepdf-ui',
   },
   {
     number: '04',
-    refusal: 'Offline by Default Operation',
-    trRefusal: 'Varsayılan Olarak Tamamen Çevrimdışı Çalışma',
-    explanation: 'Document parsing, bitmap rendering, annotations, and page tools run strictly via local CPU instructions. Network connectivity is used only if you explicitly choose to check for updates.',
-    trExplanation: 'Belge ayrıştırma, görüntü oluşturma, notlar ve sayfa araçları tamamen yerel CPU komutlarıyla çalışır. Ağ bağlantısı yalnızca güncellemeleri kontrol etmeyi açıkça seçerseniz kullanılır.',
+    refusal: 'Offline by Default Execution',
+    trRefusal: 'Varsayılan Olarak Çevrimdışı Çalışma',
+    explanation: 'Parsing, rendering, annotations, and page tools execute locally on CPU. Network calls remain disabled until you explicitly opt in to update checks, which verify Ed25519 signatures and SHA-256 hashes.',
+    trExplanation: 'Ayrıştırma, işleme, not alma ve sayfa araçları yalnızca yerel CPU üzerinde çalışır. Güncelleme denetimleri varsayılan olarak kapalıdır; yalnızca siz etkinleştirdiğinizde Ed25519 imzası ve SHA-256 özetiyle doğrulanır.',
     codeSource: 'apps/barepdf/src/infrastructure/update',
   },
 ];
@@ -49,15 +49,15 @@ const refusals: readonly RefusalItem[] = [
     <div class="philosophy-box">
       <div class="philosophy-header">
         <span class="badge badge-accent">
-          <span data-i18n data-en="Engineering Philosophy" data-tr="Mühendislik Felsefesi">Engineering Philosophy</span>
+          <span data-i18n data-en="Engineering Stance" data-tr="Mühendislik Duruşu">Engineering Stance</span>
         </span>
-        <h2 id="philosophy-heading" class="philosophy-title" data-i18n data-en="What BarePDF Deliberately Does Not Do" data-tr="BarePDF’in Bilinçli Olarak Yapmadıkları">
-          What BarePDF Deliberately Does Not Do
+        <h2 id="philosophy-heading" class="philosophy-title" data-i18n data-en="What BarePDF Deliberately Omits" data-tr="BarePDF'in Bilinçli Olarak Dışarıda Bıraktıkları">
+          What BarePDF Deliberately Omits
         </h2>
         <p class="philosophy-subtitle" data-i18n
-          data-en="Modern document tools often extract user attention and system resources to feed cloud platforms. BarePDF is built on an explicit series of architectural refusals."
-          data-tr="Günümüz belge araçları, bulut platformlarını beslemek için kullanıcı dikkatini ve sistem kaynaklarını tüketir. BarePDF bilinçli bir mimari ret dizisi üzerine inşa edilmiştir.">
-          Modern document tools often extract user attention and system resources to feed cloud platforms. BarePDF is built on an explicit series of architectural refusals.
+          data-en="Desktop document software routinely bundles cloud accounts, telemetry collectors, and background services. BarePDF enforces four architectural exclusions directly in code."
+          data-tr="Masaüstü belge yazılımları genellikle bulut hesapları, telemetri toplayıcıları ve arka plan servisleri taşır. BarePDF dört mimari sınırı doğrudan kod düzeyinde uygular.">
+          Desktop document software routinely bundles cloud accounts, telemetry collectors, and background services. BarePDF enforces four architectural exclusions directly in code.
         </p>
       </div>
 

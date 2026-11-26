@@ -11,8 +11,8 @@ interface Props {
 }
 
 const {
-  title = 'BarePDF: Bare, Fast, Yours.',
-  description = 'Bare, Fast, Yours. Ultra-lightweight open-source PDF reader for Windows 10/11 and Linux built with Rust and PDFium.',
+  title = 'BarePDF — The document. Nothing else.',
+  description = 'Offline, memory-bounded PDF reader and editor for Windows 10/11 and Linux, built with Rust, Slint, and Google PDFium. Zero telemetry, zero accounts.',
   currentPath = '',
   ogImage,
 } = Astro.props;
@@ -20,6 +20,11 @@ const {
 const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 const canonicalUrl = new URL(Astro.url.pathname, Astro.site || 'https://woffluon.github.io');
 const resolvedOgImage = ogImage || `${baseUrl}/images/og-image.png`;
+const fontFaceCss = [
+  `@font-face{font-family:'Geist';src:url('${baseUrl}/fonts/Geist-Variable.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap;}`,
+  `@font-face{font-family:'Geist';src:url('${baseUrl}/fonts/Geist-Italic-Variable.woff2') format('woff2');font-weight:100 900;font-style:italic;font-display:swap;}`,
+  `@font-face{font-family:'JetBrains Mono';src:url('${baseUrl}/fonts/JetBrainsMono-Variable.woff2') format('woff2');font-weight:100 800;font-style:normal;font-display:swap;}`,
+].join('');
 ---
 
 <!DOCTYPE html>
@@ -36,6 +41,11 @@ const resolvedOgImage = ogImage || `${baseUrl}/images/og-image.png`;
     <meta name="description" content={description} />
     <link rel="canonical" href={canonicalUrl} />
     <meta name="google-site-verification" content="e2H52KdBOn8S9I02QDT2i6SjBhHFGINmL97t4jTs_Sc" />
+
+    <!-- Self-hosted Fonts -->
+    <link rel="preload" as="font" type="font/woff2" href={`${baseUrl}/fonts/Geist-Variable.woff2`} crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href={`${baseUrl}/fonts/JetBrainsMono-Variable.woff2`} crossorigin />
+    <style is:inline set:html={fontFaceCss}></style>
 
     <!-- Favicon & Manifest -->
     <link rel="icon" type="image/svg+xml" href={`${baseUrl}/favicon.svg`} />

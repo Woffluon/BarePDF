@@ -8,14 +8,39 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
   <div class="container footer-grid">
     <div class="footer-col brand-col">
       <div class="brand-heading">
-        <img src={`${baseUrl}/images/logo.svg`} alt="" width="24" height="24" />
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 256 256"
+          width="24"
+          height="24"
+          class="brand-logo"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path
+            fill="currentColor"
+            fill-rule="evenodd"
+            d="M80 20 H224 V188 L176 236 H32 V68 Z M96 52 H192 V168 L164 196 V80 H68 Z M64 112 H132 V204 H64 Z"
+          />
+        </svg>
         <span class="brand-title">BarePDF</span>
       </div>
       <p class="brand-desc">
-        <span data-i18n data-en="Lightweight, ultra-fast, open-source PDF reader for Windows and Linux built with Rust and PDFium." data-tr="Rust ve PDFium ile geliştirilen, Windows ve Linux için hafif ve hızlı açık kaynaklı PDF okuyucu.">Lightweight, ultra-fast, open-source PDF reader for Windows and Linux built with Rust and PDFium.</span>
+        <span
+          data-i18n
+          data-en="Offline, memory-bounded PDF reader and editor for Windows 10/11 and Linux built with Rust, Slint, and PDFium."
+          data-tr="Windows 10/11 ve Linux için Rust, Slint ve PDFium ile geliştirilen çevrimdışı, bellek sınırlı PDF okuyucu ve düzenleyici."
+        >
+          Offline, memory-bounded PDF reader and editor for Windows 10/11 and Linux built with Rust, Slint, and PDFium.
+        </span>
       </p>
-      <p class="privacy-note" data-i18n data-en="Zero Telemetry • Zero Analytics • Zero Accounts • 100% Privacy" data-tr="Sıfır telemetri • Sıfır analitik • Hesap yok • %100 gizlilik">
-        Zero Telemetry • Zero Analytics • Zero Accounts • 100% Privacy
+      <p
+        class="privacy-note"
+        data-i18n
+        data-en="0 Telemetry • 0 Analytics • 0 Accounts • Offline by Default"
+        data-tr="0 Telemetri • 0 Analitik • 0 Hesap • Varsayılan Çevrimdışı"
+      >
+        0 Telemetry • 0 Analytics • 0 Accounts • Offline by Default
       </p>
     </div>
 
@@ -75,10 +100,18 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-weight: 700;
+    font-family: var(--font-sans);
+    font-weight: 800;
     font-size: 1.1rem;
+    letter-spacing: -0.03em;
+    line-height: 1;
     color: var(--color-text);
     margin-bottom: 0.75rem;
+  }
+
+  .brand-logo {
+    display: block;
+    flex-shrink: 0;
   }
 
   .brand-desc {

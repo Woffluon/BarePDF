@@ -5,8 +5,8 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 
 <BaseLayout
-  title="BarePDF Manifesto: A Small Refusal"
-  description="A personal statement by Efe Arabacı for quiet, local, user-first PDF reading."
+  title="BarePDF Manifesto — An Architectural Refusal"
+  description="A statement by Efe Arabacı on local document ownership, bounded memory, and software that stays out of the way."
   currentPath={`${baseUrl}/manifesto`}
   ogImage={`${baseUrl}/images/manifesto-cover.png`}
 >
@@ -14,16 +14,16 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     <div class="manifesto-container">
       <section class="manifesto-hero" aria-labelledby="manifesto-title">
         <div class="manifesto-hero-copy">
-          <p class="manifesto-kicker" data-i18n data-en="A STATEMENT FROM EFE ARABACI" data-tr="EFE ARABACI'DAN BİR AÇIKLAMA">A STATEMENT FROM EFE ARABACI</p>
+          <p class="manifesto-kicker" data-i18n data-en="A STATEMENT BY EFE ARABACI" data-tr="EFE ARABACI'NIN AÇIKLAMASI">A STATEMENT BY EFE ARABACI</p>
           <h1 id="manifesto-title" data-i18n
-            data-en="I built BarePDF for the part of you that just wants to read."
-            data-tr="BarePDF'i yalnızca okumak isteyen yanınız için geliştirdim.">
-            I built BarePDF for the part of you that just wants to read.
+            data-en="BarePDF exists for people who only want to open a document and read it."
+            data-tr="BarePDF, yalnızca bir belgeyi açıp okumak isteyenler için geliştirildi.">
+            BarePDF exists for people who only want to open a document and read it.
           </h1>
           <p class="manifesto-lead" data-i18n
-            data-en="A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a subscription to a company that mistakes your attention for property."
-            data-tr="Bir belge bir bulut platformunun bahanesi haline gelmemelidir. Bir PDF açmak bir tören, hesap kaydı, bulut bağlantısı veya dikkatinizi kendi mülkü sanan bir şirkete ödeme gerektirmemelidir.">
-            A document should not become a pretext for a platform. Opening a PDF should not require a ceremony, an account, a cloud, or a subscription to a company that mistakes your attention for property.
+            data-en="A local file is not a pretext for a platform. Opening a PDF on your own machine should not require an account, an active connection, background telemetry, or an interface competing for your attention."
+            data-tr="Yerel bir dosya, bir platformun bahanesi değildir. Kendi bilgisayarınızda bir PDF açmak için hesap açmanız, internete bağlanmanız, arka plan telemetrisine katlanmanız veya dikkatinizi bölen arayüzlerle uğraşmanız gerekmemelidir.">
+            A local file is not a pretext for a platform. Opening a PDF on your own machine should not require an account, an active connection, background telemetry, or an interface competing for your attention.
           </p>
           <a class="manifesto-link" href="#the-refusal">
             <span data-i18n data-en="Read the architectural refusal" data-tr="Mimari ret metnini oku">Read the architectural refusal</span> ↓
@@ -31,12 +31,7 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
         </div>
 
         <figure class="manifesto-art">
-          <img src={`${baseUrl}/images/manifesto-cover.png`} alt="A visual representation of reading simplicity vs platform extraction." width="1024" height="1536" />
-          <figcaption data-i18n
-            data-en="Between convenience and custody, the reader remains."
-            data-tr="Kolaylık ile gözetim arasında, okur yerinde kalır.">
-            Between convenience and custody, the reader remains.
-          </figcaption>
+          <img src={`${baseUrl}/images/manifesto-cover.png`} alt="Geometric architectural illustration representing isolated local document reading and bounded scope." width="1024" height="1536" />
         </figure>
       </section>
 
@@ -44,43 +39,46 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
 
       <section class="manifesto-grid" id="the-refusal">
         <div class="manifesto-prose">
-          <p class="manifesto-index">01 / THE KINGDOM OF SOFTWARE</p>
-          <h2 data-i18n data-en="Techno-feudalism, now with frictionless onboarding." data-tr="Tekno-feodalizm, şimdi pürüzsüz karşılama ekranlarıyla.">
-            Techno-feudalism, now with frictionless onboarding.
+          <p class="manifesto-index" data-i18n data-en="01 / THE RENTED FILE" data-tr="01 / KİRALANAN DOSYA">01 / THE RENTED FILE</p>
+          <h2 data-i18n data-en="Local files should not pass through someone else's gate." data-tr="Yerel dosyalar başkasının kapısından geçmemelidir.">
+            Local files should not pass through someone else's gate.
           </h2>
           <p data-i18n
-            data-en="We have entered an age where a handful of platforms rent tools that used to be ordinary objects. They collect telemetry at the gate, request logins before displaying local files, and label that dependence convenience. The castle is often a dashboard. The tax is often an unsolicited notification."
-            data-tr="Bir avuç platformun eskiden sıradan birer araç olan nesneleri bize kiraladığı bir döneme girdik. Kapıda veri topluyor, yerel dosyalarımızı göstermek için oturum açmamızı istiyor ve bu bağımlılığı kolaylık olarak adlandırıyorlar. Kale çoğunlukla bir gösterge paneli, vergi ise istenmeyen bir bildirimdir.">
-            We have entered an age where a handful of platforms rent tools that used to be ordinary objects. They collect telemetry at the gate, request logins before displaying local files, and label that dependence convenience. The castle is often a dashboard. The tax is often an unsolicited notification.
+            data-en="Too many desktop PDF tools now behave like client terminals for subscription platforms. They initialize analytics SDKs on startup, prompt for logins before displaying files already sitting on your disk, and treat every opened page as a telemetry event or an upsell opportunity."
+            data-tr="Günümüzde pek çok masaüstü PDF yazılımı, abonelik platformlarının birer istemcisi gibi davranıyor. Açılışta analitik SDK'larını başlatıyor, diskinizdeki dosyayı göstermeden önce oturum açmanızı istiyor ve açılan her sayfayı bir telemetri olayına ya da satış fırsatına dönüştürüyor.">
+            Too many desktop PDF tools now behave like client terminals for subscription platforms. They initialize analytics SDKs on startup, prompt for logins before displaying files already sitting on your disk, and treat every opened page as a telemetry event or an upsell opportunity.
           </p>
 
-          <p class="manifesto-index">02 / BARE MEANS ENOUGH</p>
-          <h2 data-i18n data-en="A quiet reader is an intentional engineering stance." data-tr="Sessiz bir okuyucu, bilinçli bir mühendislik tavrıdır.">
-            A quiet reader is an intentional engineering stance.
+          <p class="manifesto-index" data-i18n data-en="02 / BOUNDED BY DESIGN" data-tr="02 / TASARIMLA ÖLÇÜLÜ">02 / BOUNDED BY DESIGN</p>
+          <h2 data-i18n data-en="A silent reader is an explicit engineering contract." data-tr="Sessiz bir okuyucu, açık bir mühendislik sözleşmesidir.">
+            A silent reader is an explicit engineering contract.
           </h2>
           <p data-i18n
-            data-en="BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising placed into the margins. Update checks are strictly opt-in. The reader spends resources strictly on the page, not on a feature parade designed to justify monthly subscriptions."
-            data-tr="BarePDF belgeleri yerel olarak açar. Zorunlu hesap yok. Bulut bağımlılığı yok. Yardımseverlik maskesi takmış takip mekanizmaları yok. Kenar boşluklarına sıkıştırılmış reklamlar yok. Güncelleme denetimleri tamamen isteğe bağlıdır. Okuyucu kaynaklarını sayfa için harcar, aylık abonelikleri meşrulaştırmak için tasarlanan gösterişli özellikler için değil.">
-            BarePDF opens documents locally. No mandatory account. No cloud dependency. No tracking disguised as helpfulness. No advertising placed into the margins. Update checks are strictly opt-in. The reader spends resources strictly on the page, not on a feature parade designed to justify monthly subscriptions.
+            data-en="BarePDF executes every operation—PDFium rasterization, glyph highlights, vector ink, page merging, splitting, cropping, and compression—strictly inside your local process. Memory stays constrained under explicit byte-budgeted LRU caches, obsolete scroll work cancels immediately, and network sockets remain silent unless you turn on Ed25519-verified update checks."
+            data-tr="BarePDF tüm işlemleri—PDFium görüntüleme, metin vurgulama, vektörel çizim, sayfa birleştirme, bölme, kırpma ve sıkıştırmayı—yalnızca yerel işlemcinizde yürütür. Bellek kullanımı açık byte bütçeli LRU önbellekleriyle sınırlandırılır, eski kaydırma işleri anında iptal edilir ve siz Ed25519 imzalı güncelleme denetimini açmadıkça hiçbir ağ isteği yapılmaz.">
+            BarePDF executes every operation—PDFium rasterization, glyph highlights, vector ink, page merging, splitting, cropping, and compression—strictly inside your local process. Memory stays constrained under explicit byte-budgeted LRU caches, obsolete scroll work cancels immediately, and network sockets remain silent unless you turn on Ed25519-verified update checks.
           </p>
 
-          <p class="manifesto-index">03 / THE DELIBERATE REFUSAL</p>
-          <h2 data-i18n data-en="Less theater. Genuine ownership." data-tr="Daha az tiyatro. Gerçek mülkiyet.">
-            Less theater. Genuine ownership.
+          <p class="manifesto-index" data-i18n data-en="03 / GENUINE OWNERSHIP" data-tr="03 / GERÇEK MÜLKİYET">03 / GENUINE OWNERSHIP</p>
+          <h2 data-i18n data-en="Leave room for the document and the machine." data-tr="Belgeye ve makineye yer bırak.">
+            Leave room for the document and the machine.
           </h2>
           <p data-i18n
-            data-en="There will be no loyalty points for opening a file, no badges for browsing a settings panel, and no cloud-shaped wall built around local storage. Reading is not a social network. BarePDF leaves room for the document, the machine, and the human being reading."
-            data-tr="Bir dosya açtığınız için sadakat puanı verilmeyecek, ayarlar menüsünü gezdiğiniz için rozet dağıtılmayacak ve yerel depolamanın etrafına bulut biçimli duvarlar örülmeyecektir. Okuma eylemi bir sosyal ağ değildir. BarePDF yalnızca belgeye, makineye ve okuyan insana yer bırakır.">
-            There will be no loyalty points for opening a file, no badges for browsing a settings panel, and no cloud-shaped wall built around local storage. Reading is not a social network. BarePDF leaves room for the document, the machine, and the human being reading.
+            data-en="Software earns trust by staying bounded in scope, footprint, and behavior. BarePDF does not ask for an account, inject promotional panels, or consume gigabytes of RAM to display a two-page report. It leaves the screen to the document, the hardware to your work, and the file under your control."
+            data-tr="Bir yazılım güveni kapsamını, kaynak tüketimini ve davranışını net tutarak kazanır. BarePDF sizden hesap istemez, tanıtım panelleri yerleştirmez ve iki sayfalık bir raporu göstermek için gigabaytlarca RAM tüketmez. Ekranı belgeye, donanımı işinize ve dosyayı tamamen sizin denetiminize bırakır.">
+            Software earns trust by staying bounded in scope, footprint, and behavior. BarePDF does not ask for an account, inject promotional panels, or consume gigabytes of RAM to display a two-page report. It leaves the screen to the document, the hardware to your work, and the file under your control.
           </p>
         </div>
 
         <aside class="manifesto-aside" aria-label="Manifesto summary">
-          <div class="manifesto-stamp">BAREPDF<br />OFFLINE BY DEFAULT</div>
+          <div class="manifesto-stamp">
+            <span>BAREPDF</span>
+            <span data-i18n data-en="OFFLINE BY DEFAULT" data-tr="VARSAYILAN ÇEVRİMDIŞI">OFFLINE BY DEFAULT</span>
+          </div>
           <blockquote data-i18n
-            data-en="“You are not the product. You are the person who opened the file. That is enough.”"
-            data-tr="“Siz ürün değilsiniz. Siz dosyayı açan insansınız. Bu tek başına yeterlidir.”">
-            “You are not the product. You are the person who opened the file. That is enough.”
+            data-en="“You are not a user funnel. You are the person who opened a file on your own machine. That is enough.”"
+            data-tr="“Siz bir dönüşüm hunisi değilsiniz. Kendi makinenizde bir dosya açan insansınız. Bu yeterlidir.”">
+            “You are not a user funnel. You are the person who opened a file on your own machine. That is enough.”
           </blockquote>
           <p class="manifesto-signature">Efe Arabacı</p>
         </aside>
@@ -179,15 +177,6 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     width: 100%;
   }
 
-  .manifesto-art figcaption {
-    color: var(--manifesto-muted);
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    line-height: 1.4;
-    padding: 0.75rem 1rem;
-    background-color: var(--manifesto-surface);
-  }
-
   .manifesto-rule {
     background: var(--manifesto-accent);
     height: 1px;
@@ -244,6 +233,10 @@ const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
     letter-spacing: 0.08em;
     line-height: 1.4;
     margin-bottom: 2rem;
+  }
+
+  .manifesto-stamp span {
+    display: block;
   }
 
   .manifesto-aside blockquote {

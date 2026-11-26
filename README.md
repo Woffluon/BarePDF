@@ -3,11 +3,11 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/banner-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="./assets/banner-white.png">
-    <img src="./assets/banner-white.png" alt="BarePDF: Bare, fast, yours" width="100%">
+    <img src="./assets/banner-white.png" alt="BarePDF — The document. Nothing else." width="100%">
   </picture>
 
   <h1>BarePDF</h1>
-  <p><strong>Fast, private PDF reader for Windows 10/11 and Linux (Pardus 23/25).</strong></p>
+  <p><strong>Offline, memory-bounded PDF reader and editor for Windows 10/11 and Linux (Pardus 23/25).</strong></p>
 
   [![Latest release](https://img.shields.io/github/v/release/Woffluon/BarePDF?display_name=tag&style=flat-square&color=f7931e)](https://github.com/Woffluon/BarePDF/releases/latest)
   [![CI](https://img.shields.io/github/actions/workflow/status/Woffluon/BarePDF/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Woffluon/BarePDF/actions/workflows/ci.yml)
@@ -28,7 +28,7 @@
 
 ---
 
-BarePDF is an open-source PDF reader for Windows 10/11 and Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) built with Rust, Slint, and Google PDFium. It handles documents locally on your CPU, enforces a verified zero-telemetry policy, and uses demand-driven rendering with byte-budgeted LRU caches so memory usage remains bounded regardless of document length.
+BarePDF is an open-source PDF reader and editor for Windows 10/11 and Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) built with Rust, Slint, and Google PDFium. It processes documents locally on your CPU, operates offline with zero telemetry, and uses demand-driven rendering with byte-budgeted LRU caches so memory usage stays bounded regardless of document length.
 
 ## Contents
 
@@ -50,7 +50,7 @@ BarePDF is an open-source PDF reader for Windows 10/11 and Linux (Pardus 23/25, 
 
 | Principle | Technical Reality |
 | --- | --- |
-| **Fast by design** | Priority-queued render pipeline. Only visible viewport pages receive CPU rasterization; obsolete scroll jobs cancel immediately via generation tokens. |
+| **Demand-driven rendering** | Priority-queued render pipeline. Only visible viewport pages receive CPU rasterization; obsolete scroll jobs cancel immediately via generation tokens. |
 | **Bounded memory** | Byte-budgeted LRU bitmap caches (128 MB raw bitmaps, 128 MB UI image cache with zoom-adaptive 32/64/128 MB tiers, 64 MB per-page image budget, 4 MB thumbnails) plus RAM-adaptive total render budgets of 64/128/256/384/1024 MB keep memory from growing unchecked on 500+ page documents. |
 | **Zero telemetry** | 100% offline. Zero background analytics, zero tracking IDs, zero account requirements, zero network calls during reading. |
 | **Native Windows integration** | Native Win32 printing, high-DPI handling, Shell thumbnail extension for File Explorer, and standard Default Apps registration. |
@@ -143,14 +143,14 @@ BarePDF provides seven core feature suites built directly into the desktop appli
 - Search and execute commands, toggle tints, change layouts, or launch PDF tools without leaving the keyboard.
 
 ### 4. Four Adaptive Reading Modes
-- **Single Page:** Clean, distraction-free view focused on one page at a time.
-- **Continuous Vertical:** Smooth demand-driven scrolling with dynamic page prefetching.
+- **Single Page:** Focused view displaying one page at a time.
+- **Continuous Vertical:** Demand-driven vertical scrolling with page prefetching.
 - **Two-Page Spread:** Side-by-side display for landscape monitors and multi-column documents.
 - **Book Mode:** Cover-aware two-page spread that formats facing pages accurately.
 - **Presentation Mode (`F5`) and Fullscreen (`F11`):** Borderless, focused presentations with keyboard navigation.
 
 ### 5. Eye-Comfort Paper Tints
-- **Normal:** Standard crisp white background.
+- **Normal:** Standard white background.
 - **Sepia:** Warm paper tone designed to minimize eye strain during long daytime reading sessions.
 - **Night:** Low-contrast dark paper theme for dimly lit environments.
 - **Amber:** High-temperature amber tint for late-night review.
@@ -158,7 +158,7 @@ BarePDF provides seven core feature suites built directly into the desktop appli
 
 ### 6. Native Win32 Printing & Shell Thumbnails
 - **High-Resolution Printing (`Ctrl+P`):** Direct printing through native Windows print spoolers with print preview.
-- **Windows Explorer Thumbnails:** Dedicated 64-bit shell extension (`barepdf-thumbnail`) that renders crisp page previews directly in Windows File Explorer folders.
+- **Windows Explorer Thumbnails:** Dedicated 64-bit shell extension (`barepdf-thumbnail`) that renders page previews directly in Windows File Explorer folders.
 
 ### 7. Zero Telemetry & 100% Offline Guarantee
 - **Zero Network Traffic:** The reading engine makes zero network requests while opening, viewing, annotating, or modifying documents.
@@ -248,7 +248,7 @@ Detailed performance findings are documented in [`docs/BENCHMARKS.md`](./docs/BE
 
 ## Zero Telemetry and Release Security
 
-BarePDF adheres to an uncompromising privacy and security baseline:
+BarePDF enforces five privacy and update-verification controls:
 
 1. **Strict Offline Operation:** The application makes zero outgoing network connections while running.
 2. **Opt-in Update Mechanism:** Automatic update checks are disabled until you explicitly opt in via preferences.
@@ -356,6 +356,6 @@ Report suspected security vulnerabilities through [GitHub Security Advisories](h
 ---
 
 <div align="center">
-  <strong>Bare. Fast. Yours.</strong><br>
+  <strong>The document. Nothing else.</strong><br>
   <a href="#barepdf">Back to top ↑</a>
 </div>

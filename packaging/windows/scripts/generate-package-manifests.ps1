@@ -117,8 +117,8 @@ PackageName: BarePDF
 PackageUrl: https://woffluon.github.io/BarePDF/
 License: MIT
 LicenseUrl: https://github.com/Woffluon/BarePDF/blob/main/LICENSE
-ShortDescription: Fast, lightweight, zero-telemetry Windows PDF reader built with Rust and Slint.
-Description: BarePDF is a native Windows PDF viewer engineered for speed and privacy. It runs fully offline with zero analytics, instant startup, demand-driven memory-bounded rendering powered by Google PDFium, and Windows Explorer thumbnail integration.
+ShortDescription: Offline, memory-bounded PDF reader and editor built with Rust, Slint, and PDFium.
+Description: BarePDF is a local Windows and Linux PDF reader and editor built with Rust, Slint, and Google PDFium. It operates offline by default with zero telemetry, byte-bounded LRU render caches, an 8-tool PDF workspace, vector annotations, and Explorer thumbnail previews.
 Moniker: barepdf
 Tags:
   - pdf

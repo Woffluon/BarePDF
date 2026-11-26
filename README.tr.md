@@ -3,11 +3,11 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/banner-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="./assets/banner-white.png">
-    <img src="./assets/banner-white.png" alt="BarePDF: Sade, hızlı, senin" width="100%">
+    <img src="./assets/banner-white.png" alt="BarePDF — Yalnızca belge. Fazlası yok." width="100%">
   </picture>
 
   <h1>BarePDF</h1>
-  <p><strong>Windows 10/11 ve Linux (Pardus 23/25) için hızlı, özel ve hafif PDF okuyucu.</strong></p>
+  <p><strong>Windows 10/11 ve Linux (Pardus 23/25) için çevrimdışı, bellek sınırlı PDF okuyucu ve düzenleyici.</strong></p>
 
   [![Son sürüm](https://img.shields.io/github/v/release/Woffluon/BarePDF?display_name=tag&style=flat-square&color=f7931e)](https://github.com/Woffluon/BarePDF/releases/latest)
   [![CI](https://img.shields.io/github/actions/workflow/status/Woffluon/BarePDF/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Woffluon/BarePDF/actions/workflows/ci.yml)
@@ -28,7 +28,7 @@
 
 ---
 
-BarePDF; Windows 10/11 ve Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) için Rust, Slint ve Google PDFium ile geliştirilen açık kaynaklı bir PDF okuyucudur. Belge işlemlerini yerel işlemcinizde tutar, doğrulanmış sıfır telemetri ilkesiyle çalışır ve belge uzunluğundan bağımsız olarak bellek kullanımını sınırlandıran talep odaklı işleme ve byte bütçeli LRU önbellekleri kullanır.
+BarePDF; Windows 10/11 ve Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) için Rust, Slint ve Google PDFium ile geliştirilen açık kaynaklı bir PDF okuyucu ve düzenleyicidir. Belgeleri yerel işlemcinizde işler, sıfır telemetriyle çevrimdışı çalışır ve belge uzunluğundan bağımsız olarak bellek kullanımını sınırlamak için talep odaklı işleme ile byte bütçeli LRU önbellekleri kullanır.
 
 <a id="icerik"></a>
 ## İçindekiler
@@ -52,7 +52,7 @@ BarePDF; Windows 10/11 ve Linux (Pardus 23/25, Debian 12+, Ubuntu 22.04+) için 
 
 | İlke | Teknik Karşılığı |
 | --- | --- |
-| **Tasarımla hızlı** | Öncelikli kuyruk mimarisi. Yalnızca görünür pencere alanı içindeki sayfalar rasterleştirilir; eski kaydırma işleri nesil belirteçleriyle anında iptal edilir. |
+| **Talep odaklı işleme** | Öncelikli kuyruk mimarisi. Yalnızca görünür pencere alanı içindeki sayfalar rasterleştirilir; eski kaydırma işleri nesil belirteçleriyle anında iptal edilir. |
 | **Sınırlandırılmış bellek** | Byte bütçeli LRU bitmap önbellekleri (128 MB ham bitmap, yakınlaştırmaya uyarlanan 32/64/128 MB kademeleriyle 128 MB arayüz görüntü önbelleği, 64 MB sayfa görüntüsü bütçesi, 4 MB küçük resim) ve RAM'e uyarlanan 64/128/256/384/1024 MB toplam işlem bütçeleri, 500+ sayfalık belgelerde bile belleğin taşmasını önler. |
 | **Sıfır telemetri** | %100 çevrimdışı. Sıfır analitik, sıfır takip kimliği, hesap zorunluluğu yok, okuma sırasında sıfır ağ araması. |
 | **Yerel Windows entegrasyonu** | Yerel Win32 yazdırma, yüksek DPI desteği, Dosya Gezgini için küçük resim kabuk uzantısı ve standart Varsayılan Uygulamalar kaydı. |
@@ -147,14 +147,14 @@ BarePDF masaüstü uygulamasında doğrudan yerleşik yedi temel özellik paketi
 - Komutları arayın, kâğıt tonlarını değiştirin, düzenleri seçin veya PDF araçlarını çalıştırın.
 
 ### 4. Dört Farklı Okuma Modu
-- **Tek Sayfa:** Dikkati dağıtmayan, tek sayfaya odaklı görüntüleme.
-- **Sürekli Dikey:** Dinamik sayfa ön yüklemesiyle akıcı, kesintisiz dikey kaydırma.
+- **Tek Sayfa:** Tek seferde tek sayfaya odaklanan görüntüleme.
+- **Sürekli Dikey:** Sayfa ön yüklemeli, talep odaklı dikey kaydırma.
 - **İki Sayfa Yan Yana:** Geniş ekranlar ve çift sütunlu yayınlar için yan yana görünüm.
 - **Kitap Görünümü:** Kapak sayfasını hesaba katan, gerçek kitap düzenine uygun çift sayfa yerleşimi.
-- **Sunum Modu (`F5`) ve Tam Ekran (`F11`):** Klavye geçişleriyle çerçevesiz, odaklanmış sunum deneyimi.
+- **Sunum Modu (`F5`) ve Tam Ekran (`F11`):** Klavye geçişleriyle çerçevesiz, odaklanmış sunum görünümü.
 
 ### 5. Göz Yormayan Kâğıt Tonları
-- **Normal:** Standart net beyaz arka plan.
+- **Normal:** Standart beyaz arka plan.
 - **Sepya:** Uzun gündüz okumalarında göz yorgunluğunu azaltmak için tasarlanan sıcak kâğıt tonu.
 - **Gece:** Düşük ışıklı ortamlar için düşük kontrastlı koyu kâğıt teması.
 - **Kehribar:** Gece geç saatlerde ekran parlamasını önleyen yüksek sıcaklıklı kehribar tonu.
@@ -162,7 +162,7 @@ BarePDF masaüstü uygulamasında doğrudan yerleşik yedi temel özellik paketi
 
 ### 6. Yerel Win32 Yazdırma ve Gezgin Küçük Resimleri
 - **Yüksek Çözünürlüklü Yazdırma (`Ctrl+P`):** Yazdırma önizlemesi ile doğrudan Windows Win32 yazdırma kuyruğu üzerinden çıktı alın.
-- **Dosya Gezgini Küçük Resimleri:** Windows Dosya Gezgini klasörlerinde PDF sayfalarının net önizlemelerini oluşturan 64 bit yerel kabuk uzantısı (`barepdf-thumbnail`).
+- **Dosya Gezgini Küçük Resimleri:** Windows Dosya Gezgini klasörlerinde PDF sayfalarının önizlemelerini oluşturan 64 bit yerel kabuk uzantısı (`barepdf-thumbnail`).
 
 ### 7. Sıfır Telemetri ve %100 Çevrimdışı Güvencesi
 - **Sıfır Ağ Trafiği:** Okuma motoru belgeleri açarken, görüntülerken, not eklerken veya düzenlerken kesinlikle sıfır ağ isteği yapar.
@@ -257,7 +257,7 @@ Ayrıntılı performans bulguları [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md) 
 <a id="sifir-telemetri-ve-surum-guvenligi"></a>
 ## Sıfır Telemetri ve Sürüm Güvenliği
 
-BarePDF tavizsiz bir gizlilik ve güvenlik standardı izler:
+BarePDF beş gizlilik ve güncelleme doğrulama kuralını uygular:
 
 1. **Katı Çevrimdışı Çalışma:** Uygulama çalışırken sıfır giden ağ bağlantısı yapar.
 2. **İsteğe Bağlı Güncelleme:** Otomatik güncelleme denetimleri tercihlerden açıkça izin verilene kadar kapalıdır.
@@ -370,6 +370,6 @@ powershell -File packaging/windows/scripts/generate-package-manifests.ps1
 ---
 
 <div align="center">
-  <strong>Sade. Hızlı. Senin.</strong><br>
+  <strong>Yalnızca belge. Fazlası yok.</strong><br>
   <a href="#barepdf">Başa dön ↑</a>
 </div>

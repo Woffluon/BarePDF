@@ -21,7 +21,21 @@ const navLinks = [
 <header class="header">
   <div class="container header-content">
     <a href={`${baseUrl}/`} class="brand-link" aria-label="BarePDF Home">
-      <img src={`${baseUrl}/images/logo.svg`} alt="" width="28" height="28" class="brand-logo" />
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 256 256"
+        width="26"
+        height="26"
+        class="brand-logo"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          fill="currentColor"
+          fill-rule="evenodd"
+          d="M80 20 H224 V188 L176 236 H32 V68 Z M96 52 H192 V168 L164 196 V80 H68 Z M64 112 H132 V204 H64 Z"
+        />
+      </svg>
       <span class="brand-name">BarePDF</span>
     </a>
 
@@ -126,10 +140,12 @@ const navLinks = [
   .brand-link {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.55rem;
     color: var(--color-text);
-    font-weight: 700;
+    font-family: var(--font-sans);
+    font-weight: 800;
     font-size: 1.15rem;
+    line-height: 1;
     text-decoration: none;
   }
 
@@ -139,10 +155,11 @@ const navLinks = [
 
   .brand-logo {
     display: block;
+    flex-shrink: 0;
   }
 
   .brand-name {
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
   }
 
   .nav-desktop {

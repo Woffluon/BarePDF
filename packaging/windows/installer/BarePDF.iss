@@ -88,7 +88,7 @@ Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; 
 
 ; Windows Registered Applications Capabilities
 Root: HKCU; Subkey: "Software\BarePDF\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\BarePDF\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Fast, modern, lightweight PDF reader"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\BarePDF\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Offline, memory-bounded PDF reader and editor"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\BarePDF\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "{#MyProgID}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: "Software\BarePDF\Capabilities"; Flags: uninsdeletevalue
 

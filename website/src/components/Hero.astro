@@ -20,18 +20,27 @@ const hasReleaseMetadata = release.state === 'published';
           {hasReleaseMetadata ? `Version ${release.tag}` : `Build ${release.tag}`}
         </span>
       </span>
-      <span class="hero-tagline">Windows 10 / 11 · 64-bit · Open Source</span>
+      <span
+        class="hero-tagline"
+        data-i18n
+        data-en="Windows 10/11 · Linux · Rust & PDFium · MIT"
+        data-tr="Windows 10/11 · Linux · Rust ve PDFium · MIT"
+      >
+        Windows 10/11 · Linux · Rust & PDFium · MIT
+      </span>
     </div>
 
     <h1 id="hero-heading" class="hero-title">
-      <span data-i18n data-en="Bare. Fast. Yours." data-tr="Sade. Hızlı. Senin.">Bare. Fast. Yours.</span>
+      <span data-i18n data-en="The document. Nothing else." data-tr="Yalnızca belge. Fazlası yok.">The document. Nothing else.</span>
     </h1>
 
     <p class="hero-subtitle">
-      <span data-i18n
-        data-en="An offline, resource-bounded PDF reader built with Rust and Google PDFium. Zero telemetry, zero accounts, and zero cloud lock-in."
-        data-tr="Rust ve Google PDFium ile geliştirilen, kaynak sınırları belirlenmiş çevrimdışı PDF okuyucu. Sıfır telemetri, sıfır hesap zorunluluğu, sıfır bulut bağımlılığı.">
-        An offline, resource-bounded PDF reader built with Rust and Google PDFium. Zero telemetry, zero accounts, and zero cloud lock-in.
+      <span
+        data-i18n
+        data-en="An offline PDF reader and page workbench built with Rust, Slint, and Google PDFium. Renders only visible pages under byte-bounded LRU budgets, with zero telemetry and zero accounts."
+        data-tr="Rust, Slint ve Google PDFium ile geliştirilen çevrimdışı PDF okuyucu ve sayfa aracı. Yalnızca görünür sayfaları byte bütçeli LRU sınırları içinde işler; telemetri ve hesap gerektirmez."
+      >
+        An offline PDF reader and page workbench built with Rust, Slint, and Google PDFium. Renders only visible pages under byte-bounded LRU budgets, with zero telemetry and zero accounts.
       </span>
     </p>
 
@@ -102,7 +111,9 @@ const hasReleaseMetadata = release.state === 'published';
 
   .hero-badge {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     gap: 0.75rem;
     margin-bottom: 1.5rem;
   }

@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "BarePDF: Bare, Fast, Yours. Ultra-lightweight PDF reader executable"
+description = "BarePDF: Local, memory-bounded PDF reader and editor built with Rust, Slint, and PDFium"
 
 [dependencies]
 barepdf-core = { path = "../../crates/barepdf-core" }

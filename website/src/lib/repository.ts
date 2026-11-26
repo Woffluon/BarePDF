@@ -32,12 +32,12 @@ if (!productVersion) {
 export const repository = {
   owner: 'Woffluon',
   name: 'BarePDF',
-  motto: 'Bare, Fast, Yours.',
+  motto: 'The document. Nothing else.',
   url: 'https://github.com/Woffluon/BarePDF',
   defaultBranch: 'main',
   license: 'MIT',
   version: productVersion,
-  description: 'Bare, Fast, Yours. Lightweight open-source PDF reader for Windows built with Rust and PDFium.',
+  description: 'Offline, memory-bounded PDF reader and editor for Windows 10/11 and Linux built with Rust, Slint, and PDFium.',
 };
 
 export const defaultReleaseFallback = {
